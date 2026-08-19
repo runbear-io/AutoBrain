@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 autobrain = "autobrain.bootstrap:main"
+autobrain-verify-formula = "autobrain.release_formula:main"
 
 [dependency-groups]
 dev = [
