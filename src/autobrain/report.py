@@ -16,11 +16,13 @@ from typing import Final, cast
 from pydantic import ValidationError
 
 from autobrain.models import (
+    BenchmarkProvenance,
     CandidateCaseEvidence,
     CandidateEvaluation,
     ComparisonArtifact,
     CoverageRecord,
     DecisionResult,
+    RunManifest,
     Sha256,
     Status,
 )
@@ -57,6 +59,7 @@ def build_comparison(
     candidates: list[CandidateEvaluation],
     decision: DecisionResult,
     evidence: list[CandidateCaseEvidence],
+    provenance: BenchmarkProvenance | None = None,
     artifact_paths: dict[str, str] | None = None,
     warnings: list[str] | None = None,
     price_sheet_version: str | None = None,
@@ -72,6 +75,7 @@ def build_comparison(
         coverage=coverage,
         candidates=candidates,
         evidence=evidence,
+        provenance=provenance or BenchmarkProvenance(),
         methodology={
             "quality_weights": "retrieval recall over gold source IDs, scaled to 0-100",
             "eligibility": "20 scored cases; 90% valid answers; quality >=60; "
@@ -119,12 +123,34 @@ def _canonical_json(artifact: ComparisonArtifact) -> bytes:
     ).encode("utf-8")
 
 
+def _migrate_comparison(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
+    typed_payload = cast(Mapping[str, object], payload)
+    if typed_payload.get("schema_version") == 1:
+        migrated = dict(typed_payload)
+        migrated["schema_version"] = 2
+        migrated.setdefault("provenance", BenchmarkProvenance().model_dump(mode="json"))
+        return migrated
+    return dict(typed_payload)
+
+
 def load_comparison(path: Path) -> ComparisonArtifact:
-    """Load a comparison artifact and turn corruption into a typed ValueError."""
+    """Load a comparison artifact and migrate supported legacy schemas."""
     try:
-        return ComparisonArtifact.model_validate_json(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return ComparisonArtifact.model_validate(_migrate_comparison(payload), strict=False)
     except (OSError, ValueError, ValidationError) as error:
         raise ValueError(f"corrupt comparison artifact: {path}") from error
+
+
+def load_manifest(path: Path) -> RunManifest:
+    """Load manifest provenance without mutating legacy run artifacts."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return RunManifest.model_validate(payload, strict=False)
+    except (OSError, ValueError, ValidationError) as error:
+        raise ValueError(f"corrupt run manifest: {path}") from error
 
 
 def _redact_string(value: str, *, key: str | None = None) -> str:
@@ -162,6 +188,10 @@ def _redact_artifact(artifact: ComparisonArtifact) -> ComparisonArtifact:
 
 def _escape(value: object) -> str:
     return html.escape(_redact_string(str(value)), quote=True)
+
+
+def _latency_value(duration_ms: float | None) -> str:
+    return f"{duration_ms:g} ms" if duration_ms is not None else "unavailable"
 
 
 def _candidate_card(candidate: CandidateEvaluation) -> str:
@@ -230,6 +260,25 @@ def render_report(artifact: ComparisonArtifact) -> str:
     paths = "".join(
         f"<li><code>{_escape(name)}</code>: <code>{_escape(path)}</code></li>"
         for name, path in sorted(artifact.artifact_paths.items())
+    )
+    source_provenance = "".join(
+        f"<li><code>{_escape(source.source)}</code>: "
+        f"<code>{_escape(source.mutability.value)}</code></li>"
+        for source in artifact.provenance.sources
+    )
+    latency_spans = "".join(
+        f"<li><code>{_escape(span.name.value)}</code>"
+        f"{f' ({_escape(span.candidate.value)})' if span.candidate is not None else ''}: "
+        f"<code>{_escape(_latency_value(span.duration_ms))}</code></li>"
+        for span in artifact.provenance.latency_spans
+    )
+    chat_provider = artifact.provenance.chat.provider or "unavailable"
+    chat_model = artifact.provenance.chat.model or "unavailable"
+    embedding_backend = artifact.provenance.embedding.backend or "unavailable"
+    embedding_quality = (
+        artifact.provenance.embedding.quality.value
+        if artifact.provenance.embedding.quality is not None
+        else "unavailable"
     )
     return f"""<!doctype html>
 <html lang="en">
@@ -304,6 +353,22 @@ def render_report(artifact: ComparisonArtifact) -> str:
       </div>
     </header>
     <main aria-label="Comparison report">
+      <section aria-labelledby="provenance">
+        <h2 id="provenance">Benchmark provenance</h2><div class="two-col">
+        <div><dl class="metrics">
+          <div><dt>Chat provider</dt><dd>{_escape(chat_provider)}</dd></div>
+          <div><dt>Chat model</dt><dd>{_escape(chat_model)}</dd></div>
+          <div><dt>Embedding backend</dt><dd>{_escape(embedding_backend)}</dd></div>
+          <div><dt>Embedding quality</dt><dd>{_escape(embedding_quality)}</dd></div>
+          <div><dt>Usage source</dt><dd>
+            {_escape(artifact.provenance.usage_source.value)}
+          </dd></div>
+        </dl></div>
+        <div><p class="muted">Source mutability</p>
+          <ul>{source_provenance or "<li>unavailable</li>"}</ul>
+        <p class="muted">Named latency spans</p>
+          <ul>{latency_spans or "<li>unavailable</li>"}</ul></div>
+      </div></section>
       <section aria-labelledby="candidates">
         <h2 id="candidates">Candidate evidence</h2>
         <div class="cards">{candidate_cards}</div>

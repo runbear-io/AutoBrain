@@ -213,6 +213,68 @@ class CostStatus(StrEnum):
     UNAVAILABLE = "COST_UNAVAILABLE"
 
 
+class EmbeddingQuality(StrEnum):
+    SEMANTIC = "semantic"
+    SMOKE_ONLY = "smoke_only"
+
+
+class UsageSource(StrEnum):
+    MEASURED = "measured"
+    ESTIMATED = "estimated"
+    UNAVAILABLE = "unavailable"
+
+
+class SourceMutability(StrEnum):
+    FROZEN_EXPORT = "frozen_export"
+    LIVE_MCP_CAPTURED = "live_mcp_captured"
+
+
+class LatencySpanKind(StrEnum):
+    END_TO_END = "end_to_end"
+    PROVIDER_EXECUTION = "provider_execution"
+    CANDIDATE_INGEST = "candidate_ingest"
+    CANDIDATE_QUERY = "candidate_query"
+    PROCESS_STARTUP = "process_startup"
+    UNCLASSIFIED_OVERHEAD = "unclassified_overhead"
+
+
+class ChatProvenance(StrictModel):
+    provider: str | None = Field(default=None, min_length=1)
+    model: str | None = Field(default=None, min_length=1)
+
+
+class EmbeddingProvenance(StrictModel):
+    backend: str | None = Field(default=None, min_length=1)
+    quality: EmbeddingQuality | None = None
+
+
+class SourceProvenance(StrictModel):
+    source: str = Field(min_length=1)
+    mutability: SourceMutability
+
+
+class LatencySpan(StrictModel):
+    name: LatencySpanKind
+    duration_ms: float | None = Field(default=None, ge=0)
+    candidate: CandidateId | None = None
+
+
+class BenchmarkProvenance(StrictModel):
+    chat: ChatProvenance = Field(default_factory=ChatProvenance)
+    embedding: EmbeddingProvenance = Field(default_factory=EmbeddingProvenance)
+    usage_source: UsageSource = UsageSource.UNAVAILABLE
+    sources: list[SourceProvenance] = Field(default_factory=list)
+    latency_spans: list[LatencySpan] = Field(default_factory=list)
+
+
+class RunManifest(BaseModel):
+    model_config = ConfigDict(extra="allow", strict=True, frozen=True)
+
+    schema_version: int = Field(ge=1)
+    run_id: str = Field(min_length=1)
+    provenance: BenchmarkProvenance = Field(default_factory=BenchmarkProvenance)
+
+
 class QualityComponents(StrictModel):
     retrieval_recall: float = Field(ge=0, le=100)
     required_claim_coverage: float = Field(default=0, ge=0, le=45)
@@ -330,7 +392,7 @@ class DecisionResult(StrictModel):
 
 
 class ComparisonArtifact(StrictModel):
-    schema_version: int = Field(default=1, ge=1)
+    schema_version: int = Field(default=2, ge=2, le=2)
     run_id: str = Field(min_length=1)
     status: Status = Status.OK
     corpus_hash: Sha256
@@ -340,6 +402,7 @@ class ComparisonArtifact(StrictModel):
     coverage: list[CoverageRecord] = Field(default_factory=list)
     candidates: list[CandidateEvaluation] = Field(min_length=1)
     evidence: list[CandidateCaseEvidence] = Field(default_factory=list)
+    provenance: BenchmarkProvenance = Field(default_factory=BenchmarkProvenance)
     methodology: dict[str, str] = Field(default_factory=dict)
     artifact_paths: dict[str, str] = Field(default_factory=dict)
     price_sheet_version: str | None = None

@@ -31,16 +31,25 @@ from autobrain.evaluate import evaluate_candidate, evaluate_case
 from autobrain.experiment import automatic_experiment_copy
 from autobrain.models import (
     BenchmarkCase,
+    BenchmarkProvenance,
     CandidateCaseEvidence,
     CandidateEvaluation,
     CandidateId,
     CandidateObservation,
+    ChatProvenance,
     CostStatus,
     CoverageCompleteness,
     CoverageRecord,
     DecisionResult,
+    EmbeddingProvenance,
+    EmbeddingQuality,
+    LatencySpan,
+    LatencySpanKind,
     SourceKind,
+    SourceMutability,
+    SourceProvenance,
     Status,
+    UsageSource,
     Verdict,
     normalize_safe_source_url,
 )
@@ -599,7 +608,7 @@ class RunOrchestrator:
         run_id = self.config.run_id or self._new_run_id()
         run_dir = self._create_run_dir(run_id)
         self._manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "run_id": run_id,
             "created_at": self.now().isoformat(),
             "config": {
@@ -623,6 +632,7 @@ class RunOrchestrator:
             "hashes": {},
             "pins": {},
             "models": {"judge": "gpt-5-mini", "provider": "openai"},
+            "provenance": self.benchmark_provenance().model_dump(mode="json"),
             "pricing": {"version": "local-metering-v1"},
             "timings": {},
             "status": Status.NO_DECISION.value,
@@ -827,6 +837,9 @@ class RunOrchestrator:
             self._manifest["evaluations"] = [
                 evaluation.model_dump(mode="json") for evaluation in evaluations
             ]
+            self._manifest["provenance"] = self.benchmark_provenance(evaluations).model_dump(
+                mode="json"
+            )
             self._manifest["decision"] = decision.model_dump(mode="json")
             self._stage(
                 run_dir,
@@ -1443,6 +1456,7 @@ class RunOrchestrator:
             candidates=list(evaluations),
             decision=decision,
             evidence=self._canonical_evidence(outcomes, evaluator_cases, candidate_documents),
+            provenance=self.benchmark_provenance(evaluations),
             artifact_paths={
                 "comparison_json": "comparison.json",
                 "corpus_freeze": "corpus-freeze.json",
@@ -1509,6 +1523,7 @@ class RunOrchestrator:
             candidates=evaluations,
             decision=decision,
             evidence=[],
+            provenance=self.benchmark_provenance(evaluations),
             artifact_paths={
                 "comparison_json": "comparison.json",
                 "corpus_freeze": "corpus-freeze.json",
@@ -1524,6 +1539,60 @@ class RunOrchestrator:
             "sha256": artifacts.report_sha256,
         }
         return artifacts.report_html
+
+    def benchmark_provenance(
+        self,
+        evaluations: Sequence[CandidateEvaluation] = (),
+    ) -> BenchmarkProvenance:
+        if self.test_mode.get("enabled") is True:
+            return BenchmarkProvenance()
+        subscription = self.config.provider_mode == "codex-subscription"
+        chat = ChatProvenance(
+            provider="codex" if subscription else "openai",
+            model=(os.environ.get("AUTOBRAIN_SUBSCRIPTION_MODEL") or None)
+            if subscription
+            else "gpt-5-mini",
+        )
+        embedding = EmbeddingProvenance(
+            backend="local-hash-embedding" if subscription else "openai:text-embedding-3-small",
+            quality=EmbeddingQuality.SMOKE_ONLY if subscription else EmbeddingQuality.SEMANTIC,
+        )
+        sources = [
+            SourceProvenance(
+                source=provider.value,
+                mutability=(
+                    SourceMutability.FROZEN_EXPORT
+                    if provider is Provider.SLACK and self.config.slack_export_path is not None
+                    else SourceMutability.LIVE_MCP_CAPTURED
+                ),
+            )
+            for provider in self.config.selected_sources
+        ]
+        spans = [
+            LatencySpan(
+                name=LatencySpanKind.CANDIDATE_QUERY,
+                duration_ms=evaluation.query_wall_time_ms,
+                candidate=evaluation.candidate,
+            )
+            for evaluation in evaluations
+            if evaluation.scored_cases > 0
+        ]
+        usage_source = UsageSource.UNAVAILABLE
+        if evaluations:
+            usage_source = (
+                UsageSource.ESTIMATED
+                if subscription
+                else UsageSource.MEASURED
+                if all(evaluation.cost_status is CostStatus.COMPLETE for evaluation in evaluations)
+                else UsageSource.UNAVAILABLE
+            )
+        return BenchmarkProvenance(
+            chat=chat,
+            embedding=embedding,
+            usage_source=usage_source,
+            sources=sources,
+            latency_spans=spans,
+        )
 
     def _canonical_coverage(self) -> tuple[list[CoverageRecord], list[str]]:
         source_kinds = {
