@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from enum import StrEnum
 from ipaddress import ip_address
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import (
@@ -270,9 +270,9 @@ class BenchmarkProvenance(StrictModel):
 class RunManifest(BaseModel):
     model_config = ConfigDict(extra="allow", strict=True, frozen=True)
 
-    schema_version: int = Field(ge=1)
+    schema_version: Literal[1, 2]
     run_id: str = Field(min_length=1)
-    provenance: BenchmarkProvenance = Field(default_factory=BenchmarkProvenance)
+    provenance: BenchmarkProvenance
 
 
 class QualityComponents(StrictModel):
@@ -392,7 +392,7 @@ class DecisionResult(StrictModel):
 
 
 class ComparisonArtifact(StrictModel):
-    schema_version: int = Field(default=2, ge=2, le=2)
+    schema_version: Literal[2]
     run_id: str = Field(min_length=1)
     status: Status = Status.OK
     corpus_hash: Sha256
@@ -402,7 +402,7 @@ class ComparisonArtifact(StrictModel):
     coverage: list[CoverageRecord] = Field(default_factory=list)
     candidates: list[CandidateEvaluation] = Field(min_length=1)
     evidence: list[CandidateCaseEvidence] = Field(default_factory=list)
-    provenance: BenchmarkProvenance = Field(default_factory=BenchmarkProvenance)
+    provenance: BenchmarkProvenance
     methodology: dict[str, str] = Field(default_factory=dict)
     artifact_paths: dict[str, str] = Field(default_factory=dict)
     price_sheet_version: str | None = None

@@ -66,6 +66,7 @@ def build_comparison(
 ) -> ComparisonArtifact:
     """Build the single typed source of truth consumed by JSON and HTML."""
     artifact = ComparisonArtifact(
+        schema_version=2,
         run_id=run_id,
         status=status,
         corpus_hash=corpus_hash,
@@ -144,11 +145,22 @@ def load_comparison(path: Path) -> ComparisonArtifact:
         raise ValueError(f"corrupt comparison artifact: {path}") from error
 
 
+def _migrate_manifest(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
+    typed_payload = cast(Mapping[str, object], payload)
+    if typed_payload.get("schema_version") == 1:
+        migrated = dict(typed_payload)
+        migrated.setdefault("provenance", BenchmarkProvenance().model_dump(mode="json"))
+        return migrated
+    return dict(typed_payload)
+
+
 def load_manifest(path: Path) -> RunManifest:
-    """Load manifest provenance without mutating legacy run artifacts."""
+    """Load manifest provenance and migrate only explicit schema version 1."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return RunManifest.model_validate(payload, strict=False)
+        return RunManifest.model_validate(_migrate_manifest(payload), strict=False)
     except (OSError, ValueError, ValidationError) as error:
         raise ValueError(f"corrupt run manifest: {path}") from error
 

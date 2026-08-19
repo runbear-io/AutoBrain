@@ -176,6 +176,76 @@ def test_schema_v1_comparison_loads_with_unavailable_defaults(tmp_path: Path) ->
     assert loaded.provenance.latency_spans == []
 
 
+def _write_comparison_payload(tmp_path: Path, payload: dict[str, object]) -> Path:
+    path = tmp_path / "comparison.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_comparison_missing_schema_version_is_rejected(tmp_path: Path) -> None:
+    candidate = _candidate()
+    payload = build_comparison(
+        run_id="missing-schema",
+        corpus_hash="b" * 64,
+        benchmark_hash="c" * 64,
+        coverage=[],
+        candidates=[candidate],
+        decision=select_winner([candidate]),
+        evidence=[],
+        provenance=_provenance(),
+    ).model_dump(mode="json")
+    del payload["schema_version"]
+
+    with pytest.raises(ValueError, match="corrupt comparison artifact"):
+        load_comparison(_write_comparison_payload(tmp_path, payload))
+
+
+def test_schema_v2_comparison_missing_provenance_is_rejected(tmp_path: Path) -> None:
+    candidate = _candidate()
+    payload = build_comparison(
+        run_id="missing-provenance",
+        corpus_hash="b" * 64,
+        benchmark_hash="c" * 64,
+        coverage=[],
+        candidates=[candidate],
+        decision=select_winner([candidate]),
+        evidence=[],
+        provenance=_provenance(),
+    ).model_dump(mode="json")
+    del payload["provenance"]
+
+    with pytest.raises(ValueError, match="corrupt comparison artifact"):
+        load_comparison(_write_comparison_payload(tmp_path, payload))
+
+
+def test_future_manifest_schema_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 999,
+                "run_id": "future-run",
+                "provenance": _provenance().model_dump(mode="json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="corrupt run manifest"):
+        load_manifest(path)
+
+
+def test_schema_v2_manifest_missing_provenance_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text(
+        json.dumps({"schema_version": 2, "run_id": "missing-provenance"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="corrupt run manifest"):
+        load_manifest(path)
+
+
 def test_orchestration_records_only_known_runtime_provenance(tmp_path: Path) -> None:
     subscription = RunOrchestrator(
         config=RunConfig(
