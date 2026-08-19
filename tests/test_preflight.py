@@ -34,7 +34,7 @@ def test_preflight_reports_independent_missing_requirements(tmp_path: Path) -> N
     assert checks["chatgpt_subscription"].status is Status.MISSING_PROVIDER
     assert checks["chatgpt_subscription"].detail.startswith("SUBSCRIPTION_CLI_UNAVAILABLE")
     assert "openai_api_key" not in report.environment.model_dump()
-    assert checks["slack_credentials"].status is Status.MCP_AUTH_UNAVAILABLE
+    assert checks["slack_source"].status is Status.MCP_AUTH_UNAVAILABLE
     assert checks["keyring"].status is Status.ENV_UNAVAILABLE
     assert checks["callback"].status is Status.CAPABILITY_UNAVAILABLE
     assert checks["node"].status is Status.OK
@@ -230,3 +230,59 @@ def test_candidate_pin_mismatch_cannot_report_success(tmp_path: Path) -> None:
     check = next(item for item in report.checks if item.name == "candidate_pins")
     assert check.status is Status.FAILED
     assert report.status is Status.FAILED
+
+
+def test_preflight_accepts_verified_slack_export_without_app_credentials(
+    tmp_path: Path,
+) -> None:
+    from zipfile import ZipFile
+
+    from autobrain.source_store import SlackSourceStore
+
+    paths = AutoBrainPaths.from_home(tmp_path)
+    archive = tmp_path / "slack-export.zip"
+    with ZipFile(archive, "w") as zip_file:
+        zip_file.writestr("team.json", json.dumps({"id": "T1", "name": "Acme", "domain": "acme"}))
+        zip_file.writestr("users.json", json.dumps([{"id": "U1", "name": "ada"}]))
+        zip_file.writestr("channels.json", json.dumps([{"id": "C1", "name": "general"}]))
+        zip_file.writestr(
+            "general/2026-08-19.json",
+            json.dumps([{"type": "message", "user": "U1", "text": "What changed?", "ts": "1.1"}]),
+        )
+    SlackSourceStore(paths.sources).configure_export(archive)
+
+    report = Preflight(
+        paths=paths,
+        environment=RuntimeEnvironment.from_environ({}),
+        command_runner=_runner,
+        executable_finder=lambda name: f"/fake/{name}",
+        keyring_available=lambda: True,
+        callback_available=lambda _host, _port: True,
+        browser_available=lambda: True,
+    ).run()
+    checks = {check.name: check for check in report.checks}
+
+    assert checks["slack_source"].status is Status.OK
+    assert "export ready" in checks["slack_source"].detail
+    assert "slack_credentials" not in checks
+
+
+def test_node_below_llm_wiki_minimum_is_rejected(tmp_path: Path) -> None:
+    def runner(command: tuple[str, ...], timeout: float) -> CommandResult:
+        del timeout
+        name = Path(command[0]).name
+        version = "v22.11.0" if name == "node" else _runner(command, 0).stdout
+        return CommandResult(returncode=0, stdout=version, stderr="")
+
+    report = Preflight(
+        paths=AutoBrainPaths.from_home(tmp_path),
+        environment=RuntimeEnvironment.from_environ({}),
+        command_runner=runner,
+        executable_finder=lambda name: f"/fake/{name}",
+        keyring_available=lambda: True,
+        callback_available=lambda _host, _port: True,
+        browser_available=lambda: True,
+    ).run()
+    checks = {check.name: check for check in report.checks}
+    assert checks["node"].status is Status.ENV_UNAVAILABLE
+    assert checks["node"].version == "22.11.0"

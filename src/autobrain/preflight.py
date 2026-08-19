@@ -8,6 +8,7 @@ from pydantic import Field
 
 from autobrain.models import CandidatePin, CheckResult, DoctorPaths, Status, StrictModel
 from autobrain.paths import AutoBrainPaths, PathConfinementError
+from autobrain.preflight_slack import check_slack_source
 from autobrain.preflight_subscription import check_chatgpt_subscription
 from autobrain.preflight_support import (
     CommandResult,
@@ -28,7 +29,7 @@ from autobrain.preflight_support import (
 )
 from autobrain.secrets import EnvironmentReadiness, RuntimeEnvironment
 
-_MIN_NODE = (20, 0, 0)
+_MIN_NODE = (24, 0, 0)
 _MIN_BUN = (1, 3, 10)
 
 
@@ -81,19 +82,7 @@ class Preflight:
                     command_runner=self.command_runner,
                     executable_finder=self.executable_finder,
                 ),
-                CheckResult(
-                    name="slack_credentials",
-                    status=(
-                        Status.OK
-                        if readiness.slack_client_id and readiness.slack_client_secret
-                        else Status.MCP_AUTH_UNAVAILABLE
-                    ),
-                    detail=(
-                        "configured"
-                        if readiness.slack_client_id and readiness.slack_client_secret
-                        else "Slack client ID and secret are both required"
-                    ),
-                ),
+                check_slack_source(paths=self.paths, readiness=readiness),
             )
         )
         pins, pin_check = self._pins()
