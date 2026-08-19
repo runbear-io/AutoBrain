@@ -159,7 +159,7 @@ def test_ingest_uses_whole_document_provenance_and_native_add(adapter: Mem0Adapt
     result = adapter.ingest([document("slack:launch")])
     added = FakeMemory.instances[0].added[0]
     assert added["memory"] == "The launch is on Tuesday."
-    assert added["infer"] is False
+    assert added["infer"] is True
     assert added["metadata"]["source_id"] == "slack:launch"
     assert result.native_results[0]["id"] == "m-1"
 

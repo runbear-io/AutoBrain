@@ -1,5 +1,8 @@
+from datetime import UTC, datetime
+
 from autobrain.evaluate import evaluate_candidate, evaluate_case
-from autobrain.models import BenchmarkCase, CandidateId, Status
+from autobrain.models import BenchmarkCase, CandidateId, NormalizedDocument, SourceKind, Status
+from autobrain.retrieval_ids import document_slug, provenance_map, resolve_retrieved_source_ids
 
 
 def case() -> BenchmarkCase:
@@ -82,3 +85,22 @@ def test_candidate_aggregation_averages_recall_and_keeps_failures() -> None:
     assert aggregate.status == Status.OK
     assert aggregate.quality_score == 50.0
     assert aggregate.source_support_rate == 0.5
+
+
+
+def test_retrieved_slugs_map_back_to_gold_source_ids() -> None:
+    document = NormalizedDocument(
+        source_id="notion:page-1",
+        source_kind=SourceKind.NOTION_PAGE,
+        canonical_url="https://notion.example/page-1",
+        title="Launch",
+        text="Launch is Tuesday.",
+        content_hash="a" * 64,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    mapping = provenance_map([document])
+    slug = document_slug("notion:page-1")
+    assert resolve_retrieved_source_ids(
+        [{"page_slug": slug}, {"slug": "unrelated"}],
+        mapping,
+    ) == ["notion:page-1"]

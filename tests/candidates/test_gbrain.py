@@ -20,6 +20,7 @@ from autobrain.candidates.gbrain import (
     parse_json_output,
 )
 from autobrain.models import NormalizedDocument, SourceKind
+from autobrain.retrieval_ids import document_slug
 
 
 def document(text: str = "The launch date is September 9.") -> NormalizedDocument:
@@ -46,7 +47,7 @@ class FakeRunner:
         self.checkout = checkout
         self.think = think or {
             "answer": "September 9 [launch-plan]",
-            "citations": [{"page_slug": "launch-plan", "row_num": None}],
+            "citations": [{"page_slug": document_slug("notion:page-1"), "row_num": None}],
             "gaps": [],
             "pagesGathered": 1,
             "modelUsed": THINK_MODEL,
@@ -66,7 +67,9 @@ class FakeRunner:
         elif "think" in args:
             output = json.dumps(self.think)
         elif "search" in args or "query" in args:
-            output = json.dumps([{"slug": "launch-plan", "chunk_text": "September 9"}])
+            output = json.dumps(
+                [{"slug": document_slug("notion:page-1"), "chunk_text": "September 9"}]
+            )
         elif "status" in args:
             output = json.dumps({"version": GBRAIN_VERSION, "mode": "local"})
         else:
@@ -113,6 +116,7 @@ def test_adapter_uses_exact_pin_frozen_bun_and_native_surfaces(tmp_path: Path) -
         "init",
         "import",
         "sync",
+        "dream",
         "status",
         "search",
         "query",
@@ -223,4 +227,5 @@ def test_model_rejection_is_contained_and_no_personal_surfaces_exist(tmp_path: P
     with pytest.raises(GBrainProcessError, match="model not usable"):
         adapter.run([document()], ["question"])
     commands = " ".join(part for command in seen for part in command)
-    assert all(surface not in commands for surface in ("minion", "dream", "serve", "schema"))
+    forbidden = ("minion", "serve", "schema", "personal-agent")
+    assert all(surface not in commands for surface in forbidden)

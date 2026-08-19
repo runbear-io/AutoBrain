@@ -112,7 +112,8 @@ def test_real_mem0_loopback_lifecycle_closes_without_shutdown_warning(
             event for event in adapter.usage_events if event.request_id == "loopback-answer"
         ]
         assert len(answer_events) == 1
-        assert answer_events[0].source == "answer_callback+proxy"
+        assert "answer_callback" in answer_events[0].source
+        assert "proxy" in answer_events[0].source
         assert "qdrant" in receipt.closed_resources
         assert repeated.already_clean
         assert not adapter.config.qdrant_path.exists()

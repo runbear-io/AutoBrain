@@ -322,6 +322,7 @@ class Mem0Adapter:
         self._closed_resource_ids: set[int] = set()
         self._closed_resource_names: list[str] = []
         self._native_deleted = False
+        self._ingest_sources: dict[str, str] = {}
         self._cleanup_receipt: Mem0CleanupReceipt | None = None
         self._prepare_local_stores()
         self.config.memory_config["llm"]["config"]["response_callback"] = self._mem0_callback
@@ -446,6 +447,7 @@ class Mem0Adapter:
         heldout.update(heldout_source_ids or set())
         markers = set(self.config.forbidden_markers)
         markers.update(forbidden_markers or set())
+        self._ingest_sources.clear()
         native_results: list[dict[str, Any]] = []
         memory_ids: list[str] = []
         seen_source_ids: set[str] = set()
@@ -465,7 +467,7 @@ class Mem0Adapter:
                         agent_id=self.config.agent_id,
                         run_id=self.config.run_id,
                         metadata=metadata,
-                        infer=False,
+                        infer=True,
                     ),
                 )
             except Mem0OperationTimeout:
@@ -476,7 +478,25 @@ class Mem0Adapter:
                     f"({_error_class(exc)})"
                 ) from None
             results = self._results(response, operation="add")
+            if not results:
+                response = self._bounded(
+                    "add",
+                    lambda document=document, metadata=metadata: self._memory.add(
+                        document.text,
+                        user_id=self.config.user_id,
+                        agent_id=self.config.agent_id,
+                        run_id=self.config.run_id,
+                        metadata=metadata,
+                        infer=False,
+                    ),
+                )
+                results = self._results(response, operation="add")
             self._assert_no_secrets(results, boundary="native add artifact emission")
+            for item in results:
+                memory_id = item.get("id")
+                if isinstance(memory_id, str):
+                    self._ingest_sources[memory_id] = document.source_id
+            self._map_unattributed_memories(document.source_id)
             native_results.extend(results)
             memory_ids.extend(
                 str(item["id"]) for item in results if isinstance(item.get("id"), str)
@@ -881,8 +901,23 @@ class Mem0Adapter:
         if leaked_markers:
             raise ValueError(f"oracle marker cannot enter Mem0: {leaked_markers}")
 
-    @staticmethod
-    def _result_source_id(result: Mapping[str, Any]) -> str | None:
+    def _map_unattributed_memories(self, source_id: str) -> None:
+        try:
+            payload = self._bounded(
+                "get_all", lambda: self._memory.get_all(filters=self._filters, top_k=10_000)
+            )
+        except Exception:
+            return
+        try:
+            results = self._results(payload, operation="get_all")
+        except Mem0AdapterError:
+            return
+        for item in results:
+            memory_id = item.get("id")
+            if isinstance(memory_id, str) and memory_id not in self._ingest_sources:
+                self._ingest_sources[memory_id] = source_id
+
+    def _result_source_id(self, result: Mapping[str, Any]) -> str | None:
         metadata = result.get("metadata")
         if isinstance(metadata, Mapping):
             typed_metadata = cast(Mapping[str, Any], metadata)
@@ -890,20 +925,21 @@ class Mem0Adapter:
                 return cast(str, typed_metadata["source_id"])
         if isinstance(result.get("source_id"), str):
             return cast(str, result["source_id"])
+        memory_id = result.get("id")
+        if isinstance(memory_id, str):
+            return self._ingest_sources.get(memory_id)
         return None
 
-    @staticmethod
-    def _answer_evidence(result: Mapping[str, Any]) -> dict[str, Any]:
+    def _answer_evidence(self, result: Mapping[str, Any]) -> dict[str, Any]:
         return {
             "memory_id": str(result.get("id", "")),
             "memory": str(result.get("memory", "")),
             "score": result.get("score"),
-            "source_id": Mem0Adapter._result_source_id(result),
+            "source_id": self._result_source_id(result),
         }
 
-    @staticmethod
-    def _deterministic_result_key(result: Mapping[str, Any]) -> tuple[float, str, str]:
+    def _deterministic_result_key(self, result: Mapping[str, Any]) -> tuple[float, str, str]:
         score = result.get("score")
         numeric_score = float(score) if isinstance(score, int | float) else float("-inf")
-        source_id = Mem0Adapter._result_source_id(result) or ""
+        source_id = self._result_source_id(result) or ""
         return (-numeric_score, source_id, str(result.get("id", "")))

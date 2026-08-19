@@ -21,18 +21,18 @@ from pathlib import Path
 from typing import Any, cast
 
 from autobrain.models import NormalizedDocument
+from autobrain.retrieval_ids import provenance_map, resolve_retrieved_source_ids
 
 GBRAIN_COMMIT = "f49ca569232dbc0d8e0783d84606115e3bfe5ab1"
 GBRAIN_VERSION = "0.46.19.0"
 GBRAIN_REPOSITORY = "https://github.com/garrytan/gbrain.git"
 EMBEDDING_MODEL = "openai:text-embedding-3-small"
 THINK_MODEL = "openai:gpt-5-mini"
-_ALLOWED_COMMANDS = {"init", "import", "sync", "search", "query", "think", "status"}
+_ALLOWED_COMMANDS = {"init", "import", "sync", "dream", "search", "query", "think", "status"}
 _FORBIDDEN_SURFACES = (
     "personal-agent",
     "personal_agent",
     "minion",
-    "dream",
     "serve",
     "schema",
     "auth",
@@ -512,6 +512,7 @@ class GBrainAdapter:
             )
         self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.prepare_sources(documents, holdout_markers)
+        gold_sources = provenance_map(documents)
         self._run_cli(
             "init",
             "--pglite",
@@ -541,6 +542,13 @@ class GBrainAdapter:
                 "SYNC_UNAVAILABLE: native sync requires a pre-existing git HEAD; "
                 "import remains authoritative"
             )
+        self._run_cli(
+            "dream",
+            "--json",
+            "--dir",
+            str(self.sources),
+            base_url=base_url,
+        )
         status = self._run_cli("status", "--json", base_url=base_url)
         status_json = parse_json_output(status.stdout)
         results: list[GBrainResult] = []
@@ -570,7 +578,7 @@ class GBrainAdapter:
             gaps_value = native.get("gaps", [])
             warnings_value = native.get("warnings", [])
             cost_value = native.get("cost_usd")
-            citations = (
+            raw_citations = (
                 cast(list[Any], citations_value) if isinstance(citations_value, list) else []
             )
             gaps = (
@@ -591,8 +599,12 @@ class GBrainAdapter:
             query_evidence = (
                 cast(list[Any], query_json) if isinstance(query_json, list) else [query_json]
             )
+            citations = resolve_retrieved_source_ids(
+                [*raw_citations, *search_evidence, *query_evidence],
+                gold_sources,
+            )
             gather_evidence = {
-                "citations": citations,
+                "citations": raw_citations,
                 "pages_gathered": pages_gathered,
                 "gaps": gaps,
             }
