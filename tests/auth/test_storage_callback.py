@@ -154,3 +154,25 @@ def test_atomic_write_interruption_leaves_no_partial_secret_file(
     monkeypatch.setattr(os, "replace", real_replace)
     assert not store.fallback.exists()
     assert list(tmp_path.glob(".oauth-tokens.json.*")) == []
+
+
+def test_callback_falls_back_when_preferred_port_is_busy() -> None:
+    import socket
+
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    busy_port = blocker.getsockname()[1]
+    try:
+        callback = LocalCallback("127.0.0.1", busy_port, "expected", timeout=2)
+        try:
+            assert callback.port != busy_port
+            error, status, body = _callback_request(callback, "code=ok&state=expected")
+            assert error is None
+            assert status == 200
+            assert "accepted" in body.lower()
+        finally:
+            callback.close()
+    finally:
+        blocker.close()

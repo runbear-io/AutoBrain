@@ -58,7 +58,12 @@ class LocalCallback:
             def log_message(self, format: str, *args: object) -> None:
                 del format, args
 
-        self._server = ThreadingHTTPServer((host, port), Handler)
+        try:
+            self._server = ThreadingHTTPServer((host, port), Handler)
+        except OSError:
+            if port == 0:
+                raise
+            self._server = ThreadingHTTPServer((host, 0), Handler)
         self._server.daemon_threads = True
         self.port = self._server.server_address[1]
         self._thread = Thread(target=self._server.serve_forever, daemon=True)

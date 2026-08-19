@@ -71,7 +71,12 @@ def callback_available(host: str, port: int) -> bool:
             listener.bind((host, port))
         return True
     except OSError:
-        return False
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+                listener.bind((host, 0))
+            return True
+        except OSError:
+            return False
 
 
 def browser_available() -> bool:
