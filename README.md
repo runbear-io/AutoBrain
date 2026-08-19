@@ -151,11 +151,11 @@ case. Measurements unavailable from a candidate remain explicitly incomplete.
 ### 1. Install AutoBrain once
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv tool install git+https://github.com/runbear-io/AutoBrain.git
+brew install runbear-io/autobrain/autobrain
 ```
 
-After installation, `autobrain` works from any directory.
+After installation, `autobrain` works from any directory. This formula currently
+targets Apple Silicon macOS.
 
 ### 2. Connect ChatGPT
 
