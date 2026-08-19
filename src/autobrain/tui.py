@@ -12,7 +12,9 @@ import webbrowser
 from autobrain.auth.models import Provider
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
+from autobrain.onboarding import is_onboarded, mark_onboarded
 from autobrain.orchestration import RunResult
+from autobrain.paths import AutoBrainPaths
 from autobrain.subscription import SubscriptionStatus
 from autobrain.tui_render import render_dashboard, terminal_too_small
 from autobrain.tui_runtime import (
@@ -23,15 +25,16 @@ from autobrain.tui_runtime import (
     run_connection_flow,
 )
 from autobrain.tui_state import TUIState, WizardSection
+from autobrain.tui_style import line_style
 
 
-def run_tui() -> None:
+def run_tui(*, force_setup: bool = False) -> None:
     """Launch the full-screen terminal UI."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RuntimeError(
             "TUI_UNAVAILABLE: run AutoBrain in an interactive terminal or use `autobrain run`"
         )
-    curses.wrapper(_run)
+    curses.wrapper(lambda screen: _run(screen, force_setup=force_setup))
 
 
 def accepts_key_at_size(key: int, *, width: int, height: int) -> bool:
@@ -52,7 +55,7 @@ def accepts_key_for_state(
     return state.section is not WizardSection.RUNNING
 
 
-def _run(screen: curses.window) -> None:
+def _run(screen: curses.window, *, force_setup: bool) -> None:
     curses.curs_set(0)
     curses.use_default_colors()
     if curses.has_colors():
@@ -62,7 +65,11 @@ def _run(screen: curses.window) -> None:
         curses.init_pair(3, curses.COLOR_YELLOW, -1)
         curses.init_pair(4, curses.COLOR_RED, -1)
     screen.timeout(120)
-    state = TUIState()
+    paths = AutoBrainPaths.from_home()
+    if force_setup or not is_onboarded(paths):
+        state = TUIState()
+    else:
+        state = TUIState(section=WizardSection.HOME)
     connections = connection_snapshot()
     result_queue: queue.Queue[RunResult | BaseException] = queue.Queue(maxsize=1)
     result: RunResult | None = None
@@ -76,6 +83,8 @@ def _run(screen: curses.window) -> None:
             connections=connections,
         )
         setup_error = runtime_error or setup_error
+        if state.section is WizardSection.REVIEW and plan is not None:
+            mark_onboarded(paths)
         _draw(
             screen,
             state,
@@ -122,6 +131,10 @@ def _run(screen: curses.window) -> None:
             state = state.advance()
             continue
 
+        if state.section is WizardSection.HOME and key in {ord("s"), ord("S")}:
+            state = state.start_setup()
+            runtime_error = ""
+            continue
         if state.section is WizardSection.SLACK and key in {ord("s"), ord("S")}:
             state = state.skip_source(Provider.SLACK)
             runtime_error = ""
@@ -144,10 +157,21 @@ def _run(screen: curses.window) -> None:
                 webbrowser.open(result.report_path.as_uri())
             elif key in {ord("r"), ord("R")}:
                 result = None
-                state = state.with_section(WizardSection.REVIEW)
+                state = TUIState(section=WizardSection.HOME)
 
         if key in {10, 13, curses.KEY_ENTER}:
-            if state.section is WizardSection.CONNECTIONS:
+            if state.section is WizardSection.HOME:
+                if plan is None:
+                    state = state.start_setup()
+                else:
+                    state = state.with_section(WizardSection.RUNNING)
+                    started_at = time.monotonic()
+                    threading.Thread(
+                        target=execute_plan,
+                        args=(plan, result_queue),
+                        daemon=True,
+                    ).start()
+            elif state.section is WizardSection.CONNECTIONS:
                 if connections.subscription is not SubscriptionStatus.READY:
                     run_connection_flow(screen, "subscription")
                     connections = connection_snapshot()
@@ -216,23 +240,7 @@ def _draw(
     column = 1 if width > 2 else 0
     for row, line in enumerate(lines[: max(1, height - 1)]):
         try:
-            screen.addstr(row, column, line, _line_style(line, row))
+            screen.addstr(row, column, line, line_style(line, row))
         except curses.error:
             break
     screen.refresh()
-
-
-def _line_style(line: str, row: int) -> int:
-    if not curses.has_colors():
-        return curses.A_BOLD if row == 0 else curses.A_NORMAL
-    if row == 0:
-        return curses.color_pair(1) | curses.A_BOLD
-    if line.startswith("Status") and "not connected" in line:
-        return curses.color_pair(4) | curses.A_BOLD
-    if "export ready" in line or line.endswith("connected"):
-        return curses.color_pair(2)
-    if line.startswith("Enter"):
-        return curses.color_pair(3) | curses.A_BOLD
-    if line.startswith("Step") or line.startswith("[ChatGPT]"):
-        return curses.color_pair(1)
-    return curses.A_NORMAL

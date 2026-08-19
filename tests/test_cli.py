@@ -155,3 +155,13 @@ def test_run_uses_configured_slack_export(
     assert result.exit_code == 1
     assert captured[0].slack_export_path == archive_path.resolve()
     assert captured[0].slack_export_sha256 is not None
+
+
+def test_setup_command_is_registered() -> None:
+    from typer.testing import CliRunner
+
+    from autobrain.cli import app
+
+    result = CliRunner().invoke(app, ["setup", "--help"])
+    assert result.exit_code == 0
+    assert "onboarding" in result.stdout.lower() or "reconnect" in result.stdout.lower()

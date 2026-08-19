@@ -53,6 +53,16 @@ def main(ctx: typer.Context) -> None:
             raise typer.Exit(1) from None
 
 
+@app.command("setup")
+def setup() -> None:
+    """Run first-time onboarding, or reconnect ChatGPT, Slack, and Notion."""
+    try:
+        run_tui(force_setup=True)
+    except RuntimeError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+
+
 @subscription_app.command("status")
 def subscription_status(
     json_output: Annotated[

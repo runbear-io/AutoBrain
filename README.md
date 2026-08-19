@@ -257,6 +257,13 @@ After installing AutoBrain once, run it without a subcommand:
 autobrain
 ```
 
+The first launch walks ChatGPT, Slack, Notion, and Brains one step at a time.
+Later launches open the main cockpit. Re-run onboarding with:
+
+```bash
+autobrain setup
+```
+
 ```text
 AutoBrain
 Which Brain should your company build on?
