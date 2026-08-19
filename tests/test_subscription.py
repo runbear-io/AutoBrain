@@ -134,7 +134,6 @@ def test_subscription_ask_uses_read_only_ephemeral_codex_exec() -> None:
         "read-only",
         "--model",
         "gpt-5",
-        "Answer safely",
     ]
 
 
