@@ -22,10 +22,13 @@ from pathlib import Path
 from time import monotonic
 from typing import Any, Protocol, cast
 
+from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
 from autobrain.benchmark import LeakageScanResult, scan_benchmark_leakage
+from autobrain.corpus import normalize_raw_items
 from autobrain.decision import select_winner
 from autobrain.evaluate import evaluate_candidate, evaluate_case
+from autobrain.experiment import automatic_experiment_copy
 from autobrain.models import (
     BenchmarkCase,
     CandidateCaseEvidence,
@@ -91,6 +94,32 @@ class Candidate(Protocol):
     def cleanup(self) -> None: ...
 
 
+def retain_selected_candidates(
+    candidates: Sequence[Candidate],
+    *,
+    selected_ids: set[str],
+) -> tuple[Candidate, ...]:
+    """Keep selected native candidates and settle every discarded lifecycle."""
+    selected: list[Candidate] = []
+    cleanup_errors: list[str] = []
+    for candidate in candidates:
+        if candidate.candidate_id in selected_ids:
+            selected.append(candidate)
+            continue
+        try:
+            candidate.cleanup()
+        except Exception as exc:
+            cleanup_errors.append(f"{candidate.candidate_id}: {exc}")
+    if cleanup_errors:
+        for candidate in selected:
+            try:
+                candidate.cleanup()
+            except Exception as exc:
+                cleanup_errors.append(f"{candidate.candidate_id}: {exc}")
+        raise RuntimeError("discarded candidate cleanup failed: " + "; ".join(cleanup_errors))
+    return tuple(selected)
+
+
 @dataclass(frozen=True)
 class ConnectorSnapshot:
     provider: str
@@ -109,10 +138,12 @@ class CandidateContext:
         from autobrain.models import NormalizedDocument
 
         return tuple(
-            document
-            if isinstance(document, NormalizedDocument)
-            else NormalizedDocument.model_validate(document)
-            for document in self.documents
+            normalize_raw_items(
+                [
+                    document if isinstance(document, NormalizedDocument) else dict(document)
+                    for document in self.documents
+                ]
+            )
         )
 
 
@@ -157,6 +188,10 @@ class RunConfig:
     output: Path | None = None
     run_id: str | None = None
     provider_mode: str = "api"
+    selected_sources: tuple[Provider, ...] = (Provider.SLACK, Provider.NOTION)
+    selected_candidates: tuple[CandidateId, ...] = tuple(CandidateId)
+    experiment_title: str = ""
+    experiment_description: str = ""
 
     def __post_init__(self) -> None:
         if self.budget_usd <= 0:
@@ -169,6 +204,22 @@ class RunConfig:
             AutoBrainPaths.validate_output_root(self.output)
         if self.provider_mode not in {"api", "codex-subscription"}:
             raise ValueError("provider_mode must be api or codex-subscription")
+        if not self.selected_sources:
+            raise ValueError("selected_sources must include Slack or Notion")
+        if len(set(self.selected_sources)) != len(self.selected_sources):
+            raise ValueError("selected_sources must be unique")
+        if len(self.selected_candidates) < 2:
+            raise ValueError("selected_candidates must include at least two candidates")
+        if len(set(self.selected_candidates)) != len(self.selected_candidates):
+            raise ValueError("selected_candidates must be unique")
+        automatic_title, automatic_description = automatic_experiment_copy(
+            sources=self.selected_sources,
+            candidates=self.selected_candidates,
+        )
+        if not self.experiment_title:
+            object.__setattr__(self, "experiment_title", automatic_title)
+        if not self.experiment_description:
+            object.__setattr__(self, "experiment_description", automatic_description)
 
 
 @dataclass(frozen=True)
@@ -184,10 +235,15 @@ class RunResult:
 def _default_connector_builder(
     manager: ConnectionManager,
     include_dms: bool,
+    selected_sources: tuple[Provider, ...] = (Provider.SLACK, Provider.NOTION),
 ) -> Sequence[Connector]:
     from autobrain.production import build_production_connectors
 
-    return build_production_connectors(manager, include_dms=include_dms)
+    return build_production_connectors(
+        manager,
+        include_dms=include_dms,
+        providers=selected_sources,
+    )
 
 
 def _default_candidate_builder(
@@ -195,6 +251,7 @@ def _default_candidate_builder(
     api_key: str,
     budget_usd: float,
     provider_upstream: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    candidate_ids: tuple[CandidateId, ...] = tuple(CandidateId),
 ) -> Sequence[Candidate]:
     from autobrain.production import build_production_candidates
 
@@ -203,6 +260,7 @@ def _default_candidate_builder(
         api_key=api_key,
         budget_usd=budget_usd,
         provider_upstream=provider_upstream,
+        candidate_ids=candidate_ids,
     )
 
 
@@ -264,8 +322,11 @@ class RunOrchestrator:
         state_root = AutoBrainPaths.from_home().root
         manager = connection_manager or ConnectionManager(state_root)
         connections = manager.status().connections
+        selected_sources = set(config.selected_sources)
         disconnected = [
-            item.provider.value for item in connections if item.state.value != "CONNECTED"
+            item.provider.value
+            for item in connections
+            if item.provider in selected_sources and item.state.value != "CONNECTED"
         ]
         if disconnected:
             return cls(
@@ -278,9 +339,21 @@ class RunOrchestrator:
             )
 
         try:
-            connectors = tuple(
-                (connector_builder or _default_connector_builder)(manager, config.include_dms)
-            )
+            if connector_builder is None:
+                connectors = tuple(
+                    _default_connector_builder(
+                        manager,
+                        config.include_dms,
+                        config.selected_sources,
+                    )
+                )
+            else:
+                selected_source_values = {provider.value for provider in config.selected_sources}
+                connectors = tuple(
+                    connector
+                    for connector in connector_builder(manager, config.include_dms)
+                    if connector.provider in selected_source_values
+                )
         except Exception as exc:
             message = str(exc)
             status = (
@@ -333,12 +406,10 @@ class RunOrchestrator:
             )
         resolved_api_key = resolved_api_key or "autobrain-local-subscription"
 
-        selected_candidate_builder = candidate_builder or _default_candidate_builder
-        if subscription_upstream is not None:
+        if candidate_builder is None:
 
             def selected_candidate_builder(
                 run_dir: Path,
-                *,
                 api_key: str,
                 budget_usd: float,
             ) -> Sequence[Candidate]:
@@ -347,6 +418,41 @@ class RunOrchestrator:
                     api_key,
                     budget_usd,
                     provider_upstream=subscription_upstream,
+                    candidate_ids=config.selected_candidates,
+                )
+
+        else:
+
+            def selected_candidate_builder(
+                run_dir: Path,
+                api_key: str,
+                budget_usd: float,
+            ) -> Sequence[Candidate]:
+                selected_candidate_values = {
+                    candidate.value for candidate in config.selected_candidates
+                }
+                parameters = tuple(inspect.signature(candidate_builder).parameters.values())
+                accepts_budget = (
+                    any(
+                        parameter.kind is parameter.VAR_POSITIONAL
+                        or parameter.kind is parameter.VAR_KEYWORD
+                        for parameter in parameters
+                    )
+                    or sum(
+                        parameter.kind
+                        in {parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD}
+                        for parameter in parameters
+                    )
+                    >= 3
+                )
+                built_candidates = (
+                    candidate_builder(run_dir, api_key, budget_usd)
+                    if accepts_budget
+                    else candidate_builder(run_dir, api_key)
+                )
+                return retain_selected_candidates(
+                    built_candidates,
+                    selected_ids=selected_candidate_values,
                 )
 
         return cls(
@@ -483,6 +589,13 @@ class RunOrchestrator:
                 "max_questions": self.config.max_questions,
                 "include_dms": self.config.include_dms,
                 "open_report": self.config.open_report,
+                "provider_mode": self.config.provider_mode,
+                "selected_sources": [provider.value for provider in self.config.selected_sources],
+                "selected_candidates": [
+                    candidate.value for candidate in self.config.selected_candidates
+                ],
+                "experiment_title": self.config.experiment_title,
+                "experiment_description": self.config.experiment_description,
             },
             "stages": self._stages,
             "commands": self._ledger,
@@ -514,13 +627,13 @@ class RunOrchestrator:
                 detail = self.provider_detail or "MCP_AUTH_UNAVAILABLE"
                 self._stage(run_dir, "missing-auth-gate", final_status, detail)
                 return RunResult(run_id, run_dir, final_status, None, (), verdict)
-            if len(self.connectors) != 2:
+            if len(self.connectors) != len(self.config.selected_sources):
                 final_status = Status.CAPABILITY_UNAVAILABLE
                 self._stage(
                     run_dir,
                     "capability-probe",
                     final_status,
-                    "exactly Slack and Notion connectors are required",
+                    "selected knowledge source connectors are unavailable",
                 )
                 return RunResult(run_id, run_dir, final_status, None, (), verdict)
 
@@ -547,8 +660,13 @@ class RunOrchestrator:
             }
             self._stage(run_dir, "coverage", Status.OK, f"{len(documents)} documents")
             cases, holdout_ids = self._build_benchmark(documents, self.config.max_questions)
+            normalized_candidate_documents = normalize_raw_items(
+                self._candidate_documents(documents, cases, holdout_ids)
+            )
             corpus = CorpusBoundary(
-                candidate_documents=tuple(self._candidate_documents(documents, cases, holdout_ids)),
+                candidate_documents=tuple(
+                    document.model_dump(mode="json") for document in normalized_candidate_documents
+                ),
                 evaluator_cases=self._evaluator_cases(documents, cases),
             )
             candidate_documents = corpus.candidate_documents
@@ -611,7 +729,7 @@ class RunOrchestrator:
                     run_dir,
                     "candidate-construction",
                     Status.OK,
-                    "three pinned candidate adapters constructed",
+                    f"{len(self.candidates)} pinned candidate adapters constructed",
                 )
             if not self.candidates:
                 final_status = Status.CAPABILITY_UNAVAILABLE

@@ -13,8 +13,11 @@ from autobrain.secrets import RuntimeEnvironment
 
 def _runner(command: tuple[str, ...], timeout: float) -> CommandResult:
     del timeout
+    name = Path(command[0]).name
+    if name == "codex":
+        return CommandResult(returncode=0, stdout="Logged in using ChatGPT", stderr="")
     versions = {"python": "Python 3.12.7", "node": "v25.9.0", "bun": "1.3.14"}
-    return CommandResult(returncode=0, stdout=versions[Path(command[0]).name], stderr="")
+    return CommandResult(returncode=0, stdout=versions[name], stderr="")
 
 
 def test_preflight_reports_independent_missing_requirements(tmp_path: Path) -> None:
@@ -22,13 +25,15 @@ def test_preflight_reports_independent_missing_requirements(tmp_path: Path) -> N
         paths=AutoBrainPaths.from_home(tmp_path),
         environment=RuntimeEnvironment.from_environ({}),
         command_runner=_runner,
-        executable_finder=lambda name: f"/fake/{name}",
+        executable_finder=lambda name: None if name == "codex" else f"/fake/{name}",
         keyring_available=lambda: False,
         callback_available=lambda _host, _port: False,
         browser_available=lambda: True,
     ).run()
     checks = {check.name: check for check in report.checks}
-    assert checks["openai_api_key"].status is Status.MISSING_PROVIDER
+    assert checks["chatgpt_subscription"].status is Status.MISSING_PROVIDER
+    assert checks["chatgpt_subscription"].detail.startswith("SUBSCRIPTION_CLI_UNAVAILABLE")
+    assert "openai_api_key" not in report.environment.model_dump()
     assert checks["slack_credentials"].status is Status.MCP_AUTH_UNAVAILABLE
     assert checks["keyring"].status is Status.ENV_UNAVAILABLE
     assert checks["callback"].status is Status.CAPABILITY_UNAVAILABLE
@@ -44,9 +49,12 @@ def test_python_check_uses_the_running_interpreter(tmp_path: Path) -> None:
         del timeout
         commands.append(command)
         name = Path(command[0]).name
-        version = (
-            "Python 3.13.7" if name == "python" else {"node": "v25.9.0", "bun": "1.3.14"}[name]
-        )
+        version = {
+            "python": "Python 3.13.7",
+            "node": "v25.9.0",
+            "bun": "1.3.14",
+            "codex": "Logged in using ChatGPT",
+        }[name]
         return CommandResult(returncode=0, stdout=version, stderr="")
 
     Preflight(

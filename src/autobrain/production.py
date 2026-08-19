@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
 from time import monotonic
@@ -201,14 +201,15 @@ def build_production_connectors(
     manager: ConnectionManager,
     *,
     include_dms: bool,
-) -> tuple[SlackMcpConnector, NotionMcpConnector]:
-    slack_token = manager.token_for(Provider.SLACK)
-    notion_token = manager.token_for(Provider.NOTION)
-    if slack_token is None or notion_token is None:
-        raise ValueError("MCP_AUTH_UNAVAILABLE: authenticated Slack and Notion tokens required")
+    providers: Sequence[Provider] = (Provider.SLACK, Provider.NOTION),
+) -> tuple[SlackMcpConnector | NotionMcpConnector, ...]:
     oauth = OAuthManager(manager.store)
-    return (
-        SlackMcpConnector(
+    connectors: dict[Provider, SlackMcpConnector | NotionMcpConnector] = {}
+    if Provider.SLACK in providers:
+        slack_token = manager.token_for(Provider.SLACK)
+        if slack_token is None:
+            raise ValueError("MCP_AUTH_UNAVAILABLE: authenticated Slack token required")
+        connectors[Provider.SLACK] = SlackMcpConnector(
             StreamableHttpConnection.with_oauth(
                 Provider.SLACK,
                 config_for(Provider.SLACK).resource,
@@ -216,16 +217,20 @@ def build_production_connectors(
                 manager=oauth,
             ),
             include_dms=include_dms,
-        ),
-        NotionMcpConnector(
+        )
+    if Provider.NOTION in providers:
+        notion_token = manager.token_for(Provider.NOTION)
+        if notion_token is None:
+            raise ValueError("MCP_AUTH_UNAVAILABLE: authenticated Notion token required")
+        connectors[Provider.NOTION] = NotionMcpConnector(
             StreamableHttpConnection.with_oauth(
                 Provider.NOTION,
                 config_for(Provider.NOTION).resource,
                 notion_token,
                 manager=oauth,
             )
-        ),
-    )
+        )
+    return tuple(connectors[provider] for provider in providers)
 
 
 def _queries(context: CandidateContext) -> tuple[CandidateQuery, ...]:
@@ -524,6 +529,7 @@ def build_production_candidates(
     base_url: str | None = None,
     budget_usd: float = 25.0,
     provider_upstream: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    candidate_ids: Sequence[CandidateId] = tuple(CandidateId),
 ) -> tuple[Candidate, ...]:
     if not api_key:
         raise ValueError("MISSING_PROVIDER: OPENAI_API_KEY is unavailable")
@@ -533,17 +539,18 @@ def build_production_candidates(
     budget = MeteringBudget(budget_usd, price_sheet)
     upstream = provider_upstream or _provider_upstream(api_key, base_url)
     proxies = {
-        candidate: LoopbackMeteringProxy(
+        candidate_id: LoopbackMeteringProxy(
             upstream,
             budget_state=budget,
-            default_candidate=candidate,
+            default_candidate=candidate_id.value,
         )
-        for candidate in CandidateId
+        for candidate_id in candidate_ids
     }
     for proxy in proxies.values():
         proxy.__enter__()
-    return (
-        LLMWikiCandidate(
+    adapters: dict[CandidateId, Candidate] = {}
+    if CandidateId.LLM_WIKI in proxies:
+        adapters[CandidateId.LLM_WIKI] = LLMWikiCandidate(
             LLMWikiAdapter(
                 LLMWikiConfig(
                     workspace=native_root / "llm-wiki",
@@ -553,8 +560,9 @@ def build_production_candidates(
             ),
             api_key=api_key,
             metering_proxy=proxies[CandidateId.LLM_WIKI],
-        ),
-        Mem0Candidate(
+        )
+    if CandidateId.MEM0 in proxies:
+        adapters[CandidateId.MEM0] = Mem0Candidate(
             Mem0Adapter(
                 Mem0AdapterConfig(
                     run_id=run_dir.name,
@@ -565,13 +573,14 @@ def build_production_candidates(
                 )
             ),
             metering_proxy=proxies[CandidateId.MEM0],
-        ),
-        GBrainCandidate(
+        )
+    if CandidateId.GBRAIN in proxies:
+        adapters[CandidateId.GBRAIN] = GBrainCandidate(
             GBrainAdapter(
                 tools_root=state.tools,
                 run_root=native_root / "gbrain",
             ),
             base_url=proxies[CandidateId.GBRAIN].base_url,
             metering_proxy=proxies[CandidateId.GBRAIN],
-        ),
-    )
+        )
+    return tuple(adapters[candidate_id] for candidate_id in candidate_ids)

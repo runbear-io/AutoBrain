@@ -24,6 +24,7 @@ def _documents(count: int = 24) -> list[dict[str, Any]]:
         {
             "provider": "slack" if index % 2 == 0 else "notion",
             "source_id": f"slack:message:{index}" if index % 2 == 0 else f"notion:page:{index}",
+            "canonical_url": f"https://fixture.example.test/source/{index}",
             "title": f"Fact {index}",
             "text": f"Project Atlas fact {index} is value {index}.",
             "question": f"What is Project Atlas fact {index}?",
@@ -165,7 +166,10 @@ def test_fake_mcp_e2e_persists_one_immutable_run_and_report(tmp_path: Path) -> N
     assert result.status is Status.OK
     assert result.run_id
     assert result.report_path is not None and result.report_path.is_file()
-    assert result.report_path.read_text(encoding="utf-8").count("http") == 0
+    report_html = result.report_path.read_text(encoding="utf-8")
+    assert '<script src="http' not in report_html
+    assert '<link href="http' not in report_html
+    assert "https://fixture.example.test/source/0" in report_html
     assert len(result.candidate_results) == 3
     assert all(candidate.cleaned == 1 for candidate in candidates)
     manifest = json.loads((result.run_dir / "manifest.json").read_text(encoding="utf-8"))

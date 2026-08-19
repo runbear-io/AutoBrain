@@ -11,6 +11,7 @@ from autobrain.corpus import (
     normalize_raw_items,
 )
 from autobrain.models import NormalizedDocument, SourceKind
+from autobrain.orchestration import CandidateContext
 
 
 def document(
@@ -266,3 +267,37 @@ def test_slack_provenance_survives_jsonl_normalization_and_corpus_freeze(
     frozen = json.loads((tmp_path / "corpus" / "documents.jsonl").read_text())
     assert frozen["crawl_provenance"] == raw["crawl_provenance"]
     assert normalized[0].crawl_provenance == raw["crawl_provenance"]
+
+
+def test_candidate_context_normalizes_live_slack_connector_records() -> None:
+    raw = {
+        "source_id": "slack-message:C1:1200.000001",
+        "source_kind": "SLACK_MESSAGE",
+        "canonical_url": "https://acme.slack.com/archives/C1/p1200000001",
+        "title": "#general at 1200.000001",
+        "text": "Stable source",
+        "content_hash": "0" * 64,
+        "channel_id": "C1",
+        "channel_name": "general",
+        "channel_type": "public_channel",
+        "channel_archived": False,
+        "message_ts": "1200.000001",
+        "thread_ts": None,
+        "parent_source_id": None,
+        "user_id": "U1",
+        "user_name": "Ada",
+        "bot": False,
+        "edited": False,
+        "deleted": False,
+        "untrusted": True,
+        "crawl_provenance": {"connector": "slack-mcp"},
+        "metadata": {},
+    }
+
+    context = CandidateContext(
+        documents=(raw,),
+        questions=("What is the stable source?",),
+        case_ids=("case-stable",),
+    )
+
+    assert context.normalized_documents == tuple(normalize_raw_items([raw]))

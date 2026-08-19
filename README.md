@@ -1,9 +1,9 @@
 # AutoBrain
 
 <p align="center">
-  <strong>Find the right AI knowledge architecture before you commit to one.</strong>
+  <strong>Choose the scope. Let AutoBrain design the experiment.</strong>
   <br />
-  A reproducible, evidence-first bake-off for Slack and Notion knowledge systems.
+  A terminal-first, evidence-backed bake-off for Slack and Notion knowledge systems.
 </p>
 
 <p align="center">
@@ -11,7 +11,7 @@
     <img src="https://img.shields.io/badge/status-experimental-f59e0b.svg" alt="Experimental" />
   </a>
   <a href="https://www.python.org/">
-    <img src="https://img.shields.io/badge/python-3.12%2B-3776ab.svg" alt="Python 3.12+" />
+    <img src="https://img.shields.io/badge/python-3.12--3.13-3776ab.svg" alt="Python 3.12–3.13" />
   </a>
   <a href="https://docs.astral.sh/uv/">
     <img src="https://img.shields.io/badge/managed%20with-uv-6d28d9.svg" alt="Managed with uv" />
@@ -21,7 +21,7 @@
   </a>
 </p>
 
-AutoBrain turns a vague platform question into an inspectable decision:
+AutoBrain turns a vague platform question into one inspectable experiment:
 
 > Given our real Slack and Notion knowledge, which architecture answers our
 > questions most accurately, with acceptable latency, evidence quality, and
@@ -31,6 +31,10 @@ It does not rank vendors from a toy dataset. It builds a bounded corpus,
 generates benchmark cases from that corpus, runs the same cases through a
 fixed candidate set, evaluates the answers against held-out evidence, and
 leaves a report you can reopen after the run.
+
+The default experience is an interactive terminal cockpit. You choose only
+the connections, knowledge-source scope, and candidates. AutoBrain chooses the
+first experiment, question count, budget guard, and remaining run parameters.
 
 ## Why AutoBrain
 
@@ -72,6 +76,88 @@ Every run is a new immutable run directory. A failed run remains inspectable;
 the next invocation receives a new run ID rather than silently resuming or
 overwriting previous evidence.
 
+## Terminal cockpit
+
+After installing AutoBrain once, run it without a subcommand:
+
+```bash
+autobrain
+```
+
+```text
+AUTOBRAIN
+One grounded experiment. You choose connections, sources, and candidates.
+
+> 1  Connections
+   [C] ChatGPT      connected      (reconnect)
+   [S] Slack        connected      (reconnect)
+   [N] Notion       connected      (reconnect)
+
+  2  Knowledge Sources
+   [1] [x] Slack
+   [2] [x] Notion
+
+  3  Candidates
+   [1] [x] LLM Wiki
+   [2] [x] Mem0 OSS
+   [3] [x] GBrain
+
+  4  Automatic Experiment
+   Find the best knowledge system for Slack + Notion
+   Compare LLM Wiki, Mem0 OSS, GBrain on grounded questions from Slack + Notion.
+   Provider     ChatGPT subscription
+   Questions    automatic, up to 30
+   Budget guard automatic, $25
+```
+
+The cockpit requires an interactive terminal of at least `60x23` cells.
+Smaller terminals show a resize message and do not allow hidden setup state to
+change.
+
+### What you choose
+
+| Setup section | Available choices |
+| --- | --- |
+| **Connections** | ChatGPT subscription, Slack, Notion |
+| **Knowledge Sources** | Slack and/or Notion |
+| **Candidates** | LLM Wiki, Mem0 OSS, GBrain |
+
+All sources and candidates start selected. A runnable experiment requires at
+least one knowledge source and at least two candidates.
+
+### What AutoBrain decides
+
+| Decision | Automatic behavior |
+| --- | --- |
+| Experiment | Generates a title and description from the selected scope |
+| Provider | Uses the connected ChatGPT subscription |
+| Questions | Up to 20 for one source, up to 30 for both sources |
+| Budget | `$25` hard guard |
+| Execution | Builds only the selected connectors and native candidate adapters |
+| Output | Writes a new immutable run and evidence-backed result |
+
+If the ChatGPT subscription is unavailable, AutoBrain returns its exact typed
+status, such as `SUBSCRIPTION_AUTH_UNAVAILABLE`, instead of pretending the
+experiment ran. Disconnected selected sources similarly produce
+`SOURCE_AUTH_UNAVAILABLE`.
+
+### Keyboard map
+
+| Key | Action |
+| --- | --- |
+| `C` / `S` / `N` | Start the user-driven ChatGPT, Slack, or Notion connection flow |
+| `1` / `2` | Toggle Slack or Notion on the Knowledge Sources step |
+| `1` / `2` / `3` | Toggle LLM Wiki, Mem0 OSS, or GBrain on the Candidates step |
+| `Enter` | Advance or run the reviewed automatic experiment |
+| `B`, `Backspace`, `Up` | Go back |
+| `Tab`, `Down` | Advance |
+| `O` | Open a generated report from Results |
+| `R` | Return to the experiment review |
+| `Q` | Quit while the experiment is not running |
+
+While an experiment is running, navigation, toggles, quit, and duplicate-run
+keys are disabled until the worker returns a result.
+
 ## What is evaluated
 
 The candidate set is intentionally fixed:
@@ -93,61 +179,149 @@ an exhaustive audit of every source API.
 
 ## Quickstart
 
-### 1. Install the project
+### 1. Install once
 
-Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then:
-
-```bash
-git clone https://github.com/runbear-io/AutoBrain.git
-cd AutoBrain
-
-uv sync
-uv run autobrain --help
-```
-
-### 2. Check local prerequisites
+AutoBrain is a Python CLI, so its global-package equivalent of
+`npm install -g` is `uv tool install`:
 
 ```bash
-uv run autobrain doctor --json
+uv tool install git+https://github.com/runbear-io/AutoBrain.git
 ```
 
-The doctor command reports typed states instead of treating missing credentials
-as a successful empty run.
-
-### 3. Connect knowledge sources
-
-Use the source-specific auth flow exposed by the CLI:
+If `uv` is not installed yet:
 
 ```bash
-uv run autobrain auth --help
-uv run autobrain auth status --json
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install git+https://github.com/runbear-io/AutoBrain.git
 ```
 
-Slack and Notion connections are user-authorized and local. AutoBrain only
-allowlists read operations for connected knowledge sources.
-
-### 4. Choose a generation provider
-
-#### OpenAI-compatible API mode
-
-Set the provider credential through your environment or approved secret
-manager:
+From then on, open the cockpit from any directory with:
 
 ```bash
-export OPENAI_API_KEY="..."
+autobrain
 ```
 
-Then run:
+Upgrade or remove the global tool with:
 
 ```bash
-uv run autobrain run \
-  --provider api \
-  --budget-usd 25 \
-  --max-questions 30 \
-  --no-open
+uv tool upgrade autobrain
+uv tool uninstall autobrain
 ```
 
-#### Personal ChatGPT subscription mode
+The cockpit never performs a hidden login. If a connection is unavailable,
+press `C`, `S`, or `N` to temporarily leave the full-screen UI and start that
+explicit connection flow.
+
+### 2. Inspect local capabilities
+
+```bash
+autobrain doctor --json
+autobrain auth status --json
+autobrain subscription status --json
+```
+
+The doctor and status commands report typed states. Missing credentials are
+never converted into a successful empty run.
+
+### 3. Review and run
+
+Keep the default scope or toggle sources and candidates. The Automatic
+Experiment section updates from the current selection. Press `Enter` from that
+section to start the run.
+
+AutoBrain shows elapsed time while running, then displays candidate scores,
+status, verdict, and report availability. If a report was generated, press `O`
+to open it.
+
+## Connections
+
+### Slack and Notion
+
+Press `N` or `S` in the TUI to leave the full-screen view temporarily and run
+the same explicit browser OAuth flows available from the CLI.
+
+Notion uses the hosted read-only Notion MCP server with dynamic client
+registration, so users do not need to create or paste a Notion API token:
+
+```bash
+autobrain auth notion
+```
+
+Slack also uses a hosted read-only MCP server, but the current Slack MCP OAuth
+flow requires a fixed Slack app client. The app operator must configure
+`http://127.0.0.1:8765/oauth/callback` as a redirect URL and provide its
+credentials before the user authorizes the workspace:
+
+```bash
+export AUTOBRAIN_SLACK_CLIENT_ID="<slack-app-client-id>"
+export AUTOBRAIN_SLACK_CLIENT_SECRET="<slack-app-client-secret>"
+autobrain auth slack
+```
+
+Inspect both connection states without starting a crawl:
+
+```bash
+autobrain auth status --json
+```
+
+OAuth access and refresh tokens are stored in the OS keychain under the
+`autobrain.oauth` service. If the keychain is unavailable, AutoBrain uses a
+confined `0600` fallback under `~/.autobrain/auth/` and reports the degraded
+storage state.
+
+### How source content becomes candidate input
+
+Both sources cross the same read-only and run-local pipeline:
+
+```mermaid
+flowchart LR
+    A[Notion hosted MCP<br/>search + fetch] --> C[Source snapshots]
+    B[Slack hosted MCP<br/>channels + history + threads<br/>files + canvases] --> C
+    C --> D[Normalize + exact deduplicate]
+    D --> E[Immutable corpus-freeze.json]
+    E --> F[LLM Wiki native ingest]
+    E --> G[Mem0 OSS native add/search]
+    E --> H[GBrain native Markdown ingest]
+    F --> I[Comparable observations]
+    G --> I
+    H --> I
+```
+
+Notion discovery calls `notion-search` and then `notion-fetch` for each
+accessible document. Slack enumerates authorized public and private channels,
+reads channel history and thread replies, and reads referenced files or
+canvases when those capabilities are advertised. Direct messages are excluded
+from the default scope.
+
+The connectors never write back to either service. MCP results are treated as
+untrusted data and only explicitly allowlisted read tools can run. Each source
+item is converted to the shared `NormalizedDocument` contract:
+
+- source kind and stable source ID
+- canonical URL and title
+- complete text
+- SHA-256 content hash
+- timestamps, source references, provenance, and safe metadata
+
+Source-specific transport fields are removed at this boundary, exact duplicate
+content is collapsed deterministically, and benchmark holdouts are separated
+before any candidate sees the corpus.
+
+The normalized candidate-visible snapshot is stored at:
+
+```text
+~/.autobrain/runs/<run-id>/corpus-freeze.json
+```
+
+All selected candidates receive that same frozen snapshot. Their adapters then
+translate each normalized document into the candidate's native ingestion
+surface: LLM Wiki documents, Mem0 scoped memories, or GBrain Markdown sources.
+Native indexes are isolated to that run and cleaned up when required; durable
+evidence remains in the run directory as the corpus freeze, candidate
+observations, comparison JSON, manifest, and HTML report. AutoBrain is an
+evaluation runner, not a permanent Slack or Notion mirror.
+
+### Personal ChatGPT subscription
 
 Subscription mode uses a local Codex CLI login for generation. Install and
 authenticate the Codex CLI according to its official documentation, then let
@@ -155,14 +329,14 @@ AutoBrain start the user-driven login flow:
 
 ```bash
 codex --help
-uv run autobrain subscription setup
-uv run autobrain subscription status --json
+autobrain subscription setup
+autobrain subscription status --json
 ```
 
 Run the same evaluation through the local subscription bridge:
 
 ```bash
-uv run autobrain run \
+autobrain run \
   --provider codex-subscription \
   --budget-usd 25 \
   --max-questions 30 \
@@ -172,6 +346,29 @@ uv run autobrain run \
 AutoBrain does not collect or persist a ChatGPT password or browser token.
 Generation is sent through a local `codex exec` boundary using an ephemeral,
 read-only sandbox.
+
+## Headless automation
+
+The TUI is a thin interface over the existing orchestration path. Scripts and
+CI can continue to configure provider, budget, question count, output, and
+report-opening behavior explicitly:
+
+```bash
+autobrain run \
+  --provider codex-subscription \
+  --budget-usd 25 \
+  --max-questions 30 \
+  --no-open
+```
+
+```bash
+autobrain run --help
+```
+
+The headless command currently runs the complete fixed Slack/Notion and
+LLM Wiki/Mem0 OSS/GBrain comparison. Interactive source and candidate scope
+selection belongs to the cockpit flow. Both interfaces use the same immutable
+run lifecycle, metering, evaluation, and reporting boundaries.
 
 ## Why subscription mode does not need OpenAI embeddings
 
@@ -199,6 +396,7 @@ provider does not expose authoritative usage.
 ## CLI map
 
 ```text
+autobrain                                Open the interactive terminal cockpit
 autobrain doctor                         Inspect local capability states
 autobrain auth                           Manage source auth and connection status
 autobrain subscription setup             Start user-driven ChatGPT login
@@ -211,10 +409,10 @@ autobrain report                         Reopen an existing report
 Useful help commands:
 
 ```bash
-uv run autobrain --help
-uv run autobrain run --help
-uv run autobrain auth --help
-uv run autobrain subscription --help
+autobrain --help
+autobrain run --help
+autobrain auth --help
+autobrain subscription --help
 ```
 
 ## Run artifacts
@@ -235,7 +433,7 @@ to understand the result:
 To reopen a completed run:
 
 ```bash
-uv run autobrain report <run-id>
+autobrain report <run-id>
 ```
 
 The report is an evidence surface, not a magic confidence score. Read the
@@ -271,10 +469,17 @@ src/autobrain/
 ├── connectors/          Slack and Notion read connectors
 ├── decision.py          Evidence-aware scoring and decision policy
 ├── evaluate.py          Isolated evaluator
+├── experiment.py        Automatic TUI experiment planning
 ├── metering.py          Run-local budget and usage boundary
 ├── orchestration.py     End-to-end run lifecycle
-├── report.py             Report generation and reopening
-└── subscription.py      Codex bridge and local embedding backend
+├── production.py        Selected production connectors and candidates
+├── report.py            Report generation and reopening
+├── subscription.py      Codex bridge and local embedding backend
+├── terminal_text.py     Unicode-safe terminal width handling
+├── tui.py               Curses event loop and worker coordination
+├── tui_render.py        Pure size-bounded terminal renderer
+├── tui_runtime.py       Connection and orchestration bridge
+└── tui_state.py         Immutable cockpit state machine
 
 docs/
 ├── methodology.md
@@ -303,7 +508,7 @@ uv build --offline
 The current validated baseline is:
 
 ```text
-371 passed, 3 skipped
+390 passed, 3 skipped
 0 Ruff violations
 0 basedpyright errors
 ```
@@ -336,6 +541,8 @@ knowledge platform. In particular:
    surfaces listed above.
 6. A benchmark score is evidence for the captured corpus and questions, not a
    universal ranking of knowledge systems.
+7. The interactive cockpit requires a TTY with at least `60x23` terminal
+   cells; non-interactive environments should use `autobrain run`.
 
 If one of these limitations changes, the report contract and README should
 change with it.

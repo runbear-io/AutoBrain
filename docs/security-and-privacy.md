@@ -6,8 +6,9 @@ AutoBrain is intentionally local-first.
 
 - OAuth uses provider-specific discovery, PKCE/state checks, audience-bound
   tokens, and the OS keyring where available.
-- `OPENAI_API_KEY` is checked only for presence by the CLI. Its value is never
-  printed, copied to evidence, or included in reports.
+- ChatGPT subscription authentication remains in the local Codex CLI
+  credential store. AutoBrain checks the typed login status but does not ingest
+  the credential, password, or browser token.
 - Denied consent, revoked grants, admin rejection, missing app credentials,
   unavailable keyring, and callback failures settle as typed auth evidence.
 - Slack and Notion credentials are never interchangeable.

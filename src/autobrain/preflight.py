@@ -8,6 +8,7 @@ from pydantic import Field
 
 from autobrain.models import CandidatePin, CheckResult, DoctorPaths, Status, StrictModel
 from autobrain.paths import AutoBrainPaths, PathConfinementError
+from autobrain.preflight_subscription import check_chatgpt_subscription
 from autobrain.preflight_support import (
     CommandResult,
     format_version,
@@ -76,12 +77,9 @@ class Preflight:
         readiness = self.environment.readiness()
         checks.extend(
             (
-                CheckResult(
-                    name="openai_api_key",
-                    status=Status.OK if readiness.openai_api_key else Status.MISSING_PROVIDER,
-                    detail="configured"
-                    if readiness.openai_api_key
-                    else "OPENAI_API_KEY is not configured",
+                check_chatgpt_subscription(
+                    command_runner=self.command_runner,
+                    executable_finder=self.executable_finder,
                 ),
                 CheckResult(
                     name="slack_credentials",

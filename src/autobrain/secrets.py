@@ -30,7 +30,6 @@ type Redactable = (
 
 
 class EnvironmentReadiness(StrictModel):
-    openai_api_key: bool
     slack_client_id: bool
     slack_client_secret: bool
 
@@ -78,7 +77,6 @@ class RuntimeEnvironment(StrictModel):
 
     def readiness(self) -> EnvironmentReadiness:
         return EnvironmentReadiness(
-            openai_api_key=self.openai_api_key is not None,
             slack_client_id=self.slack_client_id is not None,
             slack_client_secret=self.slack_client_secret is not None,
         )

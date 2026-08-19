@@ -36,7 +36,8 @@ from autobrain.subscription import (
 app = typer.Typer(
     name="autobrain",
     help="Compare pinned company-brain candidates locally.",
-    no_args_is_help=True,
+    no_args_is_help=False,
+    invoke_without_command=True,
     add_completion=False,
     pretty_exceptions_enable=False,
 )
@@ -46,9 +47,21 @@ subscription_app = typer.Typer(help="Use a locally authenticated ChatGPT subscri
 app.add_typer(subscription_app, name="subscription")
 
 
-@app.callback()
-def main() -> None:
-    """Compare pinned company-brain candidates locally."""
+def run_tui() -> None:
+    from autobrain.tui import run_tui as launch
+
+    launch()
+
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context) -> None:
+    """Launch the interactive cockpit when no subcommand is provided."""
+    if ctx.invoked_subcommand is None:
+        try:
+            run_tui()
+        except RuntimeError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from None
 
 
 def _authorize_source(source: Provider) -> None:

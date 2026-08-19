@@ -141,6 +141,8 @@ def test_installed_style_fixture_run_is_local_deterministic_and_source_linked(
         first_manifest["hashes"]["benchmark_sha256"]
         == second_manifest["hashes"]["benchmark_sha256"]
     )
+    frozen_corpus = json.loads((first_dir / "corpus-freeze.json").read_text(encoding="utf-8"))
+    assert all("provider" not in document for document in frozen_corpus["documents"])
     assert (first_dir / "comparison.json").read_bytes().replace(
         first_dir.name.encode(), b"<RUN_ID>"
     ) == (second_dir / "comparison.json").read_bytes().replace(

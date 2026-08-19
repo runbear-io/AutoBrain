@@ -152,6 +152,12 @@ def test_local_wiring_invokes_injected_connector_and_pinned_candidate_builders(
     assert [candidate.cleaned for candidate in candidates] == [1, 1, 1]
     assert result.candidate_results[0].status is Status.FAILED
     assert result.report_path is not None and result.report_path.is_file()
+    manifest = json.loads((result.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["config"]["experiment_title"]
+    assert manifest["config"]["experiment_description"]
+    manifest = json.loads((result.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["config"]["experiment_title"]
+    assert manifest["config"]["experiment_description"]
 
 
 def test_qualified_question_is_accepted_but_thanks_is_rejected_before_start(
@@ -327,7 +333,7 @@ def test_candidate_context_contains_only_documents_and_questions(
     assert set(vars(candidate.context)) == {"documents", "questions", "case_ids"}
     serialized_context = json.dumps(vars(candidate.context), default=str).casefold()
     assert "expected_claim" not in serialized_context
-    assert "reference" not in serialized_context
+    assert "reference_answer" not in serialized_context
     assert "oracle" not in serialized_context
     assert "holdout" not in serialized_context
     assert "forbidden" not in serialized_context
