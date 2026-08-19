@@ -1,4 +1,4 @@
-"""Pure setup state machine for the AutoBrain terminal cockpit."""
+"""Pure setup state machine for the AutoBrain interview cockpit."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ from autobrain.models import CandidateId
 
 class WizardSection(StrEnum):
     CONNECTIONS = "connections"
-    KNOWLEDGE_SOURCES = "knowledge_sources"
+    SLACK = "slack"
+    NOTION = "notion"
     CANDIDATES = "candidates"
     REVIEW = "review"
     RUNNING = "running"
@@ -20,7 +21,8 @@ class WizardSection(StrEnum):
 
 _SETUP_SECTIONS = (
     WizardSection.CONNECTIONS,
-    WizardSection.KNOWLEDGE_SOURCES,
+    WizardSection.SLACK,
+    WizardSection.NOTION,
     WizardSection.CANDIDATES,
     WizardSection.REVIEW,
 )
@@ -54,6 +56,14 @@ class TUIState:
             selected_sources=self.selected_sources,
             selected_candidates=self.selected_candidates,
         )
+
+    def skip_source(self, provider: Provider) -> TUIState:
+        values = tuple(item for item in self.selected_sources if item is not provider)
+        return TUIState(
+            section=self.section,
+            selected_sources=values,
+            selected_candidates=self.selected_candidates,
+        ).advance()
 
     def toggle_source(self, provider: Provider) -> TUIState:
         values = set(self.selected_sources)

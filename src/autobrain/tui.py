@@ -11,12 +11,12 @@ import webbrowser
 
 from autobrain.auth.models import Provider
 from autobrain.experiment import ExperimentPlan
-from autobrain.models import CandidateId
+from autobrain.models import CandidateId, ConnectionState
 from autobrain.orchestration import RunResult
+from autobrain.subscription import SubscriptionStatus
 from autobrain.tui_render import render_dashboard, terminal_too_small
 from autobrain.tui_runtime import (
     ConnectionSnapshot,
-    connection_key,
     connection_snapshot,
     execute_plan,
     resolve_plan,
@@ -55,6 +55,12 @@ def accepts_key_for_state(
 def _run(screen: curses.window) -> None:
     curses.curs_set(0)
     curses.use_default_colors()
+    if curses.has_colors():
+        curses.start_color()
+        curses.init_pair(1, curses.COLOR_CYAN, -1)
+        curses.init_pair(2, curses.COLOR_GREEN, -1)
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)
+        curses.init_pair(4, curses.COLOR_RED, -1)
     screen.timeout(120)
     state = TUIState()
     connections = connection_snapshot()
@@ -116,25 +122,15 @@ def _run(screen: curses.window) -> None:
             state = state.advance()
             continue
 
-        if state.section is WizardSection.CONNECTIONS:
-            if connection_key(key) == "subscription":
-                run_connection_flow(screen, "subscription")
-                connections = connection_snapshot()
-                runtime_error = ""
-        elif state.section is WizardSection.KNOWLEDGE_SOURCES:
-            match connection_key(key):
-                case Provider.SLACK | Provider.NOTION as provider:
-                    run_connection_flow(screen, provider)
-                    connections = connection_snapshot()
-                    runtime_error = ""
-                case _:
-                    if key == ord("1"):
-                        state = state.toggle_source(Provider.SLACK)
-                        runtime_error = ""
-                    elif key == ord("2"):
-                        state = state.toggle_source(Provider.NOTION)
-                        runtime_error = ""
-        elif state.section is WizardSection.CANDIDATES:
+        if state.section is WizardSection.SLACK and key in {ord("s"), ord("S")}:
+            state = state.skip_source(Provider.SLACK)
+            runtime_error = ""
+            continue
+        if state.section is WizardSection.NOTION and key in {ord("s"), ord("S")}:
+            state = state.skip_source(Provider.NOTION)
+            runtime_error = ""
+            continue
+        if state.section is WizardSection.CANDIDATES:
             candidates = {
                 ord("1"): CandidateId.LLM_WIKI,
                 ord("2"): CandidateId.MEM0,
@@ -151,7 +147,36 @@ def _run(screen: curses.window) -> None:
                 state = state.with_section(WizardSection.REVIEW)
 
         if key in {10, 13, curses.KEY_ENTER}:
-            if state.section is WizardSection.REVIEW and plan is not None:
+            if state.section is WizardSection.CONNECTIONS:
+                if connections.subscription is not SubscriptionStatus.READY:
+                    run_connection_flow(screen, "subscription")
+                    connections = connection_snapshot()
+                    runtime_error = ""
+                    if connections.subscription is SubscriptionStatus.READY:
+                        state = state.advance()
+                else:
+                    state = state.advance()
+            elif state.section is WizardSection.SLACK:
+                slack_ready = connections.sources.get(Provider.SLACK) is ConnectionState.CONNECTED
+                if Provider.SLACK in state.selected_sources and not slack_ready:
+                    run_connection_flow(screen, Provider.SLACK)
+                    connections = connection_snapshot()
+                    runtime_error = ""
+                    if connections.sources.get(Provider.SLACK) is ConnectionState.CONNECTED:
+                        state = state.advance()
+                else:
+                    state = state.advance()
+            elif state.section is WizardSection.NOTION:
+                notion_ready = connections.sources.get(Provider.NOTION) is ConnectionState.CONNECTED
+                if Provider.NOTION in state.selected_sources and not notion_ready:
+                    run_connection_flow(screen, Provider.NOTION)
+                    connections = connection_snapshot()
+                    runtime_error = ""
+                    if connections.sources.get(Provider.NOTION) is ConnectionState.CONNECTED:
+                        state = state.advance()
+                else:
+                    state = state.advance()
+            elif state.section is WizardSection.REVIEW and plan is not None:
                 state = state.with_section(WizardSection.RUNNING)
                 started_at = time.monotonic()
                 threading.Thread(
@@ -191,8 +216,23 @@ def _draw(
     column = 1 if width > 2 else 0
     for row, line in enumerate(lines[: max(1, height - 1)]):
         try:
-            style = curses.A_BOLD if row == 0 or line.startswith(">") else curses.A_NORMAL
-            screen.addstr(row, column, line, style)
+            screen.addstr(row, column, line, _line_style(line, row))
         except curses.error:
             break
     screen.refresh()
+
+
+def _line_style(line: str, row: int) -> int:
+    if not curses.has_colors():
+        return curses.A_BOLD if row == 0 else curses.A_NORMAL
+    if row == 0:
+        return curses.color_pair(1) | curses.A_BOLD
+    if line.startswith("Status") and "not connected" in line:
+        return curses.color_pair(4) | curses.A_BOLD
+    if "export ready" in line or line.endswith("connected"):
+        return curses.color_pair(2)
+    if line.startswith("Enter"):
+        return curses.color_pair(3) | curses.A_BOLD
+    if line.startswith("Step") or line.startswith("[ChatGPT]"):
+        return curses.color_pair(1)
+    return curses.A_NORMAL

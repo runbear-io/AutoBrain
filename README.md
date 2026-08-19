@@ -258,30 +258,19 @@ autobrain
 ```
 
 ```text
-AUTOBRAIN
-One grounded experiment. You choose ChatGPT, knowledge sources, and candidates.
+AutoBrain
+Which Brain should your company build on?
 
-> 1  ChatGPT
-   [C] ChatGPT      connected      (reconnect)
+[ChatGPT]  Slack  Notion  Brains  Run
 
-  2  Knowledge
-   [S] [x] Slack        export ready   (reconnect)
-   [N] [x] Notion       connected      (reconnect)
-
-  3  Candidates
-   [1] [x] LLM Wiki
-   [2] [x] Mem0 OSS
-   [3] [x] GBrain
-
-  4  Automatic Experiment
-   Find the best knowledge system for Slack + Notion
-   Compare LLM Wiki, Mem0 OSS, GBrain on grounded questions from Slack + Notion.
-   Provider     ChatGPT subscription
-   Questions    automatic, up to 30
-   Budget guard automatic, $25
+Step 1 of 5
+Sign in with ChatGPT
+A browser window will open for grounded questions and scoring.
+Status    not connected
+Enter     Open ChatGPT in your browser
 ```
 
-The cockpit requires an interactive terminal of at least `60x23` cells.
+The cockpit requires an interactive terminal of at least `60x22` cells.
 Smaller terminals show a resize message and do not allow hidden setup state to
 change.
 
@@ -289,9 +278,10 @@ change.
 
 | Setup section | Available choices |
 | --- | --- |
-| **ChatGPT** | Connect or reconnect the ChatGPT subscription |
-| **Knowledge** | Slack export and/or Notion, plus whether this run uses them |
-| **Candidates** | LLM Wiki, Mem0 OSS, GBrain |
+| **ChatGPT** | Enter opens a browser for the ChatGPT subscription |
+| **Slack** | Enter imports an official export ZIP, or skip |
+| **Notion** | Enter opens a browser for read-only Notion access, or skip |
+| **Brains** | LLM Wiki, Mem0 OSS, GBrain |
 
 All sources and candidates start selected. A runnable experiment requires at
 least one knowledge source and at least two candidates.
@@ -316,11 +306,9 @@ experiment ran. Disconnected selected sources similarly produce
 
 | Key | Action |
 | --- | --- |
-| `C` | Connect or reconnect ChatGPT on the ChatGPT step |
-| `S` / `N` | Connect or reconnect Slack or Notion on the Knowledge step |
-| `1` / `2` | Include or exclude Slack or Notion on the Knowledge step |
-| `1` / `2` / `3` | Toggle LLM Wiki, Mem0 OSS, or GBrain on the Candidates step |
-| `Enter` | Advance or run the reviewed automatic experiment |
+| `Enter` | Open the current step's auth window, or continue once connected |
+| `S` | Skip Slack or Notion on those steps |
+| `1` / `2` / `3` | Toggle LLM Wiki, Mem0 OSS, or GBrain on the Brains step |
 | `B`, `Backspace`, `Up` | Go back |
 | `Tab`, `Down` | Advance |
 | `O` | Open a generated report from Results |

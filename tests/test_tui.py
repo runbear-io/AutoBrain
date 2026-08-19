@@ -31,9 +31,10 @@ def test_tui_navigation_only_exposes_requested_setup_sections() -> None:
     state = TUIState()
 
     assert state.section is WizardSection.CONNECTIONS
-    assert state.advance().section is WizardSection.KNOWLEDGE_SOURCES
-    assert state.advance().advance().section is WizardSection.CANDIDATES
-    assert state.advance().advance().advance().section is WizardSection.REVIEW
+    assert state.advance().section is WizardSection.SLACK
+    assert state.advance().advance().section is WizardSection.NOTION
+    assert state.advance().advance().advance().section is WizardSection.CANDIDATES
+    assert state.advance().advance().advance().advance().section is WizardSection.REVIEW
 
 
 def test_tui_toggles_sources_and_candidates_without_manual_budget_or_questions() -> None:
@@ -188,13 +189,13 @@ def test_extremely_narrow_renderer_respects_physical_width() -> None:
     assert max(map(len, lines)) <= 8
     assert "TOO" in lines
     assert "SMALL" in lines
-    assert ">=60x23" in lines
+    assert ">=60x22" in lines
     assert "Q quit" in lines
 
 
 def test_setup_footers_only_advertise_available_actions() -> None:
     source_lines = render_dashboard(
-        section=WizardSection.KNOWLEDGE_SOURCES.value,
+        section=WizardSection.SLACK.value,
         selected_sources=(Provider.SLACK,),
         selected_candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
         source_states={},
@@ -220,13 +221,12 @@ def test_setup_footers_only_advertise_available_actions() -> None:
         height=24,
     )
 
-    assert "S/N connect" in source_lines[-1]
-    assert "1/2 toggle" in source_lines[-1]
+    assert "S skip" in source_lines[-1]
+    assert "Enter connect" in source_lines[-1]
     assert "3 toggle" not in source_lines[-1]
     assert "Enter run experiment" not in review_lines[-1]
-    assert any(line.startswith("> 2  Knowledge") for line in source_lines)
+    assert any("Add Slack knowledge" in line for line in source_lines)
     assert not any("Connections" in line for line in source_lines)
-    assert any("[S]" in line and "[x]" in line and "Slack" in line for line in source_lines)
 
 
 def test_running_state_rejects_navigation_and_duplicate_run_keys() -> None:
@@ -277,7 +277,7 @@ def test_wide_character_content_is_terminal_cell_bounded(tmp_path: Path) -> None
 
 def test_dashboard_labels_configured_slack_export() -> None:
     lines = render_dashboard(
-        section=WizardSection.CONNECTIONS.value,
+        section=WizardSection.SLACK.value,
         selected_sources=(Provider.SLACK, Provider.NOTION),
         selected_candidates=tuple(CandidateId),
         source_states={
@@ -294,8 +294,6 @@ def test_dashboard_labels_configured_slack_export() -> None:
         source_details={Provider.SLACK: "export ready"},
     )
 
-    assert any("Slack" in line and "export ready" in line for line in lines)
-    assert any("[S]" in line and "[x]" in line and "export ready" in line for line in lines)
-    assert not any("1  Connections" in line for line in lines)
-    assert any("1  ChatGPT" in line for line in lines)
-    assert any("2  Knowledge" in line for line in lines)
+    assert any("export ready" in line for line in lines)
+    assert any("Add Slack knowledge" in line for line in lines)
+    assert any("[ChatGPT]" in line or "ChatGPT" in line for line in lines)
