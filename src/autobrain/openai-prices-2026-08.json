@@ -1,0 +1,14 @@
+{
+  "version": "openai-2026-08-01",
+  "effective_date": "2026-08-01",
+  "models": {
+    "gpt-5-mini": {
+      "input_usd_per_million": 0.25,
+      "output_usd_per_million": 2.0
+    },
+    "text-embedding-3-small": {
+      "input_usd_per_million": 0.02,
+      "output_usd_per_million": 0.0
+    }
+  }
+}

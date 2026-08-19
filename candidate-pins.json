@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "candidates": [
+    {
+      "id": "llm-wiki",
+      "distribution": "llm-wiki-compiler",
+      "version": "1.1.0",
+      "commit": "3e17bcfe8b50f24c14c6bcda0cb9224d94fd8206",
+      "repository": "https://github.com/atomicstrata/llm-wiki-compiler",
+      "license": "MIT"
+    },
+    {
+      "id": "mem0",
+      "distribution": "mem0ai",
+      "version": "2.0.18",
+      "commit": "001c235229be8795e3834520467bd0d661ed8f34",
+      "repository": "https://github.com/mem0ai/mem0",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "gbrain",
+      "distribution": "gbrain",
+      "version": "0.46.19.0",
+      "commit": "f49ca569232dbc0d8e0783d84606115e3bfe5ab1",
+      "repository": "https://github.com/garrytan/gbrain",
+      "license": "MIT"
+    }
+  ]
+}

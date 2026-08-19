@@ -1,0 +1,1 @@
+"""Candidate adapter tests."""

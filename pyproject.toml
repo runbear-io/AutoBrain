@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autobrain"
+version = "0.1.0"
+description = "Local company-brain comparator"
+readme = "README.md"
+requires-python = ">=3.12,<3.14.0a0"
+dependencies = [
+  "authlib>=1.6,<2",
+  "httpx>=0.28,<1",
+  "jinja2>=3.1,<4",
+  "keyring>=25.6,<26",
+  "mcp>=1.12,<2",
+  "mem0ai==2.0.18",
+  "openai>=1.90,<2",
+  "pydantic>=2.11,<3",
+  "typer>=0.16,<1",
+]
+
+[project.scripts]
+autobrain = "autobrain.bootstrap:main"
+
+[dependency-groups]
+dev = [
+  "basedpyright>=1.31,<2",
+  "pytest>=8.4,<9",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autobrain"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/autobrain/**",
+  "tests/**",
+  "docs/**",
+  "README.md",
+  "DESIGN.md",
+  "pyproject.toml",
+  "uv.lock",
+  ".senpi/task-10-final-qa/**",
+]
+exclude = [
+  ".senpi/task-10-final-qa-20260818/**",
+  ".senpi/task9-final-qa-20260818/**",
+  ".senpi/task9-qa-20260818/**",
+  ".senpi/task10-browser-fixture/**",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: requires an explicitly configured and authorized provider runtime"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.basedpyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
