@@ -27,6 +27,10 @@ class AutoBrainPaths:
         root = (home or Path.home()) / ".autobrain"
         return cls(root=root, runs=root / "runs", tools=root / "tools", cache=root / "cache")
 
+    @property
+    def sources(self) -> Path:
+        return self.root / "sources"
+
     @staticmethod
     def validate_output_root(root: Path) -> None:
         """Reject lexical traversal before any output path is created."""
@@ -41,7 +45,7 @@ class AutoBrainPaths:
         canonical_root = self.root.resolve()
         if canonical_root != expected_root:
             raise PathConfinementError(f"state root escapes its canonical parent: {self.root}")
-        for directory in (self.runs, self.tools, self.cache):
+        for directory in (self.runs, self.tools, self.cache, self.sources):
             if directory.is_symlink():
                 raise PathConfinementError(f"state directory cannot be a symlink: {directory}")
             directory.mkdir(mode=0o700, exist_ok=True)

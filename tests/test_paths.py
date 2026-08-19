@@ -12,6 +12,7 @@ def test_layout_is_confined_and_created(tmp_path: Path) -> None:
     assert run == tmp_path / ".autobrain" / "runs" / "run-20260818"
     assert paths.tools == tmp_path / ".autobrain" / "tools"
     assert paths.cache.is_dir()
+    assert paths.sources.is_dir()
 
 
 @pytest.mark.parametrize("run_id", ["../escape", "/tmp/escape", "a/b", "", ".", ".."])

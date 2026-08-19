@@ -30,6 +30,7 @@ def render_dashboard(
     elapsed_seconds: int,
     width: int,
     height: int | None = None,
+    source_details: dict[Provider, str] | None = None,
 ) -> list[str]:
     """Return a size-bounded dashboard that is easy to snapshot and test."""
     usable_width = max(1, width - 2)
@@ -90,23 +91,24 @@ def render_dashboard(
 
     lines = [
         "AUTOBRAIN",
-        "One grounded experiment. You choose connections, sources, and candidates.",
+        "One grounded experiment. You choose ChatGPT, knowledge sources, and candidates.",
         "",
-        _heading("connections", "1  Connections", section),
+        _heading("connections", "1  ChatGPT", section),
         _connection_line("C", "ChatGPT", subscription_status is SubscriptionStatus.READY),
-        _connection_line(
+        _heading("knowledge_sources", "2  Knowledge", section),
+        _knowledge_line(
             "S",
             "Slack",
-            source_states.get(Provider.SLACK) is ConnectionState.CONNECTED,
+            selected=Provider.SLACK in selected_sources,
+            connected=source_states.get(Provider.SLACK) is ConnectionState.CONNECTED,
+            connected_status=(source_details or {}).get(Provider.SLACK),
         ),
-        _connection_line(
+        _knowledge_line(
             "N",
             "Notion",
-            source_states.get(Provider.NOTION) is ConnectionState.CONNECTED,
+            selected=Provider.NOTION in selected_sources,
+            connected=source_states.get(Provider.NOTION) is ConnectionState.CONNECTED,
         ),
-        _heading("knowledge_sources", "2  Knowledge Sources", section),
-        _toggle_line("1", "Slack", Provider.SLACK in selected_sources),
-        _toggle_line("2", "Notion", Provider.NOTION in selected_sources),
         _heading("candidates", "3  Candidates", section),
         _toggle_line("1", "LLM Wiki", CandidateId.LLM_WIKI in selected_candidates),
         _toggle_line("2", "Mem0 OSS", CandidateId.MEM0 in selected_candidates),
@@ -134,10 +136,38 @@ def _heading(identifier: str, label: str, section: str) -> str:
     return f"> {label}" if identifier == section else f"  {label}"
 
 
-def _connection_line(key: str, label: str, connected: bool) -> str:
-    status = "connected" if connected else "not connected"
+def _connection_line(
+    key: str,
+    label: str,
+    connected: bool,
+    *,
+    connected_status: str | None = None,
+) -> str:
+    status = (
+        connected_status
+        if connected and connected_status
+        else ("connected" if connected else "not connected")
+    )
     action = "reconnect" if connected else "connect"
     return f"   [{key}] {label:<12} {status:<14} ({action})"
+
+
+def _knowledge_line(
+    key: str,
+    label: str,
+    *,
+    selected: bool,
+    connected: bool,
+    connected_status: str | None = None,
+) -> str:
+    mark = "x" if selected else " "
+    status = (
+        connected_status
+        if connected and connected_status
+        else ("connected" if connected else "not connected")
+    )
+    action = "reconnect" if connected else "connect"
+    return f"   [{key}] [{mark}] {label:<12} {status:<14} ({action})"
 
 
 def _toggle_line(key: str, label: str, selected: bool) -> str:
@@ -155,9 +185,9 @@ def _footer(
     plan_available: bool = False,
 ) -> str:
     if section == "connections":
-        return "C/S/N connect  |  Enter next  |  Q quit"
+        return "C connect  |  Enter next  |  Q quit"
     if section == "knowledge_sources":
-        return "1/2 toggle  |  Enter next  |  B back  |  Q quit"
+        return "S/N connect  |  1/2 toggle  |  Enter next  |  B back  |  Q quit"
     if section == "candidates":
         return "1/2/3 toggle  |  Enter next  |  B back  |  Q quit"
     if section == "review":

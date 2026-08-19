@@ -190,6 +190,8 @@ class RunConfig:
     provider_mode: str = "api"
     selected_sources: tuple[Provider, ...] = (Provider.SLACK, Provider.NOTION)
     selected_candidates: tuple[CandidateId, ...] = tuple(CandidateId)
+    slack_export_path: Path | None = None
+    slack_export_sha256: str | None = None
     experiment_title: str = ""
     experiment_description: str = ""
 
@@ -212,6 +214,10 @@ class RunConfig:
             raise ValueError("selected_candidates must include at least two candidates")
         if len(set(self.selected_candidates)) != len(self.selected_candidates):
             raise ValueError("selected_candidates must be unique")
+        if (self.slack_export_path is None) != (self.slack_export_sha256 is None):
+            raise ValueError("slack export path and sha256 must be provided together")
+        if self.slack_export_path is not None and Provider.SLACK not in self.selected_sources:
+            raise ValueError("slack export requires Slack to be selected")
         automatic_title, automatic_description = automatic_experiment_copy(
             sources=self.selected_sources,
             candidates=self.selected_candidates,
@@ -236,6 +242,9 @@ def _default_connector_builder(
     manager: ConnectionManager,
     include_dms: bool,
     selected_sources: tuple[Provider, ...] = (Provider.SLACK, Provider.NOTION),
+    *,
+    slack_export_path: Path | None = None,
+    slack_export_sha256: str | None = None,
 ) -> Sequence[Connector]:
     from autobrain.production import build_production_connectors
 
@@ -243,6 +252,8 @@ def _default_connector_builder(
         manager,
         include_dms=include_dms,
         providers=selected_sources,
+        slack_export_path=slack_export_path,
+        slack_export_sha256=slack_export_sha256,
     )
 
 
@@ -323,10 +334,15 @@ class RunOrchestrator:
         manager = connection_manager or ConnectionManager(state_root)
         connections = manager.status().connections
         selected_sources = set(config.selected_sources)
+        oauth_sources = {
+            provider
+            for provider in selected_sources
+            if not (provider is Provider.SLACK and config.slack_export_path is not None)
+        }
         disconnected = [
             item.provider.value
             for item in connections
-            if item.provider in selected_sources and item.state.value != "CONNECTED"
+            if item.provider in oauth_sources and item.state.value != "CONNECTED"
         ]
         if disconnected:
             return cls(
@@ -345,6 +361,8 @@ class RunOrchestrator:
                         manager,
                         config.include_dms,
                         config.selected_sources,
+                        slack_export_path=config.slack_export_path,
+                        slack_export_sha256=config.slack_export_sha256,
                     )
                 )
             else:

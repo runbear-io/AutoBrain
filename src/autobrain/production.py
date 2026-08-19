@@ -32,6 +32,7 @@ from autobrain.candidates.mem0 import (
     Mem0AdapterConfig,
     Mem0MissingProviderError,
 )
+from autobrain.connectors.slack_export import SlackExportConnector, SlackExportCrawlResult
 from autobrain.mcp.transport import StreamableHttpConnection
 from autobrain.metering import (
     BudgetExceededError,
@@ -175,6 +176,34 @@ class SlackMcpConnector(_McpConnector):
         return cast(ConnectorSnapshot, _run_async(collect()))
 
 
+class SlackExportSourceConnector:
+    provider = Provider.SLACK.value
+
+    def __init__(
+        self,
+        archive_path: Path,
+        *,
+        expected_sha256: str | None = None,
+    ) -> None:
+        self.archive_path = archive_path
+        self._connector = SlackExportConnector(
+            archive_path,
+            expected_sha256=expected_sha256,
+        )
+
+    def probe(self) -> Mapping[str, Any]:
+        return cast(Mapping[str, Any], _run_async(self._connector.probe()))
+
+    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
+        del include_dms
+        result = cast(SlackExportCrawlResult, _run_async(self._connector.crawl()))
+        return ConnectorSnapshot(
+            provider=self.provider,
+            documents=tuple(document.model_dump(mode="json") for document in result.documents),
+            coverage=result.coverage,
+        )
+
+
 class NotionMcpConnector(_McpConnector):
     def __init__(self, connection: StreamableHttpConnection) -> None:
         super().__init__(Provider.NOTION, connection)
@@ -200,24 +229,35 @@ class NotionMcpConnector(_McpConnector):
 def build_production_connectors(
     manager: ConnectionManager,
     *,
-    include_dms: bool,
+    include_dms: bool = False,
     providers: Sequence[Provider] = (Provider.SLACK, Provider.NOTION),
-) -> tuple[SlackMcpConnector | NotionMcpConnector, ...]:
+    slack_export_path: Path | None = None,
+    slack_export_sha256: str | None = None,
+) -> tuple[SlackMcpConnector | SlackExportSourceConnector | NotionMcpConnector, ...]:
     oauth = OAuthManager(manager.store)
-    connectors: dict[Provider, SlackMcpConnector | NotionMcpConnector] = {}
+    connectors: dict[
+        Provider,
+        SlackMcpConnector | SlackExportSourceConnector | NotionMcpConnector,
+    ] = {}
     if Provider.SLACK in providers:
-        slack_token = manager.token_for(Provider.SLACK)
-        if slack_token is None:
-            raise ValueError("MCP_AUTH_UNAVAILABLE: authenticated Slack token required")
-        connectors[Provider.SLACK] = SlackMcpConnector(
-            StreamableHttpConnection.with_oauth(
-                Provider.SLACK,
-                config_for(Provider.SLACK).resource,
-                slack_token,
-                manager=oauth,
-            ),
-            include_dms=include_dms,
-        )
+        if slack_export_path is not None:
+            connectors[Provider.SLACK] = SlackExportSourceConnector(
+                slack_export_path,
+                expected_sha256=slack_export_sha256,
+            )
+        else:
+            slack_token = manager.token_for(Provider.SLACK)
+            if slack_token is None:
+                raise ValueError("MCP_AUTH_UNAVAILABLE: authenticated Slack token required")
+            connectors[Provider.SLACK] = SlackMcpConnector(
+                StreamableHttpConnection.with_oauth(
+                    Provider.SLACK,
+                    config_for(Provider.SLACK).resource,
+                    slack_token,
+                    manager=oauth,
+                ),
+                include_dms=include_dms,
+            )
     if Provider.NOTION in providers:
         notion_token = manager.token_for(Provider.NOTION)
         if notion_token is None:

@@ -117,18 +117,23 @@ def _run(screen: curses.window) -> None:
             continue
 
         if state.section is WizardSection.CONNECTIONS:
-            provider = connection_key(key)
-            if provider is not None:
-                run_connection_flow(screen, provider)
+            if connection_key(key) == "subscription":
+                run_connection_flow(screen, "subscription")
                 connections = connection_snapshot()
                 runtime_error = ""
         elif state.section is WizardSection.KNOWLEDGE_SOURCES:
-            if key == ord("1"):
-                state = state.toggle_source(Provider.SLACK)
-                runtime_error = ""
-            elif key == ord("2"):
-                state = state.toggle_source(Provider.NOTION)
-                runtime_error = ""
+            match connection_key(key):
+                case Provider.SLACK | Provider.NOTION as provider:
+                    run_connection_flow(screen, provider)
+                    connections = connection_snapshot()
+                    runtime_error = ""
+                case _:
+                    if key == ord("1"):
+                        state = state.toggle_source(Provider.SLACK)
+                        runtime_error = ""
+                    elif key == ord("2"):
+                        state = state.toggle_source(Provider.NOTION)
+                        runtime_error = ""
         elif state.section is WizardSection.CANDIDATES:
             candidates = {
                 ord("1"): CandidateId.LLM_WIKI,
@@ -181,6 +186,7 @@ def _draw(
         elapsed_seconds=elapsed_seconds,
         width=width,
         height=height,
+        source_details=connections.source_details,
     )
     column = 1 if width > 2 else 0
     for row, line in enumerate(lines[: max(1, height - 1)]):

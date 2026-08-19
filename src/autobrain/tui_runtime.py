@@ -6,8 +6,10 @@ import curses
 import queue
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from pathlib import Path
+from typing import Literal, Protocol
 
 from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
@@ -15,6 +17,7 @@ from autobrain.experiment import ExperimentPlan, ExperimentSetupError, build_aut
 from autobrain.models import CandidateId, ConnectionState
 from autobrain.orchestration import RunConfig, RunOrchestrator, RunResult
 from autobrain.paths import AutoBrainPaths
+from autobrain.source_store import SlackSourceStore
 from autobrain.subscription import (
     CodexSubscriptionClient,
     CodexSubscriptionConfig,
@@ -26,14 +29,57 @@ from autobrain.subscription import (
 class ConnectionSnapshot:
     subscription: SubscriptionStatus
     sources: dict[Provider, ConnectionState]
+    source_details: dict[Provider, str] | None = None
+    slack_export_path: Path | None = None
+    slack_export_sha256: str | None = None
 
 
-def connection_snapshot() -> ConnectionSnapshot:
+class ConnectionFlowRunner(Protocol):
+    def __call__(
+        self,
+        command: Sequence[str],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+def _subprocess_runner(
+    command: Sequence[str],
+    *,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, check=check, text=True)
+
+
+def connection_snapshot(
+    *,
+    manager: ConnectionManager | None = None,
+    subscription_client: CodexSubscriptionClient | None = None,
+    source_store: SlackSourceStore | None = None,
+) -> ConnectionSnapshot:
     paths = AutoBrainPaths.from_home()
-    report = ConnectionManager(paths.root).status()
+    report = (manager or ConnectionManager(paths.root)).status()
     source_states = {item.provider: item.state for item in report.connections}
-    subscription = CodexSubscriptionClient(CodexSubscriptionConfig.from_environ()).status()
-    return ConnectionSnapshot(subscription=subscription, sources=source_states)
+    subscription = (
+        subscription_client or CodexSubscriptionClient(CodexSubscriptionConfig.from_environ())
+    ).status()
+    slack_status = (source_store or SlackSourceStore(paths.sources)).status()
+    source_details: dict[Provider, str] = {}
+    if slack_status.ready and slack_status.config is not None:
+        source_states[Provider.SLACK] = ConnectionState.CONNECTED
+        source_details[Provider.SLACK] = "export ready"
+        return ConnectionSnapshot(
+            subscription=subscription,
+            sources=source_states,
+            source_details=source_details,
+            slack_export_path=slack_status.archive_path,
+            slack_export_sha256=slack_status.config.archive_sha256,
+        )
+    return ConnectionSnapshot(
+        subscription=subscription,
+        sources=source_states,
+        source_details=source_details,
+    )
 
 
 def resolve_plan(
@@ -67,6 +113,9 @@ def execute_plan(
     result_queue: queue.Queue[RunResult | BaseException],
 ) -> None:
     try:
+        paths = AutoBrainPaths.from_home()
+        slack_status = SlackSourceStore(paths.sources).status()
+        slack_export_selected = Provider.SLACK in plan.sources and slack_status.ready
         config = RunConfig(
             budget_usd=plan.budget_usd,
             max_questions=plan.max_questions,
@@ -74,6 +123,12 @@ def execute_plan(
             provider_mode=plan.provider_mode,
             selected_sources=plan.sources,
             selected_candidates=plan.candidates,
+            slack_export_path=(slack_status.archive_path if slack_export_selected else None),
+            slack_export_sha256=(
+                slack_status.config.archive_sha256
+                if slack_export_selected and slack_status.config is not None
+                else None
+            ),
             experiment_title=plan.title,
             experiment_description=plan.description,
         )
@@ -85,14 +140,18 @@ def execute_plan(
 def run_connection_flow(
     screen: curses.window,
     provider: Provider | Literal["subscription"],
+    *,
+    runner: ConnectionFlowRunner = _subprocess_runner,
 ) -> None:
-    if isinstance(provider, Provider):
+    if provider is Provider.SLACK:
+        command = [sys.executable, "-m", "autobrain.cli", "source", "slack"]
+    elif isinstance(provider, Provider):
         command = [sys.executable, "-m", "autobrain.cli", "auth", provider.value]
     else:
         command = [sys.executable, "-m", "autobrain.cli", "subscription", "setup"]
     curses.def_prog_mode()
     curses.endwin()
-    subprocess.run(command, check=False)
+    runner(command, check=False)
     curses.reset_prog_mode()
     screen.refresh()
 

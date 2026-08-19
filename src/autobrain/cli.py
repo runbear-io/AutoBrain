@@ -1,16 +1,9 @@
-"""AutoBrain command-line entry point."""
-
 import os
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from autobrain.auth.callback import LocalCallback
-from autobrain.auth.models import OAuthError, Provider
-from autobrain.auth.oauth import OAuthManager
-from autobrain.auth.service import ConnectionManager
-from autobrain.auth.storage import TokenStore
 from autobrain.fixture import (
     FixtureValidationError,
     fixture_candidates,
@@ -27,11 +20,14 @@ from autobrain.orchestration import (
 from autobrain.paths import AutoBrainPaths
 from autobrain.preflight import Preflight
 from autobrain.secrets import RuntimeEnvironment, RuntimeSettings
+from autobrain.source_cli import auth_app, source_app
+from autobrain.source_store import SlackSourceStore
 from autobrain.subscription import (
     CodexSubscriptionClient,
     CodexSubscriptionConfig,
     SubscriptionError,
 )
+from autobrain.tui import run_tui
 
 app = typer.Typer(
     name="autobrain",
@@ -41,100 +37,20 @@ app = typer.Typer(
     add_completion=False,
     pretty_exceptions_enable=False,
 )
-auth_app = typer.Typer(help="Connect and manage hosted read-only MCP sources.")
 app.add_typer(auth_app, name="auth")
 subscription_app = typer.Typer(help="Use a locally authenticated ChatGPT subscription.")
 app.add_typer(subscription_app, name="subscription")
-
-
-def run_tui() -> None:
-    from autobrain.tui import run_tui as launch
-
-    launch()
+app.add_typer(source_app, name="source")
 
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context) -> None:
-    """Launch the interactive cockpit when no subcommand is provided."""
     if ctx.invoked_subcommand is None:
         try:
             run_tui()
         except RuntimeError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1) from None
-
-
-def _authorize_source(source: Provider) -> None:
-    paths = AutoBrainPaths.from_home()
-    settings = RuntimeSettings.from_environ(os.environ)
-    if settings.callback_port_error is not None:
-        typer.echo(f"MCP_AUTH_UNAVAILABLE: {settings.callback_port_error}", err=True)
-        raise typer.Exit(1)
-    environment = RuntimeEnvironment.from_environ(os.environ)
-    manager = OAuthManager(
-        TokenStore(paths.root / "auth"),
-        callback_factory=lambda state: LocalCallback("127.0.0.1", settings.callback_port, state),
-    )
-    try:
-        token = manager.authorize(
-            source,
-            slack_client_id=(
-                environment.slack_client_id.get_secret_value()
-                if environment.slack_client_id
-                else None
-            ),
-            slack_client_secret=(
-                environment.slack_client_secret.get_secret_value()
-                if environment.slack_client_secret
-                else None
-            ),
-        )
-    except OAuthError as exc:
-        typer.echo(f"MCP_AUTH_UNAVAILABLE: {exc}", err=True)
-        raise typer.Exit(1) from None
-    typer.echo(f"Connected {source.value} workspace {token.workspace_id} as {token.user_id}")
-    if manager.store.degraded_warning:
-        typer.echo(f"WARNING: {manager.store.degraded_warning}", err=True)
-
-
-@auth_app.command("slack")
-def authorize_slack() -> None:
-    """Authorize the fixed internal Slack app for read-only MCP access."""
-    _authorize_source(Provider.SLACK)
-
-
-@auth_app.command("notion")
-def authorize_notion() -> None:
-    """Authorize Notion MCP using discovery, DCR, and PKCE."""
-    _authorize_source(Provider.NOTION)
-
-
-@auth_app.command("status")
-def auth_status(
-    json_output: Annotated[bool, typer.Option("--json", help="Emit JSON status.")] = False,
-) -> None:
-    """Show Slack and Notion connection state independently."""
-    report = ConnectionManager(AutoBrainPaths.from_home().root).status()
-    if json_output:
-        typer.echo(report.model_dump_json(indent=2))
-        return
-    for connection in report.connections:
-        typer.echo(f"{connection.provider.value:8} {connection.state.value}")
-        if connection.warning:
-            typer.echo(f"WARNING: {connection.warning}", err=True)
-
-
-@auth_app.command("logout")
-def auth_logout(provider: Provider) -> None:
-    """Remove every stored identity for one source."""
-    try:
-        removed = ConnectionManager(AutoBrainPaths.from_home().root).logout(provider)
-    except OAuthError as exc:
-        typer.echo(f"MCP_AUTH_UNAVAILABLE: {exc}", err=True)
-        raise typer.Exit(1) from None
-    typer.echo(
-        f"Logged out {provider.value} ({removed} credential{'s' if removed != 1 else ''} removed)"
-    )
 
 
 @subscription_app.command("status")
@@ -250,6 +166,8 @@ def run_comparison(
 ) -> None:
     """Run one immutable Slack/Notion comparison and report its run ID."""
     try:
+        paths = AutoBrainPaths.from_home()
+        slack_status = SlackSourceStore(paths.sources).status()
         config = RunConfig(
             budget_usd=budget_usd,
             max_questions=max_questions,
@@ -257,6 +175,12 @@ def run_comparison(
             open_report=not no_open,
             output=output,
             provider_mode=provider.lower(),
+            slack_export_path=slack_status.archive_path if slack_status.ready else None,
+            slack_export_sha256=(
+                slack_status.config.archive_sha256
+                if slack_status.ready and slack_status.config is not None
+                else None
+            ),
         )
         fixture_path_raw = os.environ.get("AUTOBRAIN_TEST_FIXTURE_PATH")
         fixture_allowed = os.environ.get("AUTOBRAIN_ALLOW_TEST_FIXTURE") == "1"

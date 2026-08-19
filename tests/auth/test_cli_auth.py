@@ -6,7 +6,7 @@ from pydantic import SecretStr
 from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
-import autobrain.cli as cli
+import autobrain.source_cli as source_cli
 from autobrain.auth.models import Provider, TokenRecord
 from autobrain.auth.storage import TokenStore
 from autobrain.cli import app
@@ -70,8 +70,8 @@ def test_initial_authorization_emits_degraded_storage_warning(
         del path
         return store
 
-    monkeypatch.setattr(cli, "TokenStore", fake_store)
-    monkeypatch.setattr(cli, "OAuthManager", FakeManager)
+    monkeypatch.setattr(source_cli, "TokenStore", fake_store)
+    monkeypatch.setattr(source_cli, "OAuthManager", FakeManager)
     result = CliRunner().invoke(app, ["auth", "notion"], env={"HOME": str(tmp_path)})
     assert result.exit_code == 0
     assert "WARNING:" in result.stderr and "0600" in result.stderr
