@@ -214,20 +214,15 @@ class CostStatus(StrEnum):
 
 
 class QualityComponents(StrictModel):
-    required_claim_coverage: float = Field(ge=0, le=45)
-    cited_source_support: float = Field(ge=0, le=25)
-    contradiction_safety: float = Field(ge=0, le=20)
-    supplementary_style: float = Field(ge=0, le=10)
+    retrieval_recall: float = Field(ge=0, le=100)
+    required_claim_coverage: float = Field(default=0, ge=0, le=45)
+    cited_source_support: float = Field(default=0, ge=0, le=25)
+    contradiction_safety: float = Field(default=0, ge=0, le=20)
+    supplementary_style: float = Field(default=0, ge=0, le=10)
 
     @property
     def total(self) -> float:
-        return round(
-            self.required_claim_coverage
-            + self.cited_source_support
-            + self.contradiction_safety
-            + self.supplementary_style,
-            4,
-        )
+        return round(self.retrieval_recall, 4)
 
 
 class CaseEvaluation(StrictModel):
@@ -245,6 +240,10 @@ class CaseEvaluation(StrictModel):
     reference_confidence: float = Field(ge=0, le=1, default=1.0)
     failure_detail: str = ""
     latency_ms: int = Field(ge=0, default=0)
+
+    @property
+    def retrieval_recall(self) -> float:
+        return self.components.retrieval_recall
 
     @property
     def required_claim_coverage(self) -> float:

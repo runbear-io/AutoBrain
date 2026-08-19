@@ -262,7 +262,11 @@ class _ObservationCandidate:
                 case_id=case_id,
                 status=Status.OK,
                 answer=self.answers[question],
-                source_ids=[f"slack:message:{int(question.rsplit(' ', 2)[1])}"],
+                source_ids=(
+                    [f"slack:message:{int(question.rsplit(' ', 2)[1])}"]
+                    if "follows policy" in self.answers[question]
+                    else ["slack:noise"]
+                ),
                 latency_ms=5,
             )
             for case_id, question in zip(context.case_ids, context.questions, strict=True)

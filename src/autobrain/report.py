@@ -73,8 +73,7 @@ def build_comparison(
         candidates=candidates,
         evidence=evidence,
         methodology={
-            "quality_weights": "required claims 45; cited/source-supported claims 25; "
-            "contradiction/forbidden safety 20; fixed style/usability 10",
+            "quality_weights": "retrieval recall over gold source IDs, scaled to 0-100",
             "eligibility": "20 scored cases; 90% valid answers; quality >=60; "
             "source support >=50%; valid pin and corpus hash; zero direct leakage",
             "judge_model": "gpt-5-mini at temperature 0; same-model family bias applies",
@@ -311,9 +310,9 @@ def render_report(artifact: ComparisonArtifact) -> str:
       </section>
       <section aria-labelledby="method">
         <h2 id="method">Methodology and caveats</h2><div class="two-col">
-        <div><p>Quality is scored out of 100: required-claim coverage 45,
-          cited/source-supported claims 25, contradiction/forbidden safety 20,
-          and fixed style/usability 10.</p>
+        <div><p>Quality is retrieval Recall over gold source IDs, scaled to 0-100.
+          Extra retrieved documents do not raise the score. Generated answer text
+          is not scored.</p>
         <p>The evaluator uses <strong>gpt-5-mini</strong> at temperature 0.
           Using the same model family for evaluation can bias comparisons toward
           that model family; this report makes no statistical-significance or

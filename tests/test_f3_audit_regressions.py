@@ -114,7 +114,11 @@ class _EvaluatingCandidate:
                     if self.evaluation.quality_score >= 78
                     else question
                 ),
-                source_ids=[f"slack:message:{int(question.rsplit(' ', 2)[1])}"],
+                source_ids=(
+                    [f"slack:message:{int(question.rsplit(' ', 2)[1])}"]
+                    if self.evaluation.quality_score >= 78
+                    else []
+                ),
                 latency_ms=int(self.evaluation.query_p95_ms or 1),
             )
             for case_id, question in zip(context.case_ids, context.questions, strict=True)

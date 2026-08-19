@@ -1,8 +1,7 @@
-"""Deterministic typed quality evaluation for candidate answers."""
+"""Recall-based retrieval evaluation over gold source IDs."""
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from statistics import quantiles
 from typing import Any
@@ -16,18 +15,6 @@ from autobrain.models import (
     QualityComponents,
     Status,
 )
-
-_WORD = re.compile(r"[a-z0-9]+")
-
-
-def _tokens(value: str) -> set[str]:
-    return set(_WORD.findall(value.lower()))
-
-
-def _claim_present(claim: str, answer: str) -> bool:
-    claim_tokens = _tokens(claim)
-    answer_tokens = _tokens(answer)
-    return bool(claim_tokens) and claim_tokens <= answer_tokens
 
 
 def _percentile(values: Sequence[int], percentile: float) -> float | None:
@@ -49,66 +36,30 @@ def evaluate_case(
     latency_ms: int = 0,
     candidate: CandidateId = CandidateId.MEM0,
 ) -> CaseEvaluation:
-    """Score one answer with the fixed 45/25/20/10 rubric."""
+    """Score retrieval recall against the case gold source IDs."""
+    del answer
     if not 0 <= reference_confidence <= 1:
         raise ValueError("reference_confidence must be between 0 and 1")
-    if status != Status.OK:
-        components = QualityComponents(
-            required_claim_coverage=0,
-            cited_source_support=0,
-            contradiction_safety=0,
-            supplementary_style=0,
-        )
-        return CaseEvaluation(
-            candidate=candidate,
-            case_id=case.case_id,
-            status=status,
-            score=0,
-            components=components,
-            required_claims=len(case.expected_claims),
-            covered_claims=0,
-            cited_claims=0,
-            forbidden_matches=0,
-            source_ids=list(cited_source_ids),
-            generated=case.generated,
-            reference_confidence=reference_confidence,
-            failure_detail=failure_detail,
-            latency_ms=latency_ms,
-        )
-    covered = sum(_claim_present(claim, answer) for claim in case.expected_claims)
-    cited = sum(
-        _claim_present(claim, answer) and bool(set(cited_source_ids).intersection(case.source_ids))
-        for claim in case.expected_claims
-    )
-    forbidden_matches = sum(
-        _claim_present(claim, answer) for claim in case.forbidden_contradictions
-    )
-    required_score = 45 * covered / len(case.expected_claims) if case.expected_claims else 0
-    if case.expected_claims:
-        cited_score = 25 * cited / len(case.expected_claims) * reference_confidence
-    else:
-        cited_score = 0
-    safety_score = 0 if forbidden_matches else 20
-    style_score = 10 if answer.strip() and cited_source_ids else 0
-    components = QualityComponents(
-        required_claim_coverage=round(required_score, 4),
-        cited_source_support=round(cited_score, 4),
-        contradiction_safety=safety_score,
-        supplementary_style=style_score,
-    )
+    gold = set(case.source_ids)
+    retrieved = set(cited_source_ids)
+    hits = len(gold & retrieved)
+    recall = hits / len(gold) if gold else 0.0
+    score = 0.0 if status != Status.OK else round(100 * recall, 4)
+    components = QualityComponents(retrieval_recall=score)
     return CaseEvaluation(
         candidate=candidate,
         case_id=case.case_id,
-        status=Status.OK,
-        score=components.total,
+        status=status if status != Status.OK else Status.OK,
+        score=score,
         components=components,
-        required_claims=len(case.expected_claims),
-        covered_claims=covered,
-        cited_claims=cited,
-        forbidden_matches=forbidden_matches,
+        required_claims=len(gold),
+        covered_claims=hits if status == Status.OK else 0,
+        cited_claims=hits if status == Status.OK else 0,
+        forbidden_matches=0,
         source_ids=list(cited_source_ids),
         generated=case.generated,
         reference_confidence=reference_confidence,
+        failure_detail=failure_detail,
         latency_ms=latency_ms,
     )
 
@@ -154,8 +105,6 @@ def evaluate_candidate(
     scored = len(evaluated)
     answered = sum(result.status == Status.OK for result in evaluated)
     quality = sum(result.score for result in evaluated) / scored if scored else 0.0
-    required = sum(result.required_claims for result in evaluated)
-    cited = sum(result.cited_claims for result in evaluated)
     latencies = [result.latency_ms for result in evaluated if result.status == Status.OK]
     return CandidateEvaluation(
         candidate=candidate,
@@ -164,7 +113,7 @@ def evaluate_candidate(
         answered_cases=answered,
         quality_score=round(quality, 4),
         answer_success_rate=answered / scored if scored else 0.0,
-        source_support_rate=cited / required if required else 0.0,
+        source_support_rate=quality / 100 if scored else 0.0,
         contradiction_count=sum(result.forbidden_matches for result in evaluated),
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,

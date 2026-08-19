@@ -100,21 +100,18 @@ AutoBrain compares every Brain on three core dimensions:
 | **Cost** | Complete measured candidate cost in USD | Required eligibility evidence and the first close-quality tie-break |
 
 These dimensions are not hidden inside one opaque blended score. The current
-selection policy is deliberately **quality-first**: AutoBrain first protects
-answer quality, then uses measured cost and latency to choose between candidates
-whose quality is close.
+selection policy is **recall-first**: AutoBrain first protects retrieval quality,
+then uses measured cost and latency to choose between candidates whose recall is
+close.
 
 ### Quality score breakdown
 
-Answer quality is scored out of 100 using the fixed rubric implemented by
-AutoBrain:
+Quality is retrieval Recall over gold source IDs, scaled to 0-100:
 
-| Quality metric | Weight | What it asks |
-| --- | ---: | --- |
-| **Required-claim coverage** | **45** | Did the answer include the facts needed to answer the question? |
-| **Cited source support** | **25** | Are those claims supported by the correct company sources? |
-| **Contradiction safety** | **20** | Did the answer avoid known contradictions and forbidden claims? |
-| **Answer usability** | **10** | Did it return a non-empty answer with usable source citations? |
+`|retrieved ∩ gold| / |gold|`
+
+Extra retrieved documents do not raise the score. Generated answer text is not
+scored.
 
 ### Eligibility and selection policy
 
@@ -125,7 +122,7 @@ recommended Brain only when all of these gates pass:
 | --- | ---: |
 | Scored benchmark cases | At least **20** |
 | Answer success rate | At least **90%** |
-| Mean quality | At least **60/100** |
+| Mean recall | At least **60/100** |
 | Source-support rate | At least **50%** |
 | Provenance integrity | Valid candidate pin and corpus hash |
 | Evaluation isolation | No direct holdout or oracle leakage |

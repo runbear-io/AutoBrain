@@ -12,51 +12,57 @@ def case() -> BenchmarkCase:
     )
 
 
-def test_quality_uses_the_four_fixed_weight_components() -> None:
+def test_quality_is_recall_of_gold_source_ids() -> None:
+    result = evaluate_case(
+        case(),
+        answer="ignored generation text",
+        cited_source_ids=["slack:launch"],
+    )
+    assert result.status == Status.OK
+    assert result.score == 100.0
+    assert result.components.retrieval_recall == 100.0
+
+
+def test_missing_gold_source_is_zero_recall_even_with_a_fluent_answer() -> None:
     result = evaluate_case(
         case(),
         answer="The launch is Tuesday.",
-        cited_source_ids=["slack:launch"],
-        reference_confidence=1.0,
+        cited_source_ids=["slack:other"],
     )
-    assert result.status == Status.OK
-    assert result.required_claim_coverage == 45.0
-    assert result.cited_source_support == 25.0
-    assert result.contradiction_safety == 20.0
-    assert result.supplementary_style == 10.0
-    assert result.score == 100.0
+    assert result.score == 0.0
+    assert result.components.retrieval_recall == 0.0
 
 
-def test_partial_failure_and_low_confidence_reference_remain_typed() -> None:
+def test_partial_recall_is_the_fraction_of_gold_sources_retrieved() -> None:
+    multi = case().model_copy(update={"source_ids": ["slack:launch", "notion:policy"]})
+    result = evaluate_case(
+        multi,
+        answer="",
+        cited_source_ids=["slack:launch", "slack:noise"],
+    )
+    assert result.score == 50.0
+    assert result.cited_claims == 1
+    assert result.required_claims == 2
+
+
+def test_failed_retrieval_stays_zero() -> None:
     result = evaluate_case(
         case(),
-        answer="I cannot answer.",
+        answer="",
         cited_source_ids=[],
-        reference_confidence=0.2,
         status=Status.FAILED,
         failure_detail="candidate timed out",
     )
     assert result.status == Status.FAILED
     assert result.score == 0.0
     assert result.failure_detail == "candidate timed out"
-    assert result.reference_confidence == 0.2
 
 
-def test_forbidden_claim_removes_contradiction_safety_points() -> None:
-    result = evaluate_case(
-        case(),
-        answer="The launch is Friday.",
-        cited_source_ids=["slack:launch"],
-    )
-    assert result.forbidden_matches == 1
-    assert result.contradiction_safety == 0
-
-
-def test_candidate_aggregation_counts_successes_and_mixed_case_provenance() -> None:
+def test_candidate_aggregation_averages_recall_and_keeps_failures() -> None:
     aggregate = evaluate_candidate(
         CandidateId.MEM0,
         [
-            (case(), "The launch is Tuesday.", ["slack:launch"], 1.0, 10),
+            (case(), "ignored", ["slack:launch"], 1.0, 10),
             (
                 case().model_copy(update={"case_id": "case-002", "generated": True}),
                 "",
@@ -75,3 +81,4 @@ def test_candidate_aggregation_counts_successes_and_mixed_case_provenance() -> N
     assert aggregate.generated_cases == 1
     assert aggregate.status == Status.OK
     assert aggregate.quality_score == 50.0
+    assert aggregate.source_support_rate == 0.5
