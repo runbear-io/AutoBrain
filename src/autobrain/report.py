@@ -124,11 +124,19 @@ def _canonical_json(artifact: ComparisonArtifact) -> bytes:
     ).encode("utf-8")
 
 
-def _migrate_comparison(payload: object) -> object:
+def _schema_payload(payload: object) -> Mapping[str, object]:
     if not isinstance(payload, Mapping):
-        return payload
+        raise ValueError("artifact payload must be an object")
     typed_payload = cast(Mapping[str, object], payload)
-    if typed_payload.get("schema_version") == 1:
+    schema_version = typed_payload.get("schema_version")
+    if type(schema_version) is not int:
+        raise ValueError("schema_version must be a JSON integer")
+    return typed_payload
+
+
+def _migrate_comparison(payload: object) -> object:
+    typed_payload = _schema_payload(payload)
+    if typed_payload["schema_version"] == 1:
         migrated = dict(typed_payload)
         migrated["schema_version"] = 2
         migrated.setdefault("provenance", BenchmarkProvenance().model_dump(mode="json"))
@@ -146,10 +154,8 @@ def load_comparison(path: Path) -> ComparisonArtifact:
 
 
 def _migrate_manifest(payload: object) -> object:
-    if not isinstance(payload, Mapping):
-        return payload
-    typed_payload = cast(Mapping[str, object], payload)
-    if typed_payload.get("schema_version") == 1:
+    typed_payload = _schema_payload(payload)
+    if typed_payload["schema_version"] == 1:
         migrated = dict(typed_payload)
         migrated.setdefault("provenance", BenchmarkProvenance().model_dump(mode="json"))
         return migrated

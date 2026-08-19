@@ -200,6 +200,28 @@ def test_comparison_missing_schema_version_is_rejected(tmp_path: Path) -> None:
         load_comparison(_write_comparison_payload(tmp_path, payload))
 
 
+@pytest.mark.parametrize("schema_version", [True, False, 1.0, 2.0, "1", "2"])
+def test_comparison_rejects_non_integer_schema_versions(
+    tmp_path: Path,
+    schema_version: object,
+) -> None:
+    candidate = _candidate()
+    payload = build_comparison(
+        run_id="invalid-schema-type",
+        corpus_hash="b" * 64,
+        benchmark_hash="c" * 64,
+        coverage=[],
+        candidates=[candidate],
+        decision=select_winner([candidate]),
+        evidence=[],
+        provenance=_provenance(),
+    ).model_dump(mode="json")
+    payload["schema_version"] = schema_version
+
+    with pytest.raises(ValueError, match="corrupt comparison artifact"):
+        load_comparison(_write_comparison_payload(tmp_path, payload))
+
+
 def test_schema_v2_comparison_missing_provenance_is_rejected(tmp_path: Path) -> None:
     candidate = _candidate()
     payload = build_comparison(
@@ -225,6 +247,27 @@ def test_future_manifest_schema_is_rejected(tmp_path: Path) -> None:
             {
                 "schema_version": 999,
                 "run_id": "future-run",
+                "provenance": _provenance().model_dump(mode="json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="corrupt run manifest"):
+        load_manifest(path)
+
+
+@pytest.mark.parametrize("schema_version", [True, False, 1.0, 2.0, "1", "2"])
+def test_manifest_rejects_non_integer_schema_versions(
+    tmp_path: Path,
+    schema_version: object,
+) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": schema_version,
+                "run_id": "invalid-schema-type",
                 "provenance": _provenance().model_dump(mode="json"),
             }
         ),
