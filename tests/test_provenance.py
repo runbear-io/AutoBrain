@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
@@ -192,6 +193,45 @@ def _write_comparison_payload(tmp_path: Path, payload: dict[str, object]) -> Pat
     return path
 
 
+def _comparison_payload() -> dict[str, object]:
+    candidate = _candidate()
+    return build_comparison(
+        run_id="schema-contract",
+        corpus_hash="b" * 64,
+        benchmark_hash="c" * 64,
+        coverage=[],
+        candidates=[candidate],
+        decision=select_winner([candidate], embedding=_provenance().embedding),
+        evidence=[],
+        provenance=_provenance(),
+    ).model_dump(mode="json")
+
+
+def _manifest_payload() -> dict[str, object]:
+    comparison = _comparison_payload()
+    return {
+        "schema_version": 2,
+        "run_id": comparison["run_id"],
+        "created_at": "2026-08-20T12:00:00+00:00",
+        "status": comparison["status"],
+        "verdict": comparison["verdict"],
+        "hashes": {
+            "corpus_sha256": comparison["corpus_hash"],
+            "benchmark_sha256": comparison["benchmark_hash"],
+        },
+        "provenance": comparison["provenance"],
+        "decision": comparison["decision"],
+        "evaluations": comparison["candidates"],
+        "candidates": [{"candidate": "mem0"}],
+    }
+
+
+def _write_manifest_payload(tmp_path: Path, payload: dict[str, object]) -> Path:
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def test_comparison_missing_schema_version_is_rejected(tmp_path: Path) -> None:
     candidate = _candidate()
     payload = build_comparison(
@@ -250,6 +290,74 @@ def test_schema_v2_comparison_missing_provenance_is_rejected(tmp_path: Path) -> 
         load_comparison(_write_comparison_payload(tmp_path, payload))
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scored_cases", "20"),
+        ("quality_score", "90.0"),
+        ("scored_cases", True),
+        ("candidate", "unknown-candidate"),
+    ],
+)
+def test_schema_v2_comparison_rejects_coercion_and_invalid_enums(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    payload = _comparison_payload()
+    candidates = cast(list[dict[str, object]], payload["candidates"])
+    candidates[0][field] = value
+
+    with pytest.raises(ValueError, match="corrupt comparison artifact"):
+        load_comparison(_write_comparison_payload(tmp_path, payload))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("chat", []),
+        ("latency_spans", [{"name": "candidate_query", "duration_ms": "12.5"}]),
+        ("unknown_nested_field", "not-in-schema"),
+    ],
+)
+def test_schema_v2_comparison_rejects_malformed_or_unknown_provenance(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    payload = _comparison_payload()
+    provenance = cast(dict[str, object], payload["provenance"])
+    provenance[field] = value
+
+    with pytest.raises(ValueError, match="corrupt comparison artifact"):
+        load_comparison(_write_comparison_payload(tmp_path, payload))
+
+
+def test_schema_v2_comparison_rejects_unknown_top_level_fields(tmp_path: Path) -> None:
+    payload = _comparison_payload()
+    payload["unknown_field"] = "not-in-schema"
+
+    with pytest.raises(ValueError, match="corrupt comparison artifact"):
+        load_comparison(_write_comparison_payload(tmp_path, payload))
+
+
+def test_schema_v1_comparison_coerces_only_during_migration(tmp_path: Path) -> None:
+    payload = _comparison_payload()
+    payload["schema_version"] = 1
+    del payload["provenance"]
+    candidates = cast(list[dict[str, object]], payload["candidates"])
+    candidates[0]["scored_cases"] = "20"
+    candidates[0]["quality_score"] = "90.0"
+
+    loaded = load_comparison(_write_comparison_payload(tmp_path, payload))
+
+    assert loaded.schema_version == 2
+    assert loaded.candidates[0].scored_cases == 20
+    assert loaded.candidates[0].quality_score == 90.0
+    assert loaded.provenance == BenchmarkProvenance()
+    type(loaded).model_validate(loaded.model_dump(mode="python"), strict=True)
+
+
 def test_future_manifest_schema_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text(
@@ -297,6 +405,76 @@ def test_schema_v2_manifest_missing_provenance_is_rejected(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="corrupt run manifest"):
         load_manifest(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scored_cases", "20"),
+        ("quality_score", "90.0"),
+        ("scored_cases", True),
+        ("status", "NOT_A_STATUS"),
+    ],
+)
+def test_schema_v2_manifest_rejects_coercion_and_invalid_enums(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    payload = _manifest_payload()
+    evaluations = cast(list[dict[str, object]], payload["evaluations"])
+    evaluations[0][field] = value
+
+    with pytest.raises(ValueError, match="corrupt run manifest"):
+        load_manifest(_write_manifest_payload(tmp_path, payload))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("chat", []),
+        ("latency_spans", [{"name": "candidate_query", "duration_ms": "12.5"}]),
+        ("unknown_nested_field", "not-in-schema"),
+    ],
+)
+def test_schema_v2_manifest_rejects_malformed_or_unknown_provenance(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    payload = _manifest_payload()
+    provenance = cast(dict[str, object], payload["provenance"])
+    provenance[field] = value
+
+    with pytest.raises(ValueError, match="corrupt run manifest"):
+        load_manifest(_write_manifest_payload(tmp_path, payload))
+
+
+def test_schema_v2_manifest_preserves_allowed_unknown_top_level_fields(tmp_path: Path) -> None:
+    payload = _manifest_payload()
+    payload["historical_metadata"] = {"producer": "autobrain-v2"}
+
+    loaded = load_manifest(_write_manifest_payload(tmp_path, payload))
+
+    assert loaded.model_extra == {"historical_metadata": {"producer": "autobrain-v2"}}
+
+
+def test_schema_v1_manifest_coerces_only_during_migration(tmp_path: Path) -> None:
+    payload = _manifest_payload()
+    payload["schema_version"] = 1
+    del payload["provenance"]
+    evaluations = cast(list[dict[str, object]], payload["evaluations"])
+    evaluations[0]["scored_cases"] = "20"
+    evaluations[0]["quality_score"] = "90.0"
+
+    loaded = load_manifest(_write_manifest_payload(tmp_path, payload))
+
+    assert loaded.schema_version == 1
+    assert loaded.evaluations is not None
+    assert loaded.evaluations[0].scored_cases == 20
+    assert loaded.evaluations[0].quality_score == 90.0
+    assert loaded.provenance == BenchmarkProvenance()
+    type(loaded).model_validate(loaded.model_dump(mode="python"), strict=True)
 
 
 def test_orchestration_records_only_known_runtime_provenance(tmp_path: Path) -> None:

@@ -135,39 +135,41 @@ def _schema_payload(payload: object) -> Mapping[str, object]:
     return typed_payload
 
 
-def _migrate_comparison(payload: object) -> object:
-    typed_payload = _schema_payload(payload)
-    if typed_payload["schema_version"] == 1:
-        migrated = dict(typed_payload)
-        migrated["schema_version"] = 2
-        migrated.setdefault("provenance", BenchmarkProvenance().model_dump(mode="json"))
-        return migrated
-    return dict(typed_payload)
+def _migrate_v1_comparison(payload: Mapping[str, object]) -> ComparisonArtifact:
+    migrated = dict(payload)
+    migrated["schema_version"] = 2
+    migrated.setdefault("provenance", BenchmarkProvenance().model_dump(mode="json"))
+    compatible = ComparisonArtifact.model_validate(migrated, strict=False)
+    return ComparisonArtifact.model_validate(compatible.model_dump(mode="python"), strict=True)
 
 
 def load_comparison(path: Path) -> ComparisonArtifact:
     """Load a comparison artifact and migrate supported legacy schemas."""
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return ComparisonArtifact.model_validate(_migrate_comparison(payload), strict=False)
+        content = path.read_text(encoding="utf-8")
+        payload = _schema_payload(json.loads(content))
+        if payload["schema_version"] == 1:
+            return _migrate_v1_comparison(payload)
+        return ComparisonArtifact.model_validate_json(content, strict=True)
     except (OSError, ValueError, ValidationError) as error:
         raise ValueError(f"corrupt comparison artifact: {path}") from error
 
 
-def _migrate_manifest(payload: object) -> object:
-    typed_payload = _schema_payload(payload)
-    if typed_payload["schema_version"] == 1:
-        migrated = dict(typed_payload)
-        migrated.setdefault("provenance", BenchmarkProvenance().model_dump(mode="json"))
-        return migrated
-    return dict(typed_payload)
+def _migrate_v1_manifest(payload: Mapping[str, object]) -> RunManifest:
+    migrated = dict(payload)
+    migrated.setdefault("provenance", BenchmarkProvenance().model_dump(mode="json"))
+    compatible = RunManifest.model_validate(migrated, strict=False)
+    return RunManifest.model_validate(compatible.model_dump(mode="python"), strict=True)
 
 
 def load_manifest(path: Path) -> RunManifest:
     """Load manifest provenance and migrate only explicit schema version 1."""
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return RunManifest.model_validate(_migrate_manifest(payload), strict=False)
+        content = path.read_text(encoding="utf-8")
+        payload = _schema_payload(json.loads(content))
+        if payload["schema_version"] == 1:
+            return _migrate_v1_manifest(payload)
+        return RunManifest.model_validate_json(content, strict=True)
     except (OSError, ValueError, ValidationError) as error:
         raise ValueError(f"corrupt run manifest: {path}") from error
 
@@ -201,8 +203,8 @@ def _redact_value(value: object, *, key: str | None = None) -> object:
 
 
 def _redact_artifact(artifact: ComparisonArtifact) -> ComparisonArtifact:
-    payload = cast(dict[str, object], _redact_value(artifact.model_dump(mode="python")))
-    return ComparisonArtifact.model_validate(payload, strict=False)
+    payload = cast(dict[str, object], _redact_value(artifact.model_dump(mode="json")))
+    return ComparisonArtifact.model_validate_json(json.dumps(payload), strict=True)
 
 
 def _escape(value: object) -> str:
