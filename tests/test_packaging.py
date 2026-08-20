@@ -14,6 +14,14 @@ def test_textual_is_a_direct_runtime_dependency() -> None:
     assert "textual>=1,<8" in project["dependencies"]
 
 
+def test_textual_runtime_dependency_is_locked_from_pypi() -> None:
+    lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+    packages = {package["name"]: package for package in lock["package"]}
+
+    assert {"name": "textual"} in packages["autobrain"]["dependencies"]
+    assert packages["textual"]["source"] == {"registry": "https://pypi.org/simple"}
+
+
 def test_candidate_pins_are_an_importable_package_resource() -> None:
     pins = resources.files("autobrain").joinpath("candidate-pins.json")
     assert pins.is_file()
