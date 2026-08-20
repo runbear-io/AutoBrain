@@ -13,6 +13,7 @@ from autobrain.subscription_process import (
     ProviderProcessCancelled,
     ProviderProcessRunner,
     ProviderProcessTimeout,
+    sanitize_diagnostic,
     sanitized_environment,
 )
 
@@ -151,6 +152,30 @@ def test_process_runner_terminates_group_when_cancelled(
     assert terminated == [process]
 
 
+@pytest.mark.parametrize(
+    "diagnostic, secret",
+    [
+        ("SERVICE_KEY=plainvalue", "plainvalue"),
+        ("password: ordinary", "ordinary"),
+        ('Cookie="session value"', "session value"),
+        ("x-ToKeN: mixedCase", "mixedCase"),
+        ("Authorization: Basic generic-credential", "generic-credential"),
+        ("Proxy-Authorization=custom opaque", "opaque"),
+        ("https://example.test/path?api_key=plain&safe=yes", "plain"),
+        ("https://example.test/path?safe=yes&password=ordinary", "ordinary"),
+    ],
+)
+def test_sanitize_diagnostic_redacts_name_labelled_generic_values(
+    diagnostic: str,
+    secret: str,
+) -> None:
+    sanitized = sanitize_diagnostic(diagnostic, limit=80)
+
+    assert secret not in sanitized
+    assert "[REDACTED]" in sanitized
+    assert len(sanitized) <= 80
+
+
 def test_sanitized_environment_does_not_read_filtered_credential_values() -> None:
     class GuardedEnvironment(dict[str, str]):
         def __getitem__(self, name: str) -> str:
@@ -160,6 +185,29 @@ def test_sanitized_environment_does_not_read_filtered_credential_values() -> Non
 
     clean = sanitized_environment(
         GuardedEnvironment({"PATH": "/bin", "OPENAI_API_KEY": "must-not-read"})
+    )
+
+    assert clean == {"PATH": "/bin"}
+
+
+def test_sanitized_environment_denies_mixed_case_overrides_without_reading_values() -> None:
+    denied = {
+        "openAi_Api_KeY",
+        "AnThRoPiC_bAsE_uRl",
+        "azure_OPENAI_endpoint",
+        "autobrain_CodeX_Command",
+        "service_password",
+        "session_Cookie",
+    }
+
+    class GuardedEnvironment(dict[str, str]):
+        def __getitem__(self, name: str) -> str:
+            if name in denied:
+                raise AssertionError(f"denied value was read: {name}")
+            return super().__getitem__(name)
+
+    clean = sanitized_environment(
+        GuardedEnvironment({"PATH": "/bin", **dict.fromkeys(denied, "opaque")})
     )
 
     assert clean == {"PATH": "/bin"}

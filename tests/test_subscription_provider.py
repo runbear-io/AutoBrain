@@ -12,9 +12,58 @@ from autobrain.subscription import (
     ProviderCapability,
     ProviderId,
     SubscriptionError,
+    SubscriptionFailureReason,
     SubscriptionStatus,
     UsageKind,
 )
+from autobrain.subscription_process import ProviderProcessCancelled
+
+
+def test_codex_status_probe_distinguishes_public_failure_reasons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def available(_command: str) -> str:
+        return "/codex"
+
+    monkeypatch.setattr("autobrain.subscription_codex.shutil.which", available)
+    outcomes: list[subprocess.CompletedProcess[str] | BaseException] = [
+        subprocess.TimeoutExpired(["codex"], 1),
+        subprocess.CompletedProcess(["codex"], 7, "", "unexpected failure"),
+        subprocess.CompletedProcess(["codex"], 0, "ambiguous success", ""),
+        subprocess.CompletedProcess(["codex"], 1, "", "login required"),
+    ]
+
+    def runner(
+        _args: Sequence[str],
+        _stdin: str,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        assert isinstance(outcome, subprocess.CompletedProcess)
+        return outcome
+
+    client = CodexSubscriptionClient(CodexSubscriptionConfig(), runner=runner)
+
+    assert client.probe_status().reason is SubscriptionFailureReason.STATUS_TIMEOUT
+    assert client.probe_status().reason is SubscriptionFailureReason.STATUS_NONZERO
+    assert client.probe_status().reason is SubscriptionFailureReason.STATUS_MALFORMED_OUTPUT
+    assert client.probe_status().reason is SubscriptionFailureReason.AUTH_UNAVAILABLE
+
+
+def test_codex_missing_cli_has_login_unavailable_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(_command: str) -> None:
+        return None
+
+    monkeypatch.setattr("autobrain.subscription_codex.shutil.which", unavailable)
+
+    report = CodexSubscriptionClient(CodexSubscriptionConfig()).probe_status()
+
+    assert report.status is SubscriptionStatus.SUBSCRIPTION_CLI_UNAVAILABLE
+    assert report.reason is SubscriptionFailureReason.LOGIN_UNAVAILABLE
 
 
 def test_codex_adapter_exposes_typed_identity_capabilities_and_native_usage() -> None:
@@ -62,6 +111,33 @@ def test_codex_adapter_exposes_typed_identity_capabilities_and_native_usage() ->
     assert "untrusted" not in calls[1][0]
 
 
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        'preface\n{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\ntrailing',
+        '[]\n{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n',
+        '{"type":"unknown.event","text":"ok"}\n',
+    ],
+)
+def test_codex_adapter_rejects_mixed_or_unknown_structured_output(stdout: str) -> None:
+    def runner(
+        args: Sequence[str],
+        _stdin: str,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        if list(args)[1:3] == ["login", "status"]:
+            return subprocess.CompletedProcess(args, 0, "Logged in", "")
+        return subprocess.CompletedProcess(args, 0, stdout, "")
+
+    client = CodexSubscriptionClient(CodexSubscriptionConfig(), runner=runner)
+
+    with pytest.raises(SubscriptionError) as failure:
+        client.answer("hello")
+
+    assert failure.value.reason is SubscriptionFailureReason.EXECUTION_MALFORMED_OUTPUT
+
+
 def test_codex_adapter_rejects_malformed_structured_success() -> None:
     def runner(
         args: Sequence[str],
@@ -78,6 +154,7 @@ def test_codex_adapter_rejects_malformed_structured_success() -> None:
         client.answer("hello")
 
     assert failure.value.status is SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE
+    assert failure.value.reason is SubscriptionFailureReason.EXECUTION_MALFORMED_OUTPUT
     assert failure.value.detail == "Codex returned malformed structured output"
 
 
@@ -97,7 +174,26 @@ def test_codex_adapter_preserves_timeout_as_typed_execution_failure() -> None:
         client.answer("hello")
 
     assert failure.value.status is SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE
+    assert failure.value.reason is SubscriptionFailureReason.EXECUTION_TIMEOUT
     assert failure.value.detail == "Codex subscription execution timed out"
+
+
+def test_codex_adapter_preserves_cancellation_as_typed_execution_failure() -> None:
+    def runner(
+        args: Sequence[str],
+        _stdin: str,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        if list(args)[1:3] == ["login", "status"]:
+            return subprocess.CompletedProcess(args, 0, "Logged in", "")
+        raise ProviderProcessCancelled("cancelled")
+
+    client = CodexSubscriptionClient(CodexSubscriptionConfig(), runner=runner)
+
+    with pytest.raises(SubscriptionError) as failure:
+        client.answer("hello")
+
+    assert failure.value.reason is SubscriptionFailureReason.EXECUTION_CANCELLED
 
 
 def test_codex_adapter_preserves_empty_answer_as_typed_execution_failure() -> None:
@@ -116,7 +212,39 @@ def test_codex_adapter_preserves_empty_answer_as_typed_execution_failure() -> No
         client.answer("hello")
 
     assert failure.value.status is SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE
+    assert failure.value.reason is SubscriptionFailureReason.EXECUTION_EMPTY_ANSWER
     assert failure.value.detail == "Codex returned no assistant answer"
+
+
+def test_codex_adapter_clears_stale_last_answer_before_repeated_failure() -> None:
+    executions = 0
+
+    def runner(
+        args: Sequence[str],
+        _stdin: str,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal executions
+        if list(args)[1:3] == ["login", "status"]:
+            return subprocess.CompletedProcess(args, 0, "Logged in", "")
+        executions += 1
+        if executions == 1:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                '{"type":"item.completed","item":{"type":"agent_message","text":"first"}}\n',
+                "",
+            )
+        raise subprocess.TimeoutExpired(args, 1)
+
+    client = CodexSubscriptionClient(CodexSubscriptionConfig(), runner=runner)
+    assert client.ask("first") == "first"
+    assert client.last_answer is not None
+
+    with pytest.raises(SubscriptionError):
+        client.ask("second")
+
+    assert client.last_answer is None
 
 
 def test_codex_adapter_bounds_and_redacts_nonzero_diagnostics() -> None:
@@ -134,6 +262,7 @@ def test_codex_adapter_bounds_and_redacts_nonzero_diagnostics() -> None:
     with pytest.raises(SubscriptionError) as failure:
         client.answer("hello")
 
+    assert failure.value.reason is SubscriptionFailureReason.EXECUTION_NONZERO
     assert "secret-token-value" not in failure.value.detail
     assert "[REDACTED]" in failure.value.detail
     assert len(failure.value.detail) <= 2048

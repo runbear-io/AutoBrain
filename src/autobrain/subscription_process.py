@@ -14,10 +14,17 @@ from pathlib import Path
 
 _MAX_DIAGNOSTIC_CHARS = 2048
 _SENSITIVE_NAME = re.compile(
-    r"(?:API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|BEARER|SECRET|PASSWORD|COOKIE)",
+    r"(?:^|[_-])(?:API[_-]?KEY|KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|TOKEN|BEARER|"
+    r"SECRET|PASSWORD|COOKIE)(?:$|[_-])",
     re.IGNORECASE,
 )
 _SENSITIVE_VALUE = re.compile(r"(?i)(bearer\s+\S+|(?:sk|key|token|secret)[-_][A-Za-z0-9._-]{8,})")
+_LABELLED_SECRET = re.compile(
+    r"(?i)(?P<label>\b(?:(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|key|token|secret|"
+    r"password|cookie)|(?:proxy-)?authorization)\b\s*[:=]\s*)"
+    r"(?P<value>\"[^\"]*\"|'[^']*'|[^,;&\s]+(?:\s+[^,;&]+)?)"
+)
+_URL_USERINFO = re.compile(r"(?i)(://)([^/@\s:]+):([^/@\s]+)@")
 _PROVIDER_OVERRIDE_NAMES = {
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_API_KEY",
@@ -71,9 +78,13 @@ def sanitized_environment(
     selected: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Remove provider overrides and credentials, then add explicit selections."""
+    denied_names = {name.casefold() for name in _PROVIDER_OVERRIDE_NAMES}
     clean: dict[str, str] = {}
     for name in environment:
-        if name in _PROVIDER_OVERRIDE_NAMES or _SENSITIVE_NAME.search(name) is not None:
+        normalized_name = name.casefold()
+        if normalized_name in denied_names or _SENSITIVE_NAME.search(name) is not None:
+            continue
+        if normalized_name.endswith(("_base_url", "_api_base", "_endpoint")):
             continue
         clean[name] = environment[name]
     if selected is not None:
@@ -82,8 +93,10 @@ def sanitized_environment(
 
 
 def sanitize_diagnostic(value: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) -> str:
-    """Return bounded single-line diagnostics with common credentials redacted."""
-    redacted = _SENSITIVE_VALUE.sub("[REDACTED]", value)
+    """Return bounded single-line diagnostics with labelled credentials redacted."""
+    redacted = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
+    redacted = _LABELLED_SECRET.sub(r"\g<label>[REDACTED]", redacted)
+    redacted = _SENSITIVE_VALUE.sub("[REDACTED]", redacted)
     compact = " ".join(redacted.split())
     if len(compact) <= limit:
         return compact

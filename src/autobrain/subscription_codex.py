@@ -20,7 +20,9 @@ from autobrain.subscription_domain import (
     ProviderIdentity,
     StructuredOutput,
     SubscriptionError,
+    SubscriptionFailureReason,
     SubscriptionStatus,
+    SubscriptionStatusReport,
     UsageKind,
 )
 from autobrain.subscription_process import (
@@ -97,6 +99,7 @@ class CodexSubscriptionClient:
             raise SubscriptionError(
                 SubscriptionStatus.SUBSCRIPTION_CLI_UNAVAILABLE,
                 f"Codex CLI not found: {self.config.command}",
+                reason=SubscriptionFailureReason.LOGIN_UNAVAILABLE,
             )
         try:
             return self.interactive_runner([self.config.command, "login"])
@@ -104,33 +107,71 @@ class CodexSubscriptionClient:
             raise SubscriptionError(
                 SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
                 "Codex login cancelled",
+                reason=SubscriptionFailureReason.EXECUTION_CANCELLED,
             ) from exc
 
-    def status(self) -> SubscriptionStatus:
+    def probe_status(self) -> SubscriptionStatusReport:
         if shutil.which(self.config.command) is None:
-            return SubscriptionStatus.SUBSCRIPTION_CLI_UNAVAILABLE
+            return SubscriptionStatusReport(
+                status=SubscriptionStatus.SUBSCRIPTION_CLI_UNAVAILABLE,
+                reason=SubscriptionFailureReason.LOGIN_UNAVAILABLE,
+                detail=f"Codex CLI not found: {self.config.command}",
+            )
         try:
             result = self.runner(
                 [self.config.command, "login", "status"],
                 "",
                 self.config.timeout_seconds,
             )
-        except (subprocess.TimeoutExpired, ProviderProcessTimeout, ProviderProcessCancelled):
-            return SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE
-        output = f"{result.stdout}\n{result.stderr}".lower()
-        if result.returncode != 0 or any(
-            marker in output
-            for marker in ("not logged", "logged out", "login required", "unauthenticated")
-        ):
-            return SubscriptionStatus.SUBSCRIPTION_AUTH_UNAVAILABLE
-        return SubscriptionStatus.READY
+        except (subprocess.TimeoutExpired, ProviderProcessTimeout):
+            return SubscriptionStatusReport(
+                status=SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
+                reason=SubscriptionFailureReason.STATUS_TIMEOUT,
+                detail="Codex subscription status timed out",
+            )
+        except ProviderProcessCancelled:
+            return SubscriptionStatusReport(
+                status=SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
+                reason=SubscriptionFailureReason.STATUS_CANCELLED,
+                detail="Codex subscription status cancelled",
+            )
+        output = f"{result.stdout}\n{result.stderr}".strip().lower()
+        auth_markers = ("not logged", "logged out", "login required", "unauthenticated")
+        if any(marker in output for marker in auth_markers):
+            return SubscriptionStatusReport(
+                status=SubscriptionStatus.SUBSCRIPTION_AUTH_UNAVAILABLE,
+                reason=SubscriptionFailureReason.AUTH_UNAVAILABLE,
+                detail="Run `codex login` with the ChatGPT account before using subscription mode",
+            )
+        if result.returncode != 0:
+            return SubscriptionStatusReport(
+                status=SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
+                reason=SubscriptionFailureReason.STATUS_NONZERO,
+                detail=sanitize_diagnostic(result.stderr)
+                or "Codex subscription status command failed",
+            )
+        if not any(marker in output for marker in ("logged in", "authenticated")):
+            return SubscriptionStatusReport(
+                status=SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
+                reason=SubscriptionFailureReason.STATUS_MALFORMED_OUTPUT,
+                detail="Codex subscription status returned unrecognized output",
+            )
+        return SubscriptionStatusReport(status=SubscriptionStatus.READY)
+
+    def status(self) -> SubscriptionStatus:
+        """Compatibility mapping from detailed status reports to the legacy enum."""
+        return self.probe_status().status
 
     def ask_answer(self, prompt: str) -> ProviderAnswer:
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
-        status = self.status()
-        if status is not SubscriptionStatus.READY:
-            raise SubscriptionError(status, self._status_detail(status))
+        status_report = self.probe_status()
+        if status_report.status is not SubscriptionStatus.READY:
+            raise SubscriptionError(
+                status_report.status,
+                status_report.detail or self._status_detail(status_report.status),
+                reason=status_report.reason,
+            )
 
         args = [
             self.config.command,
@@ -150,28 +191,33 @@ class CodexSubscriptionClient:
             raise SubscriptionError(
                 SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
                 "Codex subscription execution timed out",
+                reason=SubscriptionFailureReason.EXECUTION_TIMEOUT,
             ) from exc
         except ProviderProcessCancelled as exc:
             raise SubscriptionError(
                 SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
                 "Codex subscription execution cancelled",
+                reason=SubscriptionFailureReason.EXECUTION_CANCELLED,
             ) from exc
         if result.returncode != 0:
             detail = sanitize_diagnostic(result.stderr) or "Codex subscription execution failed"
             raise SubscriptionError(
                 SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
                 detail,
+                reason=SubscriptionFailureReason.EXECUTION_NONZERO,
             )
         parsed = _parse_structured_output(result.stdout)
         if parsed is None:
             raise SubscriptionError(
                 SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
                 "Codex returned malformed structured output",
+                reason=SubscriptionFailureReason.EXECUTION_MALFORMED_OUTPUT,
             )
         if not parsed.answer:
             raise SubscriptionError(
                 SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
                 "Codex returned no assistant answer",
+                reason=SubscriptionFailureReason.EXECUTION_EMPTY_ANSWER,
             )
         return ProviderAnswer(
             text=parsed.answer,
@@ -185,13 +231,14 @@ class CodexSubscriptionClient:
         )
 
     def answer(self, prompt: str) -> ProviderAnswer:
-        return self.ask_answer(prompt)
+        self.last_answer = None
+        result = self.ask_answer(prompt)
+        self.last_answer = result
+        return result
 
     def ask(self, prompt: str) -> str:
         """Legacy string-returning facade; use ``answer`` for typed usage."""
-        result = self.answer(prompt)
-        self.last_answer = result
-        return result.text
+        return self.answer(prompt).text
 
     def _status_detail(self, status: SubscriptionStatus) -> str:
         if status is SubscriptionStatus.SUBSCRIPTION_CLI_UNAVAILABLE:
@@ -201,20 +248,39 @@ class CodexSubscriptionClient:
         return status.value
 
 
+_ALLOWED_EVENT_TYPES = {
+    "error",
+    "item.completed",
+    "item.started",
+    "item.updated",
+    "message",
+    "agent_message",
+    "thread.started",
+    "turn.completed",
+    "turn.failed",
+    "turn.started",
+}
+
+
 def _parse_structured_output(stdout: str) -> StructuredOutput | None:
     messages: list[str] = []
     usage = AnswerUsage(kind=UsageKind.UNAVAILABLE)
     cli_version: str | None = None
     saw_json = False
     for line in stdout.splitlines():
+        if not line.strip():
+            continue
         try:
             event_value = json.loads(line)
         except json.JSONDecodeError:
-            continue
-        saw_json = True
+            return None
         if not isinstance(event_value, dict):
-            continue
+            return None
         event = cast(dict[str, object], event_value)
+        event_type = event.get("type")
+        if not isinstance(event_type, str) or event_type not in _ALLOWED_EVENT_TYPES:
+            return None
+        saw_json = True
         version = event.get("version")
         if isinstance(version, str):
             cli_version = version

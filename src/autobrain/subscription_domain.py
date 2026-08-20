@@ -14,13 +14,41 @@ class SubscriptionStatus(StrEnum):
     SUBSCRIPTION_EXECUTION_UNAVAILABLE = "SUBSCRIPTION_EXECUTION_UNAVAILABLE"
 
 
+class SubscriptionFailureReason(StrEnum):
+    LOGIN_UNAVAILABLE = "LOGIN_UNAVAILABLE"
+    AUTH_UNAVAILABLE = "AUTH_UNAVAILABLE"
+    STATUS_TIMEOUT = "STATUS_TIMEOUT"
+    STATUS_CANCELLED = "STATUS_CANCELLED"
+    STATUS_NONZERO = "STATUS_NONZERO"
+    STATUS_MALFORMED_OUTPUT = "STATUS_MALFORMED_OUTPUT"
+    EXECUTION_TIMEOUT = "EXECUTION_TIMEOUT"
+    EXECUTION_CANCELLED = "EXECUTION_CANCELLED"
+    EXECUTION_NONZERO = "EXECUTION_NONZERO"
+    EXECUTION_MALFORMED_OUTPUT = "EXECUTION_MALFORMED_OUTPUT"
+    EXECUTION_EMPTY_ANSWER = "EXECUTION_EMPTY_ANSWER"
+
+
+@dataclass(frozen=True)
+class SubscriptionStatusReport:
+    status: SubscriptionStatus
+    reason: SubscriptionFailureReason | None = None
+    detail: str = ""
+
+
 class SubscriptionError(RuntimeError):
     """A typed failure from the local subscription execution boundary."""
 
-    def __init__(self, status: SubscriptionStatus, detail: str) -> None:
+    def __init__(
+        self,
+        status: SubscriptionStatus,
+        detail: str,
+        *,
+        reason: SubscriptionFailureReason | None = None,
+    ) -> None:
         super().__init__(detail)
         self.status = status
         self.detail = detail
+        self.reason = reason
 
 
 class ProviderId(StrEnum):
@@ -79,6 +107,8 @@ class SubscriptionProvider(Protocol):
     identity: ProviderIdentity
 
     def login(self) -> int: ...
+
+    def probe_status(self) -> SubscriptionStatusReport: ...
 
     def status(self) -> SubscriptionStatus: ...
 

@@ -24,8 +24,10 @@ from autobrain.subscription_domain import (
     ProviderId,
     ProviderIdentity,
     SubscriptionError,
+    SubscriptionFailureReason,
     SubscriptionProvider,
     SubscriptionStatus,
+    SubscriptionStatusReport,
     UsageKind,
 )
 from autobrain.subscription_upstream import (
@@ -44,8 +46,10 @@ __all__ = [
     "ProviderId",
     "ProviderIdentity",
     "SubscriptionError",
+    "SubscriptionFailureReason",
     "SubscriptionProvider",
     "SubscriptionStatus",
+    "SubscriptionStatusReport",
     "UsageKind",
     "build_subscription_upstream",
     "local_embedding",
