@@ -30,11 +30,18 @@ _URL_USERINFO = re.compile(r"(?i)(://)([^/@\s:]+):([^/@\s]+)@")
 _PROVIDER_OVERRIDE_NAMES = {
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
     "AZURE_OPENAI_API_KEY",
     "AZURE_OPENAI_ENDPOINT",
+    "AUTOBRAIN_CLAUDE_COMMAND",
     "AUTOBRAIN_CODEX_COMMAND",
+    "AUTOBRAIN_GROK_COMMAND",
+    "AUTOBRAIN_KIMI_COMMAND",
     "AUTOBRAIN_SUBSCRIPTION_MODEL",
     "AUTOBRAIN_SUBSCRIPTION_TIMEOUT_SECONDS",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_VERTEX",
     "CODEX_HOME",
     "OPENAI_API_BASE",
     "OPENAI_API_KEY",
@@ -83,9 +90,20 @@ def sanitized_environment(
     """Remove provider overrides and credentials, then add explicit selections."""
     denied_names = {name.casefold() for name in _PROVIDER_OVERRIDE_NAMES}
     clean: dict[str, str] = {}
+    denied_prefixes = (
+        "anthropic_",
+        "azure_openai_",
+        "claude_code_",
+        "codex_",
+        "openai_",
+    )
     for name in environment:
         normalized_name = name.casefold()
-        if normalized_name in denied_names or _SENSITIVE_NAME.search(name) is not None:
+        if (
+            normalized_name in denied_names
+            or normalized_name.startswith(denied_prefixes)
+            or _SENSITIVE_NAME.search(name) is not None
+        ):
             continue
         if normalized_name.endswith(("_base_url", "_api_base", "_endpoint")):
             continue

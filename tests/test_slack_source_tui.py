@@ -11,7 +11,7 @@ import pytest
 from autobrain.auth.models import AuthStatusReport, ConnectionStatus, Provider
 from autobrain.models import ConnectionState, Status
 from autobrain.source_store import SlackSourceStore
-from autobrain.subscription import SubscriptionStatus
+from autobrain.subscription import ProviderId, SubscriptionStatus
 from autobrain.tui_runtime import connection_snapshot, run_connection_flow
 
 
@@ -65,11 +65,37 @@ def test_connection_snapshot_marks_valid_slack_export_ready(tmp_path: Path) -> N
         source_store=store,
     )
 
+    assert snapshot.subscription_provider is ProviderId.CODEX
     assert snapshot.sources[Provider.SLACK] is ConnectionState.CONNECTED
     assert snapshot.source_details is not None
     assert snapshot.source_details[Provider.SLACK] == "export ready"
     assert snapshot.slack_export_path == Path(config.archive_path)
     assert snapshot.slack_export_sha256 == config.archive_sha256
+
+
+@pytest.mark.parametrize("provider", tuple(ProviderId))
+def test_subscription_connection_flow_passes_exact_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: ProviderId,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del check
+        commands.append(tuple(command))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("autobrain.tui_runtime.curses.def_prog_mode", lambda: None)
+    monkeypatch.setattr("autobrain.tui_runtime.curses.endwin", lambda: None)
+    monkeypatch.setattr("autobrain.tui_runtime.curses.reset_prog_mode", lambda: None)
+
+    run_connection_flow(_Screen(), provider, runner=runner)  # type: ignore[arg-type]
+
+    assert commands[0][-4:] == ("subscription", "setup", "--provider", provider.value)
 
 
 def test_slack_connection_key_opens_source_setup_command(

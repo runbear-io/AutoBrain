@@ -9,7 +9,7 @@ from pydantic import Field
 from autobrain.models import CandidatePin, CheckResult, DoctorPaths, Status, StrictModel
 from autobrain.paths import AutoBrainPaths, PathConfinementError
 from autobrain.preflight_slack import check_slack_source
-from autobrain.preflight_subscription import check_chatgpt_subscription
+from autobrain.preflight_subscription import check_subscription_provider
 from autobrain.preflight_support import (
     CommandResult,
     format_version,
@@ -28,6 +28,7 @@ from autobrain.preflight_support import (
     keyring_available as default_keyring_available,
 )
 from autobrain.secrets import EnvironmentReadiness, RuntimeEnvironment
+from autobrain.subscription import ProviderId
 
 _MIN_NODE = (24, 0, 0)
 _MIN_BUN = (1, 3, 10)
@@ -58,6 +59,7 @@ class Preflight:
         keyring_available: Callable[[], bool] = default_keyring_available,
         callback_available: Callable[[str, int], bool] = default_callback_available,
         browser_available: Callable[[], bool] = default_browser_available,
+        subscription_provider: ProviderId = ProviderId.CODEX,
     ) -> None:
         self.paths = paths
         self.environment = environment
@@ -70,6 +72,7 @@ class Preflight:
         self.keyring_probe = keyring_available
         self.callback_probe = callback_available
         self.browser_probe = browser_available
+        self.subscription_provider = subscription_provider
 
     def run(self) -> DoctorReport:
         checks = [self._runtime("python", (3, 12, 0)), self._runtime("node", _MIN_NODE)]
@@ -78,7 +81,8 @@ class Preflight:
         readiness = self.environment.readiness()
         checks.extend(
             (
-                check_chatgpt_subscription(
+                check_subscription_provider(
+                    self.subscription_provider,
                     command_runner=self.command_runner,
                     executable_finder=self.executable_finder,
                 ),

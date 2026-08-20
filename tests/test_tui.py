@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+import queue
 from pathlib import Path
 
 import pytest
@@ -9,22 +10,25 @@ from typer.testing import CliRunner
 import autobrain.cli as cli
 from autobrain.auth.models import Provider
 from autobrain.cli import app
-from autobrain.experiment import build_automatic_plan
+from autobrain.experiment import ExperimentPlan, build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState, Status
-from autobrain.orchestration import RunResult, StageEvent
-from autobrain.subscription import SubscriptionStatus
+from autobrain.orchestration import RunConfig, RunResult, StageEvent
+from autobrain.subscription import ProviderId, SubscriptionStatus
 from autobrain.terminal_text import terminal_width
 from autobrain.tui import (
     TUIState,
     WizardSection,
     accepts_key_at_size,
     accepts_key_for_state,
+    select_subscription_provider,
+    subscription_provider_key,
 )
 from autobrain.tui_render import (
     MIN_TERMINAL_HEIGHT,
     MIN_TERMINAL_WIDTH,
     render_dashboard,
 )
+from autobrain.tui_runtime import ConnectionSnapshot, execute_plan
 
 
 def test_tui_navigation_only_exposes_requested_setup_sections() -> None:
@@ -35,6 +39,98 @@ def test_tui_navigation_only_exposes_requested_setup_sections() -> None:
     assert state.advance().advance().section is WizardSection.NOTION
     assert state.advance().advance().advance().section is WizardSection.CANDIDATES
     assert state.advance().advance().advance().advance().section is WizardSection.REVIEW
+
+
+@pytest.mark.parametrize(
+    ("key", "provider"),
+    [
+        (ord("1"), ProviderId.CODEX),
+        (ord("2"), ProviderId.CLAUDE),
+        (ord("3"), ProviderId.KIMI),
+        (ord("4"), ProviderId.GROK),
+    ],
+)
+def test_legacy_tui_provider_key_reprobes_exact_selection(
+    key: int,
+    provider: ProviderId,
+) -> None:
+    calls: list[tuple[ProviderId, bool]] = []
+
+    def snapshot(**kwargs: object) -> ConnectionSnapshot:
+        selected = kwargs["subscription_provider"]
+        assert isinstance(selected, ProviderId)
+        refresh = kwargs["refresh_subscription"] is True
+        calls.append((selected, refresh))
+        return ConnectionSnapshot(
+            subscription=SubscriptionStatus.UNSUPPORTED,
+            sources={},
+            subscription_provider=selected,
+        )
+
+    state, connections = select_subscription_provider(TUIState(), key, snapshot=snapshot)
+
+    assert state.subscription_provider is provider
+    assert connections is not None
+    assert connections.subscription_provider is provider
+    assert calls == [(provider, True)]
+
+
+def test_tui_provider_selection_survives_navigation_and_refresh_state() -> None:
+    state = TUIState().with_subscription_provider(ProviderId.CLAUDE)
+
+    assert state.advance().back().subscription_provider is ProviderId.CLAUDE
+    assert state.start_setup().subscription_provider is ProviderId.CLAUDE
+    assert state.with_section(WizardSection.HOME).subscription_provider is ProviderId.CLAUDE
+    assert subscription_provider_key(ord("1")) is ProviderId.CODEX
+    assert subscription_provider_key(ord("2")) is ProviderId.CLAUDE
+    assert subscription_provider_key(ord("3")) is ProviderId.KIMI
+    assert subscription_provider_key(ord("4")) is ProviderId.GROK
+    assert subscription_provider_key(ord("x")) is None
+
+
+def test_execute_plan_preserves_selected_provider_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[RunConfig] = []
+
+    class Orchestrator:
+        def run(self) -> RunResult:
+            raise RuntimeError("stop after config capture")
+
+    def local(
+        config: RunConfig,
+        *,
+        stage_event_sink: object | None = None,
+        cancellation: object | None = None,
+    ) -> Orchestrator:
+        del stage_event_sink, cancellation
+        captured.append(config)
+        return Orchestrator()
+
+    monkeypatch.setattr("autobrain.tui_runtime.RunOrchestrator.local", local)
+
+    class SlackStatus:
+        ready = False
+
+    def slack_status(_self: object) -> SlackStatus:
+        return SlackStatus()
+
+    monkeypatch.setattr("autobrain.tui_runtime.SlackSourceStore.status", slack_status)
+    result_queue: queue.Queue[RunResult | BaseException] = queue.Queue()
+    plan = ExperimentPlan(
+        title="Claude plan",
+        description="explicit provider",
+        provider_mode="claude-subscription",
+        sources=(Provider.NOTION,),
+        candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
+        budget_usd=25.0,
+        max_questions=20,
+    )
+
+    execute_plan(plan, result_queue, ProviderId.CLAUDE)
+
+    assert captured[0].provider_mode == "claude-subscription"
+    assert isinstance(result_queue.get_nowait(), RuntimeError)
 
 
 def test_tui_toggles_sources_and_candidates_without_manual_budget_or_questions() -> None:
@@ -52,14 +148,48 @@ def test_tui_toggles_sources_and_candidates_without_manual_budget_or_questions()
 def test_default_cli_launches_tui_and_headless_commands_remain_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    launched: list[bool] = []
-    monkeypatch.setattr(cli, "run_tui", lambda: launched.append(True))
+    launched: list[tuple[bool, ProviderId]] = []
 
-    result = CliRunner().invoke(app, [])
+    def capture(*, force_setup: bool = False, provider: ProviderId = ProviderId.CODEX) -> None:
+        launched.append((force_setup, provider))
 
-    assert result.exit_code == 0
-    assert launched == [True]
+    monkeypatch.setattr(cli, "run_tui", capture)
+
+    default = CliRunner().invoke(app, [])
+    claude = CliRunner().invoke(app, ["--provider", "claude"])
+    setup = CliRunner().invoke(app, ["setup", "--provider", "grok"])
+
+    assert default.exit_code == 0
+    assert claude.exit_code == 0
+    assert setup.exit_code == 0
+    assert launched == [
+        (False, ProviderId.CODEX),
+        (False, ProviderId.CLAUDE),
+        (True, ProviderId.GROK),
+    ]
     assert CliRunner().invoke(app, ["run", "--help"]).exit_code == 0
+
+
+def test_provider_menu_renders_explicit_selection_and_unsupported_choices() -> None:
+    lines = render_dashboard(
+        section=WizardSection.CONNECTIONS.value,
+        selected_sources=(Provider.SLACK,),
+        selected_candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
+        source_states={},
+        subscription_status=SubscriptionStatus.UNSUPPORTED,
+        subscription_provider=ProviderId.KIMI,
+        plan=None,
+        setup_error="UNSUPPORTED",
+        result=None,
+        elapsed_seconds=0,
+        width=100,
+        height=30,
+    )
+
+    assert any("[3] [x] Kimi" in line for line in lines)
+    assert any("[2] [ ] Claude" in line for line in lines)
+    assert any("never falls back" in line for line in lines)
+    assert "1/2/3/4 select" in lines[-1]
 
 
 def test_setup_dashboard_fits_standard_terminal() -> None:
@@ -323,4 +453,4 @@ def test_dashboard_labels_configured_slack_export() -> None:
 
     assert any("export ready" in line for line in lines)
     assert any("Add Slack knowledge" in line for line in lines)
-    assert any("[ChatGPT]" in line or "ChatGPT" in line for line in lines)
+    assert any("Provider" in line for line in lines)

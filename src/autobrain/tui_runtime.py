@@ -10,7 +10,7 @@ import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
@@ -26,9 +26,10 @@ from autobrain.orchestration import (
 from autobrain.paths import AutoBrainPaths
 from autobrain.source_store import SlackSourceStore
 from autobrain.subscription import (
-    CodexSubscriptionClient,
-    CodexSubscriptionConfig,
+    ProviderId,
+    SubscriptionProvider,
     SubscriptionStatus,
+    provider_registry,
 )
 
 
@@ -36,6 +37,7 @@ from autobrain.subscription import (
 class ConnectionSnapshot:
     subscription: SubscriptionStatus
     sources: dict[Provider, ConnectionState]
+    subscription_provider: ProviderId = ProviderId.CODEX
     source_details: dict[Provider, str] | None = None
     slack_export_path: Path | None = None
     slack_export_sha256: str | None = None
@@ -61,21 +63,32 @@ def _subprocess_runner(
 def connection_snapshot(
     *,
     manager: ConnectionManager | None = None,
-    subscription_client: CodexSubscriptionClient | None = None,
+    subscription_client: SubscriptionProvider | None = None,
+    subscription_provider: ProviderId = ProviderId.CODEX,
+    refresh_subscription: bool = False,
     source_store: SlackSourceStore | None = None,
 ) -> ConnectionSnapshot:
     paths = AutoBrainPaths.from_home()
     report = (manager or ConnectionManager(paths.root)).status()
     source_states = {item.provider: item.state for item in report.connections}
-    subscription = (
-        subscription_client or CodexSubscriptionClient(CodexSubscriptionConfig.from_environ())
-    ).status()
+    if subscription_client is not None:
+        subscription = subscription_client.status()
+    else:
+        subscription = (
+            provider_registry()
+            .probe(
+                subscription_provider,
+                refresh=refresh_subscription,
+            )
+            .status
+        )
     slack_status = (source_store or SlackSourceStore(paths.sources)).status()
     source_details: dict[Provider, str] = {}
     if slack_status.ready and slack_status.config is not None:
         source_states[Provider.SLACK] = ConnectionState.CONNECTED
         source_details[Provider.SLACK] = "export ready"
         return ConnectionSnapshot(
+            subscription_provider=subscription_provider,
             subscription=subscription,
             sources=source_states,
             source_details=source_details,
@@ -83,6 +96,7 @@ def connection_snapshot(
             slack_export_sha256=slack_status.config.archive_sha256,
         )
     return ConnectionSnapshot(
+        subscription_provider=subscription_provider,
         subscription=subscription,
         sources=source_states,
         source_details=source_details,
@@ -94,7 +108,10 @@ def resolve_plan(
     selected_sources: tuple[Provider, ...],
     selected_candidates: tuple[CandidateId, ...],
     connections: ConnectionSnapshot,
+    subscription_provider: ProviderId = ProviderId.CODEX,
 ) -> tuple[ExperimentPlan | None, str]:
+    if connections.subscription_provider is not subscription_provider:
+        return None, "SUBSCRIPTION_PROVIDER_MISMATCH: refresh the selected provider"
     disconnected = [
         provider.value
         for provider in selected_sources
@@ -108,6 +125,7 @@ def resolve_plan(
                 sources=selected_sources,
                 candidates=selected_candidates,
                 subscription_status=connections.subscription,
+                subscription_provider=subscription_provider,
             ),
             "",
         )
@@ -118,10 +136,16 @@ def resolve_plan(
 def execute_plan(
     plan: ExperimentPlan,
     result_queue: queue.Queue[RunResult | BaseException],
+    subscription_provider: ProviderId = ProviderId.CODEX,
     stage_event_sink: StageEventSink | None = None,
     cancellation: RunCancellation | None = None,
 ) -> None:
     try:
+        expected_mode = f"{subscription_provider.value}-subscription"
+        if plan.provider_mode != expected_mode:
+            raise ValueError(
+                "SUBSCRIPTION_PROVIDER_MISMATCH: plan does not match selected provider"
+            )
         paths = AutoBrainPaths.from_home()
         slack_status = SlackSourceStore(paths.sources).status()
         slack_export_selected = Provider.SLACK in plan.sources and slack_status.ready
@@ -171,12 +195,13 @@ def start_plan_worker(
     plan: ExperimentPlan,
     result_queue: queue.Queue[RunResult | BaseException],
     stage_event_sink: StageEventSink | None = None,
+    subscription_provider: ProviderId = ProviderId.CODEX,
 ) -> PlanWorker:
     """Start a cooperatively cancellable legacy TUI worker."""
     cancellation = RunCancellation()
     thread = threading.Thread(
         target=execute_plan,
-        args=(plan, result_queue, stage_event_sink, cancellation),
+        args=(plan, result_queue, subscription_provider, stage_event_sink, cancellation),
     )
     thread.start()
     return PlanWorker(thread=thread, cancellation=cancellation)
@@ -184,7 +209,7 @@ def start_plan_worker(
 
 def run_connection_flow(
     screen: curses.window,
-    provider: Provider | Literal["subscription"],
+    provider: Provider | ProviderId,
     *,
     runner: ConnectionFlowRunner = _subprocess_runner,
 ) -> None:
@@ -193,7 +218,15 @@ def run_connection_flow(
     elif isinstance(provider, Provider):
         command = [sys.executable, "-m", "autobrain.cli", "auth", provider.value]
     else:
-        command = [sys.executable, "-m", "autobrain.cli", "subscription", "setup"]
+        command = [
+            sys.executable,
+            "-m",
+            "autobrain.cli",
+            "subscription",
+            "setup",
+            "--provider",
+            provider.value,
+        ]
     curses.def_prog_mode()
     curses.endwin()
     runner(command, check=False)
@@ -201,9 +234,9 @@ def run_connection_flow(
     screen.refresh()
 
 
-def connection_key(key: int) -> Provider | Literal["subscription"] | None:
+def connection_key(key: int) -> Provider | ProviderId | None:
     if key in {ord("c"), ord("C")}:
-        return "subscription"
+        return ProviderId.CODEX
     if key in {ord("s"), ord("S")}:
         return Provider.SLACK
     if key in {ord("n"), ord("N")}:

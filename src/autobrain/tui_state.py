@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from autobrain.auth.models import Provider
 from autobrain.models import CandidateId
+from autobrain.subscription import ProviderId
 
 
 class WizardSection(StrEnum):
@@ -34,6 +35,7 @@ class TUIState:
     section: WizardSection = WizardSection.CONNECTIONS
     selected_sources: tuple[Provider, ...] = (Provider.SLACK, Provider.NOTION)
     selected_candidates: tuple[CandidateId, ...] = tuple(CandidateId)
+    subscription_provider: ProviderId = ProviderId.CODEX
     return_home: bool = False
 
     def _clone(
@@ -42,6 +44,7 @@ class TUIState:
         section: WizardSection | None = None,
         selected_sources: tuple[Provider, ...] | None = None,
         selected_candidates: tuple[CandidateId, ...] | None = None,
+        subscription_provider: ProviderId | None = None,
         return_home: bool | None = None,
     ) -> TUIState:
         return TUIState(
@@ -51,6 +54,11 @@ class TUIState:
             ),
             selected_candidates=(
                 self.selected_candidates if selected_candidates is None else selected_candidates
+            ),
+            subscription_provider=(
+                self.subscription_provider
+                if subscription_provider is None
+                else subscription_provider
             ),
             return_home=self.return_home if return_home is None else return_home,
         )
@@ -76,6 +84,9 @@ class TUIState:
 
     def with_section(self, section: WizardSection) -> TUIState:
         return self._clone(section=section)
+
+    def with_subscription_provider(self, provider: ProviderId) -> TUIState:
+        return self._clone(subscription_provider=provider)
 
     def skip_source(self, provider: Provider) -> TUIState:
         values = tuple(item for item in self.selected_sources if item is not provider)

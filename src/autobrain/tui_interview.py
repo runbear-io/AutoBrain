@@ -3,10 +3,10 @@
 from autobrain.auth.models import Provider
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
-from autobrain.subscription import SubscriptionStatus
+from autobrain.subscription import ProviderId, SubscriptionStatus
 
 _STEPS = (
-    ("connections", "ChatGPT"),
+    ("connections", "Provider"),
     ("slack", "Slack"),
     ("notion", "Notion"),
     ("candidates", "Brains"),
@@ -20,6 +20,7 @@ def render_interview(
     selected_candidates: tuple[CandidateId, ...],
     source_states: dict[Provider, ConnectionState],
     subscription_status: SubscriptionStatus,
+    subscription_provider: ProviderId,
     plan: ExperimentPlan | None,
     setup_error: str,
     source_details: dict[Provider, str],
@@ -28,10 +29,11 @@ def render_interview(
     names = [f"[{label}]" if i == index else label for i, (_, label) in enumerate(_STEPS)]
     slack_status = _source_status(Provider.SLACK, source_states, source_details)
     notion_status = _source_status(Provider.NOTION, source_states, source_details)
-    chatgpt_ready = subscription_status is SubscriptionStatus.READY
+    subscription_ready = subscription_status is SubscriptionStatus.READY
     body = _step_body(
         section,
-        chatgpt_ready=chatgpt_ready,
+        subscription_ready=subscription_ready,
+        subscription_provider=subscription_provider,
         slack_status=slack_status,
         notion_status=notion_status,
         selected_sources=selected_sources,
@@ -48,14 +50,19 @@ def render_interview(
         f"Step {index + 1} of {len(_STEPS)}",
         *body,
         "",
-        _footer(section, plan_available=plan is not None, chatgpt_ready=chatgpt_ready),
+        _footer(
+            section,
+            plan_available=plan is not None,
+            subscription_ready=subscription_ready,
+        ),
     ]
 
 
 def _step_body(
     section: str,
     *,
-    chatgpt_ready: bool,
+    subscription_ready: bool,
+    subscription_provider: ProviderId,
     slack_status: str,
     notion_status: str,
     selected_sources: tuple[Provider, ...],
@@ -64,13 +71,17 @@ def _step_body(
     setup_error: str,
 ) -> list[str]:
     if section == "connections":
-        status = "connected" if chatgpt_ready else "not connected"
-        action = "Continue" if chatgpt_ready else "Open ChatGPT in your browser"
+        status = "connected" if subscription_ready else "not connected"
+        action = "Continue" if subscription_ready else "Open vendor login"
         return [
-            "Sign in with ChatGPT",
-            "A browser window will open for grounded questions and scoring.",
-            f"Status    {status}",
-            f"Enter     {action}",
+            "Choose a consumer subscription provider",
+            "AutoBrain never falls back to another provider.",
+            _provider_line("1", "Codex / ChatGPT", ProviderId.CODEX, subscription_provider),
+            _provider_line("2", "Claude", ProviderId.CLAUDE, subscription_provider),
+            _provider_line("3", "Kimi", ProviderId.KIMI, subscription_provider),
+            _provider_line("4", "Grok", ProviderId.GROK, subscription_provider),
+            f"Selected  {subscription_provider.value}   Status  {status}",
+            f"Enter     {action}   R  Refresh status",
         ]
     if section == "slack":
         included = Provider.SLACK in selected_sources
@@ -133,9 +144,20 @@ def _toggle_line(key: str, label: str, selected: bool) -> str:
     return f"   [{key}] [{'x' if selected else ' '}] {label}"
 
 
-def _footer(section: str, *, plan_available: bool, chatgpt_ready: bool) -> str:
+def _provider_line(
+    key: str,
+    label: str,
+    provider: ProviderId,
+    selected: ProviderId,
+) -> str:
+    return _toggle_line(key, label, provider is selected)
+
+
+def _footer(section: str, *, plan_available: bool, subscription_ready: bool) -> str:
     if section == "connections":
-        return "Enter open ChatGPT  |  Q quit" if not chatgpt_ready else "Enter next  |  Q quit"
+        if subscription_ready:
+            return "1/2/3/4 select  |  R refresh  |  Enter next  |  Q quit"
+        return "1/2/3/4 select  |  R refresh  |  Enter login  |  Q quit"
     if section in {"slack", "notion"}:
         return "Enter connect  |  S skip  |  B back  |  Q quit"
     if section == "candidates":

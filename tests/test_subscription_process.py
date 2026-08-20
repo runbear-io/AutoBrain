@@ -196,6 +196,11 @@ def test_sanitized_environment_denies_mixed_case_overrides_without_reading_value
         "AnThRoPiC_bAsE_uRl",
         "azure_OPENAI_endpoint",
         "autobrain_CodeX_Command",
+        "autobrain_Claude_Command",
+        "anthropic_auth_token",
+        "claude_code_use_bedrock",
+        "claude_code_hostile_setting",
+        "anthropic_model",
         "service_password",
         "session_Cookie",
     }

@@ -3,7 +3,7 @@
 from autobrain.auth.models import Provider
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
-from autobrain.subscription import SubscriptionStatus
+from autobrain.subscription import ProviderId, SubscriptionStatus
 
 
 def render_home(
@@ -12,18 +12,19 @@ def render_home(
     selected_candidates: tuple[CandidateId, ...],
     source_states: dict[Provider, ConnectionState],
     subscription_status: SubscriptionStatus,
+    subscription_provider: ProviderId,
     plan: ExperimentPlan | None,
     setup_error: str,
     source_details: dict[Provider, str],
 ) -> list[str]:
-    chatgpt = (
+    subscription = (
         "connected" if subscription_status is SubscriptionStatus.READY else "not connected"
     )
     slack = _status(Provider.SLACK, selected_sources, source_states, source_details)
     notion = _status(Provider.NOTION, selected_sources, source_states, source_details)
     brains = ", ".join(item.value for item in selected_candidates) or "none"
     if plan is None:
-        action = setup_error or "Open setup to finish ChatGPT or a knowledge source."
+        action = setup_error or "Open setup to finish the provider or a knowledge source."
         enter = "S         Open setup"
     else:
         action = plan.title
@@ -32,7 +33,7 @@ def render_home(
         "AutoBrain",
         "Compare LLM Wiki, Mem0 OSS, and GBrain on your knowledge.",
         "",
-        f"ChatGPT    {chatgpt}",
+        f"Provider   {subscription_provider.value} ({subscription})",
         f"Slack      {slack}",
         f"Notion     {notion}",
         f"Brains     {brains}",

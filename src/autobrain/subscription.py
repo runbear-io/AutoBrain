@@ -11,6 +11,10 @@ from __future__ import annotations
 # stdlib module object, so that compatibility hook remains effective.
 import shutil as shutil
 
+from autobrain.subscription_claude import (
+    ClaudeSubscriptionClient,
+    ClaudeSubscriptionConfig,
+)
 from autobrain.subscription_codex import (
     CodexSubscriptionClient,
     CodexSubscriptionConfig,
@@ -30,6 +34,11 @@ from autobrain.subscription_domain import (
     SubscriptionStatusReport,
     UsageKind,
 )
+from autobrain.subscription_registry import (
+    SubscriptionProviderRegistry,
+    UnsupportedSubscriptionProvider,
+    provider_registry,
+)
 from autobrain.subscription_upstream import (
     build_subscription_upstream,
     local_embedding,
@@ -38,6 +47,8 @@ from autobrain.subscription_upstream import (
 __all__ = [
     "AnswerUsage",
     "AuthKind",
+    "ClaudeSubscriptionClient",
+    "ClaudeSubscriptionConfig",
     "CodexSubscriptionClient",
     "CodexSubscriptionConfig",
     "ProviderAnswer",
@@ -48,9 +59,12 @@ __all__ = [
     "SubscriptionError",
     "SubscriptionFailureReason",
     "SubscriptionProvider",
+    "SubscriptionProviderRegistry",
     "SubscriptionStatus",
     "SubscriptionStatusReport",
+    "UnsupportedSubscriptionProvider",
     "UsageKind",
     "build_subscription_upstream",
     "local_embedding",
+    "provider_registry",
 ]

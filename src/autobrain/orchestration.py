@@ -58,6 +58,7 @@ from autobrain.paths import AutoBrainPaths, OccupiedRunError
 from autobrain.preflight_support import load_candidate_pins
 from autobrain.report import build_comparison, load_comparison, write_artifacts
 from autobrain.secrets import redact
+from autobrain.subscription_domain import ProviderId
 
 MAX_CANDIDATES = 3
 MIN_BENCHMARK_CASES = 20
@@ -242,8 +243,9 @@ class RunConfig:
             )
         if self.output is not None:
             AutoBrainPaths.validate_output_root(self.output)
-        if self.provider_mode not in {"api", "codex-subscription"}:
-            raise ValueError("provider_mode must be api or codex-subscription")
+        subscription_modes = {f"{provider.value}-subscription" for provider in ProviderId}
+        if self.provider_mode not in {"api", *subscription_modes}:
+            raise ValueError("provider_mode must be api or <codex|claude|kimi|grok>-subscription")
         if not self.selected_sources:
             raise ValueError("selected_sources must include Slack or Notion")
         if len(set(self.selected_sources)) != len(self.selected_sources):
@@ -447,26 +449,28 @@ class RunOrchestrator:
 
         subscription_upstream: Callable[[dict[str, Any]], dict[str, Any]] | None = None
         chat_provenance_provider: Callable[[], ChatProvenance] | None = None
-        if config.provider_mode == "codex-subscription":
+        if config.provider_mode.endswith("-subscription"):
             from autobrain.subscription import (
-                CodexSubscriptionClient,
-                CodexSubscriptionConfig,
+                ProviderId,
                 SubscriptionStatus,
                 build_subscription_upstream,
+                provider_registry,
             )
 
-            subscription_client = CodexSubscriptionClient(
-                CodexSubscriptionConfig.from_environ(),
-                cancellation=cancellation,
-            )
-            subscription_status = subscription_client.status()
-            if subscription_status is not SubscriptionStatus.READY:
+            provider_id = ProviderId(config.provider_mode.removesuffix("-subscription"))
+            registry = provider_registry(cancellation=cancellation)
+            subscription_client = registry.get(provider_id)
+            subscription_report = registry.probe(provider_id, refresh=True)
+            if subscription_report.status is not SubscriptionStatus.READY:
                 return cls(
                     config=config,
                     connectors=connectors,
                     candidates=(),
                     provider_available=False,
-                    provider_detail=f"{subscription_status.value}: run `codex login`",
+                    provider_detail=(
+                        f"{subscription_report.status.value}: "
+                        f"{subscription_report.detail or provider_id.value}"
+                    ),
                     provider_status=Status.CAPABILITY_UNAVAILABLE,
                     stage_event_sink=stage_event_sink,
                     cancellation=cancellation,
@@ -1674,12 +1678,16 @@ class RunOrchestrator:
     ) -> BenchmarkProvenance:
         if self.test_mode.get("enabled") is True:
             return BenchmarkProvenance()
-        subscription = self.config.provider_mode == "codex-subscription"
+        subscription = self.config.provider_mode.endswith("-subscription")
         if self._chat_provenance_provider is not None:
             chat = self._chat_provenance_provider()
         else:
             chat = ChatProvenance(
-                provider="codex" if subscription else "openai",
+                provider=(
+                    self.config.provider_mode.removesuffix("-subscription")
+                    if subscription
+                    else "openai"
+                ),
                 model=(os.environ.get("AUTOBRAIN_SUBSCRIPTION_MODEL") or None)
                 if subscription
                 else "gpt-5-mini",

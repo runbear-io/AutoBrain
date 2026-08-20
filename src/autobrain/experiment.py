@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from autobrain.auth.models import Provider
 from autobrain.models import CandidateId
-from autobrain.subscription import SubscriptionStatus
+from autobrain.subscription import ProviderId, SubscriptionStatus
 
 
 class ExperimentSetupError(ValueError):
@@ -49,6 +49,7 @@ def build_automatic_plan(
     sources: tuple[Provider, ...],
     candidates: tuple[CandidateId, ...],
     subscription_status: SubscriptionStatus,
+    subscription_provider: ProviderId = ProviderId.CODEX,
 ) -> ExperimentPlan:
     """Own all experiment decisions except sources and candidate scope."""
     if not sources:
@@ -57,13 +58,18 @@ def build_automatic_plan(
         raise ExperimentSetupError("TWO_CANDIDATES_REQUIRED: select at least two candidates")
 
     if subscription_status is not SubscriptionStatus.READY:
-        raise ExperimentSetupError(f"{subscription_status.value}: connect ChatGPT subscription")
+        provider_label = (
+            "ChatGPT" if subscription_provider is ProviderId.CODEX else subscription_provider.value
+        )
+        raise ExperimentSetupError(
+            f"{subscription_status.value}: connect {provider_label} subscription"
+        )
 
     title, description = automatic_experiment_copy(sources=sources, candidates=candidates)
     return ExperimentPlan(
         title=title,
         description=description,
-        provider_mode="codex-subscription",
+        provider_mode=f"{subscription_provider.value}-subscription",
         sources=sources,
         candidates=candidates,
         budget_usd=25.0,

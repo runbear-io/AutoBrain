@@ -4,7 +4,7 @@ from autobrain.auth.models import Provider
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
 from autobrain.orchestration import RunResult, StageEvent
-from autobrain.subscription import SubscriptionStatus
+from autobrain.subscription import ProviderId, SubscriptionStatus
 from autobrain.terminal_text import truncate_terminal_text
 from autobrain.tui_home import render_home
 from autobrain.tui_interview import render_interview
@@ -32,6 +32,7 @@ def render_dashboard(
     height: int | None = None,
     source_details: dict[Provider, str] | None = None,
     latest_stage: StageEvent | None = None,
+    subscription_provider: ProviderId = ProviderId.CODEX,
 ) -> list[str]:
     usable_width = max(1, width - 2)
     details = source_details or {}
@@ -53,6 +54,7 @@ def render_dashboard(
             selected_candidates=selected_candidates,
             source_states=source_states,
             subscription_status=subscription_status,
+            subscription_provider=subscription_provider,
             plan=plan,
             setup_error=setup_error,
             source_details=details,
@@ -74,6 +76,7 @@ def render_dashboard(
             selected_candidates,
             source_states,
             subscription_status,
+            subscription_provider,
             plan,
             setup_error,
             details,

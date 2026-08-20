@@ -9,14 +9,18 @@ from typing import Protocol
 
 class SubscriptionStatus(StrEnum):
     READY = "READY"
+    UNSUPPORTED = "UNSUPPORTED"
     SUBSCRIPTION_CLI_UNAVAILABLE = "SUBSCRIPTION_CLI_UNAVAILABLE"
     SUBSCRIPTION_AUTH_UNAVAILABLE = "SUBSCRIPTION_AUTH_UNAVAILABLE"
     SUBSCRIPTION_EXECUTION_UNAVAILABLE = "SUBSCRIPTION_EXECUTION_UNAVAILABLE"
 
 
 class SubscriptionFailureReason(StrEnum):
+    PROVIDER_UNSUPPORTED = "PROVIDER_UNSUPPORTED"
     LOGIN_UNAVAILABLE = "LOGIN_UNAVAILABLE"
     AUTH_UNAVAILABLE = "AUTH_UNAVAILABLE"
+    AUTH_KIND_UNSUPPORTED = "AUTH_KIND_UNSUPPORTED"
+    PROBE_IN_PROGRESS = "PROBE_IN_PROGRESS"
     STATUS_TIMEOUT = "STATUS_TIMEOUT"
     STATUS_CANCELLED = "STATUS_CANCELLED"
     STATUS_NONZERO = "STATUS_NONZERO"
@@ -53,10 +57,14 @@ class SubscriptionError(RuntimeError):
 
 class ProviderId(StrEnum):
     CODEX = "codex"
+    CLAUDE = "claude"
+    KIMI = "kimi"
+    GROK = "grok"
 
 
 class AuthKind(StrEnum):
     CONSUMER_SUBSCRIPTION = "consumer_subscription"
+    UNSUPPORTED = "unsupported"
 
 
 class ProviderCapability(StrEnum):
@@ -105,7 +113,13 @@ class ProviderConfig:
 class SubscriptionProvider(Protocol):
     """The application-facing boundary for a subscription-backed provider."""
 
-    identity: ProviderIdentity
+    @property
+    def identity(self) -> ProviderIdentity: ...
+
+    @property
+    def last_answer(self) -> ProviderAnswer | None: ...
+
+    def probe_identity(self) -> ProviderIdentity: ...
 
     def login(self) -> int: ...
 
@@ -114,6 +128,8 @@ class SubscriptionProvider(Protocol):
     def status(self) -> SubscriptionStatus: ...
 
     def answer(self, prompt: str) -> ProviderAnswer: ...
+
+    def ask(self, prompt: str) -> str: ...
 
 
 @dataclass(frozen=True)

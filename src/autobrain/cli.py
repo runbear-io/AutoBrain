@@ -26,9 +26,10 @@ from autobrain.secrets import RuntimeEnvironment, RuntimeSettings
 from autobrain.source_cli import auth_app, source_app
 from autobrain.source_store import SlackSourceStore
 from autobrain.subscription import (
-    CodexSubscriptionClient,
-    CodexSubscriptionConfig,
+    ProviderId,
     SubscriptionError,
+    SubscriptionStatus,
+    provider_registry,
 )
 from autobrain.tui import run_tui
 
@@ -41,7 +42,7 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 app.add_typer(auth_app, name="auth")
-subscription_app = typer.Typer(help="Use a locally authenticated ChatGPT subscription.")
+subscription_app = typer.Typer(help="Use an explicitly selected local consumer subscription CLI.")
 app.add_typer(subscription_app, name="subscription")
 app.add_typer(source_app, name="source")
 runs_app = typer.Typer(help="Inspect and compare immutable evaluation runs.")
@@ -49,20 +50,31 @@ app.add_typer(runs_app, name="runs")
 
 
 @app.callback(invoke_without_command=True)
-def main(ctx: typer.Context) -> None:
+def main(
+    ctx: typer.Context,
+    provider: Annotated[
+        ProviderId,
+        typer.Option("--provider", help="Subscription provider for the TUI."),
+    ] = ProviderId.CODEX,
+) -> None:
     if ctx.invoked_subcommand is None:
         try:
-            run_tui()
+            run_tui(provider=provider)
         except RuntimeError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1) from None
 
 
 @app.command("setup")
-def setup() -> None:
-    """Run first-time onboarding, or reconnect ChatGPT, Slack, and Notion."""
+def setup(
+    provider: Annotated[
+        ProviderId,
+        typer.Option("--provider", help="Initial subscription provider for setup."),
+    ] = ProviderId.CODEX,
+) -> None:
+    """Run first-time onboarding, or reconnect a provider, Slack, and Notion."""
     try:
-        run_tui(force_setup=True)
+        run_tui(force_setup=True, provider=provider)
     except RuntimeError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from None
@@ -70,49 +82,87 @@ def setup() -> None:
 
 @subscription_app.command("status")
 def subscription_status(
+    provider: Annotated[
+        ProviderId,
+        typer.Option("--provider", help="Subscription provider to inspect."),
+    ] = ProviderId.CODEX,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit JSON status."),
     ] = False,
+    refresh: Annotated[
+        bool,
+        typer.Option("--refresh", help="Bypass a recent bounded status probe."),
+    ] = False,
 ) -> None:
-    """Check the local Codex/ChatGPT subscription login boundary."""
-    client = CodexSubscriptionClient(CodexSubscriptionConfig.from_environ())
-    status = client.status()
+    """Check the selected local consumer-subscription boundary."""
+    registry = provider_registry()
+    report = registry.probe(provider, refresh=refresh)
+    client = registry.get(provider)
     detail = {
-        "provider": "codex",
-        "status": status.value,
-        "command": client.config.command,
+        "provider": provider.value,
+        "status": report.status.value,
+        "reason": report.reason.value if report.reason is not None else None,
+        "detail": report.detail,
+        "identity": {
+            "provider": client.identity.provider.value,
+            "model": client.identity.model,
+            "cli_version": client.identity.cli_version,
+            "auth_kind": client.identity.auth_kind.value,
+        },
     }
     if json_output:
         typer.echo(json.dumps(detail, indent=2))
         return
-    typer.echo(f"{status.value}: {client.config.command}")
-    if status.value != "READY":
-        typer.echo("Run `codex login` with the ChatGPT account.", err=True)
+    typer.echo(f"{report.status.value}: {provider.value}")
+    if report.detail:
+        typer.echo(report.detail, err=report.status is not SubscriptionStatus.READY)
 
 
 @subscription_app.command("setup")
-def subscription_setup() -> None:
-    """Open the user-driven ChatGPT subscription login flow."""
-    client = CodexSubscriptionClient(CodexSubscriptionConfig.from_environ())
+def subscription_setup(
+    provider: Annotated[
+        ProviderId,
+        typer.Option("--provider", help="Subscription provider to authenticate."),
+    ] = ProviderId.CODEX,
+) -> None:
+    """Open the selected vendor's user-driven consumer login flow."""
+    registry = provider_registry()
+    client = registry.get(provider)
     try:
         return_code = client.login()
     except SubscriptionError as exc:
         typer.echo(f"{exc.status.value}: {exc.detail}", err=True)
         raise typer.Exit(1) from None
     if return_code != 0:
-        typer.echo("SUBSCRIPTION_AUTH_UNAVAILABLE: Codex login did not complete", err=True)
+        typer.echo(
+            f"SUBSCRIPTION_AUTH_UNAVAILABLE: {provider.value} login did not complete",
+            err=True,
+        )
         raise typer.Exit(return_code or 1)
-    typer.echo("ChatGPT subscription login completed; run `autobrain subscription status`.")
+    registry.invalidate(provider)
+    report = registry.probe(provider, refresh=True)
+    if report.status is not SubscriptionStatus.READY:
+        typer.echo(f"{report.status.value}: {report.detail}", err=True)
+        raise typer.Exit(1)
+    typer.echo(
+        f"{provider.value} consumer subscription login completed; "
+        f"run `autobrain subscription status --provider {provider.value}`."
+    )
 
 
 @subscription_app.command("ask")
 def subscription_ask(
-    prompt: Annotated[str, typer.Argument(help="Prompt sent through Codex subscription mode.")],
+    prompt: Annotated[str, typer.Argument(help="Prompt sent through subscription mode.")],
+    provider: Annotated[
+        ProviderId,
+        typer.Option("--provider", help="Subscription provider to execute."),
+    ] = ProviderId.CODEX,
 ) -> None:
-    """Run one read-only prompt through the local ChatGPT subscription."""
+    """Run one safe, tool-free prompt through the selected local subscription."""
     try:
-        answer = CodexSubscriptionClient(CodexSubscriptionConfig.from_environ()).ask(prompt)
+        client = provider_registry().get(provider)
+        answer = client.answer(prompt).text
     except (SubscriptionError, ValueError) as exc:
         if isinstance(exc, SubscriptionError):
             typer.echo(f"{exc.status.value}: {exc.detail}", err=True)
@@ -124,6 +174,10 @@ def subscription_ask(
 
 @app.command()
 def doctor(
+    provider: Annotated[
+        ProviderId,
+        typer.Option("--provider", help="Subscription provider to diagnose."),
+    ] = ProviderId.CODEX,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit the typed doctor report as JSON."),
@@ -136,6 +190,7 @@ def doctor(
         environment=RuntimeEnvironment.from_environ(os.environ),
         callback_port=settings.callback_port,
         callback_port_error=settings.callback_port_error,
+        subscription_provider=provider,
     ).run()
     if json_output:
         typer.echo(report.model_dump_json(indent=2))
@@ -172,7 +227,7 @@ def run_comparison(
         str,
         typer.Option(
             "--provider",
-            help="Provider mode: api or codex-subscription.",
+            help="Provider mode: api or <codex|claude|kimi|grok>-subscription.",
             case_sensitive=False,
         ),
     ] = "api",
