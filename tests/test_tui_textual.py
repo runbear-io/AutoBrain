@@ -4,21 +4,25 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+from textual.pilot import Pilot
+
 from autobrain.auth.models import Provider
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, Status
 from autobrain.orchestration import RunResult
 from autobrain.subscription import ProviderId
 from autobrain.tui_actions import RunCompleted
+from autobrain.tui_effects import OpenExactReport
 from autobrain.tui_state import UiScreen
 from autobrain.tui_textual import AutoBrainApp
 
 
-async def _activate_button(pilot: object, tabs: int) -> None:
+async def _activate_button(pilot: Pilot[None], tabs: int) -> None:
     for _ in range(tabs):
-        await pilot.press("tab")  # type: ignore[attr-defined]
-    await pilot.press("enter")  # type: ignore[attr-defined]
-    await pilot.pause()  # type: ignore[attr-defined]
+        await pilot.press("tab")
+    await pilot.press("enter")
+    await pilot.pause()
 
 
 def test_textual_pilot_navigates_every_setup_screen_by_keyboard() -> None:
@@ -56,13 +60,15 @@ def test_textual_pilot_navigates_every_setup_screen_by_keyboard() -> None:
 
 def test_textual_pilot_home_and_results_paths_are_keyboard_only(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     opened: list[Path] = []
-    monkeypatch.setattr(
-        "autobrain.tui_textual.open_exact_report",
-        lambda effect: opened.append(effect.path) or True,
-    )
+
+    def record_open(effect: OpenExactReport) -> bool:
+        opened.append(effect.path)
+        return True
+
+    monkeypatch.setattr("autobrain.tui_textual.open_exact_report", record_open)
 
     async def exercise() -> None:
         app = AutoBrainApp(force_setup=False, provider=ProviderId.CLAUDE)

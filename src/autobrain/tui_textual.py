@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import queue
 import time
-from typing import ClassVar
+from collections.abc import Callable
+from typing import ClassVar, cast
+
+from textual import work
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, VerticalScroll
+from textual.message import Message
+from textual.screen import Screen
+from textual.widgets import Button, Footer, Header, Label, Static
+from textual.worker import Worker, WorkerState
 
 from autobrain.auth.models import Provider
 from autobrain.cancellation import RunCancellation
@@ -36,7 +45,6 @@ from autobrain.tui_actions import (
 from autobrain.tui_effects import (
     CancelActiveRun,
     EffectRegistry,
-    ExitApplication,
     InteractiveLogin,
     LoadConnections,
     OpenExactReport,
@@ -49,333 +57,314 @@ from autobrain.tui_runtime import connection_snapshot, execute_plan
 from autobrain.tui_state import UiScreen, UiState, reduce_ui
 from autobrain.tui_viewmodels import build_view_model
 
-try:
-    from textual import work
-    from textual.app import App, ComposeResult
-    from textual.containers import Horizontal, VerticalScroll
-    from textual.message import Message
-    from textual.screen import Screen
-    from textual.widgets import Button, Footer, Header, Label, Static
-    from textual.worker import Worker, WorkerState
-except ImportError as exc:  # dependency is an explicit runtime requirement
-    _TEXTUAL_IMPORT_ERROR = exc
-else:
-    _TEXTUAL_IMPORT_ERROR = None
 
+class ActionRequested(Message):
+    """The only message emitted by cockpit widgets."""
 
-if _TEXTUAL_IMPORT_ERROR is None:
+    def __init__(self, action: UiAction) -> None:
+        super().__init__()
+        self.action = action
 
-    class ActionRequested(Message):
-        """The only message emitted by cockpit widgets."""
+class ActionButton(Button):
+    """Button carrying a semantic action rather than an I/O callback."""
 
-        def __init__(self, action: UiAction) -> None:
-            super().__init__()
-            self.action = action
+    def __init__(self, label: str, action: UiAction, *, id: str) -> None:
+        super().__init__(label, id=id)
+        self.ui_action = action
 
-    class ActionButton(Button):
-        """Button carrying a semantic action rather than an I/O callback."""
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.post_message(ActionRequested(self.ui_action))
 
-        def __init__(self, label: str, action: UiAction, *, id: str) -> None:
-            super().__init__(label, id=id)
-            self.ui_action = action
+class CockpitScreen(Screen[None]):
+    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+        ("q", "request_quit", "Quit"),
+        ("escape", "go_back", "Back"),
+    ]
+    screen_id: UiScreen = UiScreen.HOME
 
-        def on_button_pressed(self, event: Button.Pressed) -> None:
-            event.stop()
-            self.post_message(ActionRequested(self.ui_action))
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with VerticalScroll(id="body"):
+            yield Label(id="screen-title")
+            yield Static(id="summary")
+            with Horizontal(id="actions"):
+                yield ActionButton("Back", GoBack(), id="back")
+                yield ActionButton("Refresh", RefreshConnections(), id="refresh")
+                yield from self.screen_actions()
+        yield Footer()
 
-    class CockpitScreen(Screen[None]):
-        BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
-            ("q", "request_quit", "Quit"),
-            ("escape", "go_back", "Back"),
-        ]
-        screen_id: UiScreen = UiScreen.HOME
+    def screen_actions(self) -> ComposeResult:
+        yield from ()
 
-        def compose(self) -> ComposeResult:
-            yield Header(show_clock=True)
-            with VerticalScroll(id="body"):
-                yield Label(id="screen-title")
-                yield Static(id="summary")
-                with Horizontal(id="actions"):
-                    yield ActionButton("Back", GoBack(), id="back")
-                    yield ActionButton("Refresh", RefreshConnections(), id="refresh")
-                    yield from self.screen_actions()
-            yield Footer()
+    def on_mount(self) -> None:
+        self.refresh_view()
 
-        def screen_actions(self) -> ComposeResult:
-            yield from ()
+    def action_request_quit(self) -> None:
+        self.post_message(ActionRequested(RequestQuit()))
 
-        def on_mount(self) -> None:
-            self.refresh_view()
+    def action_go_back(self) -> None:
+        self.post_message(ActionRequested(GoBack()))
 
-        def action_request_quit(self) -> None:
-            self.post_message(ActionRequested(RequestQuit()))
+    def refresh_view(self) -> None:
+        model = build_view_model(self.app.state)  # type: ignore[attr-defined]
+        self.query_one("#screen-title", Label).update(
+            f"{self.screen_id.value.title()}  |  provider: {model.provider.value} "
+            f"({model.provider_status.value})"
+        )
+        sources = "\n".join(
+            f"{'[x]' if selected else '[ ]'} {source.value}: {status.value} {detail}"
+            for source, status, selected, detail in model.sources
+        )
+        candidates = "\n".join(
+            f"{'[x]' if item.selected else '[ ]'} {candidate.value}: {item.status}"
+            for candidate, item in model.candidates.items()
+        )
+        self.query_one("#summary", Static).update(
+            f"{sources}\n\n{candidates}\n\n"
+            f"Embeddings: {model.embedding_status} - {model.embedding_detail}\n\n"
+            f"Plan: {model.plan_title or '-'}\n{model.plan_description}\n"
+            f"Stage: {model.stage} {model.stage_detail}\nElapsed: {model.elapsed}\n"
+            f"Terminal: {model.terminal_reason or '-'}\n"
+            f"Report: {model.report_path or '-'}\n{model.setup_error}"
+        )
 
-        def action_go_back(self) -> None:
-            self.post_message(ActionRequested(GoBack()))
+class HomeScreen(CockpitScreen):
+    screen_id = UiScreen.HOME
 
-        def refresh_view(self) -> None:
-            model = build_view_model(self.app.state)  # type: ignore[attr-defined]
-            self.query_one("#screen-title", Label).update(
-                f"{self.screen_id.value.title()}  |  provider: {model.provider.value} "
-                f"({model.provider_status.value})"
+    def screen_actions(self) -> ComposeResult:
+        yield ActionButton("Setup", BeginSetup(), id="setup")
+        yield ActionButton("Run", StartRun(), id="run")
+
+class ConnectionsScreen(CockpitScreen):
+    screen_id = UiScreen.CONNECTIONS
+
+    def screen_actions(self) -> ComposeResult:
+        for provider in ProviderId:
+            yield ActionButton(
+                provider.value.title(),
+                SelectProvider(provider),
+                id=f"provider-{provider.value}",
             )
-            sources = "\n".join(
-                f"{'[x]' if selected else '[ ]'} {source.value}: {status.value} {detail}"
-                for source, status, selected, detail in model.sources
+        for provider in ProviderId:
+            yield ActionButton(
+                f"Login {provider.value.title()}",
+                RequestLogin(provider),
+                id=f"login-{provider.value}",
             )
-            candidates = "\n".join(
-                f"{'[x]' if item.selected else '[ ]'} {candidate.value}: {item.status}"
-                for candidate, item in model.candidates.items()
+        yield ActionButton("Continue", Navigate(UiScreen.SLACK.value), id="continue")
+
+class SlackScreen(CockpitScreen):
+    screen_id = UiScreen.SLACK
+
+    def screen_actions(self) -> ComposeResult:
+        yield ActionButton("Toggle Slack", ToggleSource(Provider.SLACK), id="toggle-slack")
+        yield ActionButton("Configure Slack", RequestLogin(Provider.SLACK), id="login-slack")
+        yield ActionButton("Continue", Navigate(UiScreen.NOTION.value), id="continue")
+
+class NotionScreen(CockpitScreen):
+    screen_id = UiScreen.NOTION
+
+    def screen_actions(self) -> ComposeResult:
+        yield ActionButton("Toggle Notion", ToggleSource(Provider.NOTION), id="toggle-notion")
+        yield ActionButton("Connect Notion", RequestLogin(Provider.NOTION), id="login-notion")
+        yield ActionButton("Continue", Navigate(UiScreen.CANDIDATES.value), id="continue")
+
+class CandidatesScreen(CockpitScreen):
+    screen_id = UiScreen.CANDIDATES
+
+    def screen_actions(self) -> ComposeResult:
+        for candidate in CandidateId:
+            yield ActionButton(
+                candidate.value, ToggleCandidate(candidate), id=f"candidate-{candidate.value}"
             )
-            self.query_one("#summary", Static).update(
-                f"{sources}\n\n{candidates}\n\n"
-                f"Embeddings: {model.embedding_status} - {model.embedding_detail}\n\n"
-                f"Plan: {model.plan_title or '-'}\n{model.plan_description}\n"
-                f"Stage: {model.stage} {model.stage_detail}\nElapsed: {model.elapsed}\n"
-                f"Terminal: {model.terminal_reason or '-'}\n"
-                f"Report: {model.report_path or '-'}\n{model.setup_error}"
-            )
+        yield ActionButton("Review", Navigate(UiScreen.REVIEW.value), id="review")
 
-    class HomeScreen(CockpitScreen):
-        screen_id = UiScreen.HOME
+class ReviewScreen(CockpitScreen):
+    screen_id = UiScreen.REVIEW
 
-        def screen_actions(self) -> ComposeResult:
-            yield ActionButton("Setup", BeginSetup(), id="setup")
-            yield ActionButton("Run", StartRun(), id="run")
+    def screen_actions(self) -> ComposeResult:
+        yield ActionButton("Run experiment", StartRun(), id="run")
 
-    class ConnectionsScreen(CockpitScreen):
-        screen_id = UiScreen.CONNECTIONS
+class RunningScreen(CockpitScreen):
+    screen_id = UiScreen.RUNNING
+    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+        ("q", "cancel_and_quit", "Cancel + quit"),
+        ("c", "cancel", "Cancel"),
+    ]
 
-        def screen_actions(self) -> ComposeResult:
-            for provider in ProviderId:
-                yield ActionButton(
-                    provider.value.title(),
-                    SelectProvider(provider),
-                    id=f"provider-{provider.value}",
-                )
-            for provider in ProviderId:
-                yield ActionButton(
-                    f"Login {provider.value.title()}",
-                    RequestLogin(provider),
-                    id=f"login-{provider.value}",
-                )
-            yield ActionButton("Continue", Navigate(UiScreen.SLACK.value), id="continue")
+    def screen_actions(self) -> ComposeResult:
+        yield ActionButton("Cancel", CancelRun(), id="cancel")
 
-    class SlackScreen(CockpitScreen):
-        screen_id = UiScreen.SLACK
+    def action_cancel(self) -> None:
+        self.post_message(ActionRequested(CancelRun()))
 
-        def screen_actions(self) -> ComposeResult:
-            yield ActionButton("Toggle Slack", ToggleSource(Provider.SLACK), id="toggle-slack")
-            yield ActionButton("Configure Slack", RequestLogin(Provider.SLACK), id="login-slack")
-            yield ActionButton("Continue", Navigate(UiScreen.NOTION.value), id="continue")
+    def action_cancel_and_quit(self) -> None:
+        self.post_message(ActionRequested(RequestQuit()))
 
-    class NotionScreen(CockpitScreen):
-        screen_id = UiScreen.NOTION
+class ResultsScreen(CockpitScreen):
+    screen_id = UiScreen.RESULTS
 
-        def screen_actions(self) -> ComposeResult:
-            yield ActionButton("Toggle Notion", ToggleSource(Provider.NOTION), id="toggle-notion")
-            yield ActionButton("Connect Notion", RequestLogin(Provider.NOTION), id="login-notion")
-            yield ActionButton("Continue", Navigate(UiScreen.CANDIDATES.value), id="continue")
+    def screen_actions(self) -> ComposeResult:
+        yield ActionButton("Open exact report", OpenReport(), id="open-report")
+        yield ActionButton("Home", ResetRun(), id="home")
 
-    class CandidatesScreen(CockpitScreen):
-        screen_id = UiScreen.CANDIDATES
+SCREEN_TYPES = {
+    UiScreen.HOME: HomeScreen,
+    UiScreen.CONNECTIONS: ConnectionsScreen,
+    UiScreen.SLACK: SlackScreen,
+    UiScreen.NOTION: NotionScreen,
+    UiScreen.CANDIDATES: CandidatesScreen,
+    UiScreen.REVIEW: ReviewScreen,
+    UiScreen.RUNNING: RunningScreen,
+    UiScreen.RESULTS: ResultsScreen,
+}
 
-        def screen_actions(self) -> ComposeResult:
-            for candidate in CandidateId:
-                yield ActionButton(
-                    candidate.value, ToggleCandidate(candidate), id=f"candidate-{candidate.value}"
-                )
-            yield ActionButton("Review", Navigate(UiScreen.REVIEW.value), id="review")
+class AutoBrainApp(App[None]):
+    TITLE = "AutoBrain"
+    CSS = """
+    Screen { min-width: 60; }
+    #body { width: 100%; padding: 1 2; }
+    #screen-title { text-style: bold; color: $accent; margin-bottom: 1; }
+    #summary { width: 100%; min-height: 12; }
+    #actions { height: auto; }
+    Button { margin: 0 1 1 0; }
+    """
 
-    class ReviewScreen(CockpitScreen):
-        screen_id = UiScreen.REVIEW
+    def __init__(self, *, force_setup: bool, provider: ProviderId) -> None:
+        super().__init__()
+        self.state = UiState(
+            screen=UiScreen.CONNECTIONS if force_setup else UiScreen.HOME,
+            provider=provider,
+        )
+        self.effect_registry = EffectRegistry()
 
-        def screen_actions(self) -> ComposeResult:
-            yield ActionButton("Run experiment", StartRun(), id="run")
+    def on_mount(self) -> None:
+        screen_type = SCREEN_TYPES[self.state.screen]
+        self.push_screen(cast(Screen[None], screen_type()))
+        self.call_after_refresh(self.dispatch_ui, RefreshConnections())
 
-    class RunningScreen(CockpitScreen):
-        screen_id = UiScreen.RUNNING
-        BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
-            ("q", "cancel_and_quit", "Cancel + quit"),
-            ("c", "cancel", "Cancel"),
-        ]
+    def on_action_requested(self, message: ActionRequested) -> None:
+        self.dispatch_ui(message.action)
 
-        def screen_actions(self) -> ComposeResult:
-            yield ActionButton("Cancel", CancelRun(), id="cancel")
-
-        def action_cancel(self) -> None:
-            self.post_message(ActionRequested(CancelRun()))
-
-        def action_cancel_and_quit(self) -> None:
-            self.post_message(ActionRequested(RequestQuit()))
-
-    class ResultsScreen(CockpitScreen):
-        screen_id = UiScreen.RESULTS
-
-        def screen_actions(self) -> ComposeResult:
-            yield ActionButton("Open exact report", OpenReport(), id="open-report")
-            yield ActionButton("Home", ResetRun(), id="home")
-
-    SCREEN_TYPES = {
-        UiScreen.HOME: HomeScreen,
-        UiScreen.CONNECTIONS: ConnectionsScreen,
-        UiScreen.SLACK: SlackScreen,
-        UiScreen.NOTION: NotionScreen,
-        UiScreen.CANDIDATES: CandidatesScreen,
-        UiScreen.REVIEW: ReviewScreen,
-        UiScreen.RUNNING: RunningScreen,
-        UiScreen.RESULTS: ResultsScreen,
-    }
-
-    class AutoBrainApp(App[None]):
-        TITLE = "AutoBrain"
-        CSS = """
-        Screen { min-width: 60; }
-        #body { width: 100%; padding: 1 2; }
-        #screen-title { text-style: bold; color: $accent; margin-bottom: 1; }
-        #summary { width: 100%; min-height: 12; }
-        #actions { height: auto; }
-        Button { margin: 0 1 1 0; }
-        """
-
-        def __init__(self, *, force_setup: bool, provider: ProviderId) -> None:
-            super().__init__()
-            self.state = UiState(
-                screen=UiScreen.CONNECTIONS if force_setup else UiScreen.HOME,
-                provider=provider,
-            )
-            self.effect_registry = EffectRegistry()
-
-        def on_mount(self) -> None:
+    def dispatch_ui(self, action: UiAction) -> None:
+        reduction = reduce_ui(self.state, action)
+        previous_screen = self.state.screen
+        self.state = reduction.state
+        for effect in reduction.effects:
+            self._execute(effect)
+        if self.state.screen is not previous_screen:
             self._show_state_screen()
-            self.dispatch_ui(RefreshConnections())
+        elif isinstance(self.screen, CockpitScreen):
+            self.screen.refresh_view()
 
-        def on_action_requested(self, message: ActionRequested) -> None:
-            self.dispatch_ui(message.action)
+    def _show_state_screen(self) -> None:
+        screen_type = SCREEN_TYPES[self.state.screen]
+        switch_screen = cast(Callable[[Screen[None]], object], self.switch_screen)
+        switch_screen(cast(Screen[None], screen_type()))
 
-        def dispatch_ui(self, action: UiAction) -> None:
-            reduction = reduce_ui(self.state, action)
-            previous_screen = self.state.screen
-            self.state = reduction.state
-            for effect in reduction.effects:
-                self._execute(effect)
-            if self.state.screen is not previous_screen:
-                self._show_state_screen()
-            elif isinstance(self.screen, CockpitScreen):
-                self.screen.refresh_view()
-
-        def _show_state_screen(self) -> None:
-            screen_type = SCREEN_TYPES[self.state.screen]
-            if self.screen_stack:
-                self.switch_screen(screen_type())
-            else:
-                self.push_screen(screen_type())
-
-        def _execute(self, effect: UiEffect) -> None:
-            if isinstance(effect, LoadConnections):
-                self.load_connections(effect)
-            elif isinstance(effect, InteractiveLogin):
-                suspension = self.suspend()
-                suspension.__enter__()
-                self.effect_registry.register_login(effect.handle, suspension)
-                try:
-                    self.interactive_login(effect)
-                except BaseException:
-                    registered = self.effect_registry.settle_login(effect.handle)
-                    if registered is not None:
-                        registered.__exit__(None, None, None)
-                    raise
-            elif isinstance(effect, RunExperiment):
-                started_at = time.monotonic()
-                cancellation = self.effect_registry.register_run(
-                    effect.handle, started_at=started_at
-                )
-                self.dispatch_ui(RunStarted(effect.handle, started_at))
-                self.run_experiment(effect, cancellation)
-            elif isinstance(effect, CancelActiveRun):
-                self.effect_registry.cancel_run(effect.handle)
-            elif isinstance(effect, OpenExactReport):
-                open_exact_report(effect)
-            elif isinstance(effect, ExitApplication):
-                self.exit()
-
-        @work(thread=True, exclusive=True, group="connections")
-        def load_connections(self, effect: LoadConnections) -> None:
+    def _execute(self, effect: UiEffect) -> None:
+        if isinstance(effect, LoadConnections):
+            self.load_connections(effect)
+        elif isinstance(effect, InteractiveLogin):
+            suspension = self.suspend()
+            suspension.__enter__()
+            self.effect_registry.register_login(effect.handle, suspension)
             try:
-                snapshot = connection_snapshot(
-                    subscription_provider=effect.provider,
-                    refresh_subscription=effect.refresh,
-                )
-                self.call_from_thread(self.dispatch_ui, ConnectionsLoaded(snapshot))
-            except Exception as exc:
-                self.call_from_thread(
-                    self.dispatch_ui, RunFailed(f"CONNECTION_PROBE_FAILED: {exc}")
-                )
-
-        @work(thread=True, exclusive=True, group="login", exit_on_error=False)
-        def interactive_login(self, effect: InteractiveLogin) -> None:
-            run_login_process(effect)
-
-        @work(thread=True, exclusive=True, group="run", exit_on_error=False)
-        def run_experiment(
-            self,
-            effect: RunExperiment,
-            cancellation: RunCancellation,
-        ) -> RunResult:
-            result_queue: queue.Queue[RunResult | BaseException] = queue.Queue(maxsize=1)
-
-            def observed(event: StageEvent) -> None:
-                self.call_from_thread(
-                    self.dispatch_ui,
-                    StageObserved(event, observed_at=time.monotonic()),
-                )
-
-            execute_plan(
-                effect.plan,
-                result_queue,
-                effect.provider,
-                observed,
-                cancellation,
+                self.interactive_login(effect)
+            except BaseException:
+                registered = self.effect_registry.settle_login(effect.handle)
+                if registered is not None:
+                    registered.__exit__(None, None, None)
+                raise
+        elif isinstance(effect, RunExperiment):
+            started_at = time.monotonic()
+            cancellation = self.effect_registry.register_run(
+                effect.handle, started_at=started_at
             )
-            completed = result_queue.get()
-            if isinstance(completed, BaseException):
-                raise completed
-            return completed
+            self.dispatch_ui(RunStarted(effect.handle, started_at))
+            self.run_experiment(effect, cancellation)
+        elif isinstance(effect, CancelActiveRun):
+            self.effect_registry.cancel_run(effect.handle)
+        elif isinstance(effect, OpenExactReport):
+            open_exact_report(effect)
+        else:
+            self.exit()
 
-        def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-            if event.state not in {WorkerState.SUCCESS, WorkerState.ERROR, WorkerState.CANCELLED}:
-                return
-            if event.worker.group == "login":
-                handle = self.state.active_login_handle
-                if handle is None:
-                    return
-                suspension = self.effect_registry.settle_login(handle)
-                if suspension is not None:
-                    suspension.__exit__(None, None, None)
-                error = str(event.worker.error) if event.state is WorkerState.ERROR else ""
-                self.dispatch_ui(LoginSettled(handle, error))
-                return
-            if event.worker.group != "run":
-                return
-            handle = self.state.active_run_handle
+    @work(thread=True, exclusive=True, group="connections")
+    def load_connections(self, effect: LoadConnections) -> None:
+        try:
+            snapshot = connection_snapshot(
+                subscription_provider=effect.provider,
+                refresh_subscription=effect.refresh,
+            )
+            self.call_from_thread(self.dispatch_ui, ConnectionsLoaded(snapshot))
+        except Exception as exc:
+            self.call_from_thread(
+                self.dispatch_ui, RunFailed(f"CONNECTION_PROBE_FAILED: {exc}")
+            )
+
+    @work(thread=True, exclusive=True, group="login", exit_on_error=False)
+    def interactive_login(self, effect: InteractiveLogin) -> None:
+        run_login_process(effect)
+
+    @work(thread=True, exclusive=True, group="run", exit_on_error=False)
+    def run_experiment(
+        self,
+        effect: RunExperiment,
+        cancellation: RunCancellation,
+    ) -> RunResult:
+        result_queue: queue.Queue[RunResult | BaseException] = queue.Queue(maxsize=1)
+
+        def observed(event: StageEvent) -> None:
+            self.call_from_thread(
+                self.dispatch_ui,
+                StageObserved(event, observed_at=time.monotonic()),
+            )
+
+        execute_plan(
+            effect.plan,
+            result_queue,
+            effect.provider,
+            observed,
+            cancellation,
+        )
+        completed = result_queue.get()
+        if isinstance(completed, BaseException):
+            raise completed
+        return completed
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.state not in {WorkerState.SUCCESS, WorkerState.ERROR, WorkerState.CANCELLED}:
+            return
+        worker = cast(Worker[RunResult | None], event.worker)
+        if worker.group == "login":
+            handle = self.state.active_login_handle
             if handle is None:
                 return
-            self.effect_registry.settle_run(handle)
-            quit_after = self.state.quit_after_settlement
-            if event.state is WorkerState.SUCCESS:
-                self.dispatch_ui(RunCompleted(event.worker.result))
-            elif event.state is WorkerState.ERROR:
-                error = event.worker.error
-                self.dispatch_ui(RunFailed(f"RUN_FAILED: {type(error).__name__}: {error}"))
-            else:
-                self.dispatch_ui(RunFailed("RUN_CANCELLED: worker cancelled"))
-            if quit_after:
-                self.dispatch_ui(RequestQuit())
+            suspension = self.effect_registry.settle_login(handle)
+            if suspension is not None:
+                suspension.__exit__(None, None, None)
+            error = str(worker.error) if event.state is WorkerState.ERROR else ""
+            self.dispatch_ui(LoginSettled(handle, error))
+            return
+        if worker.group != "run":
+            return
+        handle = self.state.active_run_handle
+        if handle is None:
+            return
+        self.effect_registry.settle_run(handle)
+        quit_after = self.state.quit_after_settlement
+        if event.state is WorkerState.SUCCESS:
+            self.dispatch_ui(RunCompleted(cast(RunResult, worker.result)))
+        elif event.state is WorkerState.ERROR:
+            error = worker.error
+            self.dispatch_ui(RunFailed(f"RUN_FAILED: {type(error).__name__}: {error}"))
+        else:
+            self.dispatch_ui(RunFailed("RUN_CANCELLED: worker cancelled"))
+        if quit_after:
+            self.dispatch_ui(RequestQuit())
 
 
 def run_textual(*, force_setup: bool = False, provider: ProviderId = ProviderId.CODEX) -> None:
-    if _TEXTUAL_IMPORT_ERROR is not None:
-        raise RuntimeError(
-            "TUI_UNAVAILABLE: install the Textual dependency to launch the default UI"
-        ) from _TEXTUAL_IMPORT_ERROR
     AutoBrainApp(force_setup=force_setup, provider=provider).run()
