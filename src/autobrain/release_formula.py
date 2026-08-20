@@ -16,9 +16,9 @@ from typing import Any, cast
 from urllib.parse import unquote, urlsplit
 from urllib.request import urlopen
 
-_RESOURCE_START = re.compile(r'^\s*resource\s+"(?P<name>[^"]+)"\s+do\s*$')
-_URL = re.compile(r'^\s*url\s+"(?P<url>[^"]+)"\s*$')
-_SHA256 = re.compile(r'^\s*sha256\s+"(?P<sha256>[^"]+)"\s*$')
+_RESOURCE_START = re.compile(r"^\s*resource\s+(?P<quote>['\"])(?P<name>[^'\"]+)(?P=quote)\s+do\s*$")
+_URL = re.compile(r"^\s*url\s+(?P<quote>['\"])(?P<url>[^'\"]+)(?P=quote)\s*$")
+_SHA256 = re.compile(r"^\s*sha256\s+(?P<quote>['\"])(?P<sha256>[^'\"]+)(?P=quote)\s*$")
 _END = re.compile(r"^\s*end\s*$")
 _VIRTUALENV_INSTALL = re.compile(r"^\s*virtualenv_install_with_resources(?:\s|\(|$)", re.MULTILINE)
 _AUDITED_WHEELS = re.compile(
@@ -34,6 +34,7 @@ _PYTHON_FORMULA = re.compile(r"^python@[0-9]+\.[0-9]+$")
 _BRANCH = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$")
 _LICENSE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-.+]*$")
 _SAFE_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,()&+:/_-]*$")
+_RUBY_CONTROL = re.compile(r"#(?:\{|@|\$)|`|%[qQwWiIxrs]?(?=[^A-Za-z0-9\s%])")
 _BUILD_RESOURCES = (
     "hatchling",
     "packaging",
@@ -122,6 +123,10 @@ def _required_string(mapping: dict[str, Any], key: str) -> str:
         raise FormulaParseError(f'manifest field "{key}" must be a non-empty string')
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise FormulaParseError(f'manifest field "{key}" contains control characters')
+    if _RUBY_CONTROL.search(value) is not None or "\\" in value:
+        raise FormulaParseError(
+            f'manifest field "{key}" contains Ruby interpolation or literal syntax'
+        )
     return value
 
 
@@ -168,9 +173,9 @@ def _normalized_resource_name(name: str) -> str:
 
 
 def _ruby_string(value: str) -> str:
-    """Quote a validated manifest value as a Ruby double-quoted literal."""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    """Quote a validated manifest value without Ruby interpolation."""
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
 
 
 def _required_sha256(mapping: dict[str, Any], key: str) -> str:

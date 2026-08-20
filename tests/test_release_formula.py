@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -124,7 +125,7 @@ def test_generated_formula_installs_locked_build_backend_without_index_lookup() 
         pyproject_path=ROOT / "pyproject.toml",
     )
 
-    assert generated.index('resource "hatchling"') < generated.index('resource "annotated-doc"')
+    assert generated.index("resource 'hatchling'") < generated.index("resource 'annotated-doc'")
     assert "venv.pip_install_and_link buildpath, build_isolation: false" in generated
     assert "venv.pip_install_and_link buildpath\n" not in generated
 
@@ -188,6 +189,55 @@ def test_manifest_rejects_unsafe_strings_at_boundary(
 
     with pytest.raises(FormulaParseError):
         load_formula_manifest(manifest_path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "#{system(1)}",
+        "#@ivar",
+        "#$global",
+        "`whoami`",
+        "%x(whoami)",
+        "%Q{owned}",
+        "\\#{system('owned')}",
+        "\x1b[31mowned",
+    ],
+)
+def test_every_manifest_string_rejects_ruby_control_syntax(tmp_path: Path, payload: str) -> None:
+    original = json.loads(MANIFEST.read_text())
+    paths: list[tuple[str | int, ...]] = []
+
+    def collect(value: object, path: tuple[str | int, ...] = ()) -> None:
+        if isinstance(value, str):
+            paths.append(path)
+        elif isinstance(value, dict):
+            for key, child in cast(dict[str, object], value).items():
+                collect(child, (*path, key))
+        elif isinstance(value, list):
+            for index, child in enumerate(cast(list[object], value)):
+                collect(child, (*path, index))
+
+    collect(original)
+    for index, field_path in enumerate(paths):
+        data = json.loads(MANIFEST.read_text())
+        target: object = data
+        for key in field_path[:-1]:
+            if isinstance(key, str):
+                target = cast(dict[str, object], target)[key]
+            else:
+                target = cast(list[object], target)[key]
+        key = field_path[-1]
+        if isinstance(key, str):
+            mapping = cast(dict[str, object], target)
+            mapping[key] = f"{mapping[key]}{payload}"
+        else:
+            items = cast(list[object], target)
+            items[key] = f"{items[key]}{payload}"
+        manifest_path = tmp_path / f"manifest-{index}.json"
+        manifest_path.write_text(json.dumps(data))
+        with pytest.raises(FormulaParseError):
+            load_formula_manifest(manifest_path)
 
 
 @pytest.mark.parametrize(
