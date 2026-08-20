@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Sequence
 
@@ -152,6 +153,76 @@ def test_codex_adapter_exposes_typed_identity_capabilities_and_native_usage() ->
     assert client.last_answer.identity.cli_version == "codex-cli 1.2.3"
     assert calls[1][1] == "untrusted ; $(touch /tmp/should-not-run)"
     assert "untrusted" not in calls[1][0]
+
+
+@pytest.mark.parametrize(
+    ("input_tokens", "output_tokens"),
+    [
+        (True, 1),
+        (1, False),
+        (1.5, 2),
+        (1, 2.5),
+        ("1", 2),
+        (1, "2"),
+        (-1, 2),
+        (1, -2),
+    ],
+)
+def test_codex_usage_rejects_non_integer_or_negative_token_counts(
+    input_tokens: object,
+    output_tokens: object,
+) -> None:
+    def runner(
+        args: Sequence[str],
+        _stdin: str,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        if list(args)[1:3] == ["login", "status"]:
+            return subprocess.CompletedProcess(args, 0, "Logged in", "")
+        event = {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "answer"},
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+        }
+        return subprocess.CompletedProcess(args, 0, json.dumps(event) + "\n", "")
+
+    answer = CodexSubscriptionClient(CodexSubscriptionConfig(), runner=runner).answer("hello")
+
+    assert answer.usage.kind is UsageKind.UNAVAILABLE
+    assert answer.usage.input_tokens is None
+    assert answer.usage.output_tokens is None
+
+
+@pytest.mark.parametrize(("input_tokens", "output_tokens"), [(0, 0), (12, 3)])
+def test_codex_usage_accepts_exact_nonnegative_json_integers(
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    def runner(
+        args: Sequence[str],
+        _stdin: str,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        if list(args)[1:3] == ["login", "status"]:
+            return subprocess.CompletedProcess(args, 0, "Logged in", "")
+        event = {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "answer"},
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+        }
+        return subprocess.CompletedProcess(args, 0, json.dumps(event) + "\n", "")
+
+    answer = CodexSubscriptionClient(CodexSubscriptionConfig(), runner=runner).answer("hello")
+
+    assert answer.usage.kind is UsageKind.NATIVE
+    assert answer.usage.input_tokens == input_tokens
+    assert answer.usage.output_tokens == output_tokens
 
 
 @pytest.mark.parametrize(

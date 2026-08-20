@@ -321,7 +321,12 @@ def _parse_structured_output(stdout: str) -> StructuredOutput | None:
             usage_dict = cast(dict[str, object], usage_value)
             input_tokens = usage_dict.get("input_tokens")
             output_tokens = usage_dict.get("output_tokens")
-            if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+            if (
+                type(input_tokens) is int
+                and input_tokens >= 0
+                and type(output_tokens) is int
+                and output_tokens >= 0
+            ):
                 usage = AnswerUsage(
                     kind=UsageKind.NATIVE,
                     input_tokens=input_tokens,
