@@ -13,7 +13,7 @@
   "hash_basis": "SHA-256 of the exact UTF-8 manifest.json bytes after replacing the single hashes.manifest.json value with 64 ASCII zeroes",
   "hashes": {
     "comparison.json": "647af1e47e86667bc4178381be6a69569d64bb1cb04486a60fe1cb709bbc146f",
-    "manifest.json": "cc852ff584c51859d47d7f6e5a88485797ca14c28056072228081632909693c8",
+    "manifest.json": "8948b70567987bbadfe02d46f97f8a55039a53cce1a3d10df82ce82520f1be2c",
     "screenshots/report-1280.png": "b71d918f2f2a9cdaea11bc5e098a711433c5383214505d75450b7b09c416c2cc",
     "screenshots/report-375.png": "2d5a68ca1d222a6fabd9d44c6f67575ce70bb9cfd94ad79f6ef5b4c544ff1ef5",
     "screenshots/report-768.png": "6ea06dcc4347d4c15c117b804e2d6957560678a127278e244fdebb403a454bf2",
@@ -30,7 +30,7 @@
         "candidate-pins.json"
       ],
       "recursive_tree": "src/autobrain",
-      "sha256": "63e4797ef5922951eaaf6655e2109ee1decd56415dd2f0d920ca8a71deab9dac",
+      "sha256": "c49ff5e009b8eb3fcd9e3b56541a1b242f5745c1069d9f414d8823d074f71e56",
       "excludes": [
         "**/__pycache__/**",
         "**/*.pyc"

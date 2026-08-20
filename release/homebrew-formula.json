@@ -10,7 +10,7 @@
     "url": "https://github.com/runbear-io/AutoBrain/releases/download/UNAPPROVED/autobrain-0.1.1.tar.gz",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
     "reviewed_commit": null,
-    "tree_sha256": "63e4797ef5922951eaaf6655e2109ee1decd56415dd2f0d920ca8a71deab9dac"
+    "tree_sha256": "c49ff5e009b8eb3fcd9e3b56541a1b242f5745c1069d9f414d8823d074f71e56"
   },
   "head": {
     "url": "https://github.com/runbear-io/AutoBrain.git",

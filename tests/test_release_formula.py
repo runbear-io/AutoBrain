@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import re
 import tarfile
 import tempfile
@@ -20,6 +21,7 @@ from autobrain.release_formula import (
     FormulaParseError,
     ReleaseSourceError,
     classify_archive,
+    generate_prepared_formula,
     load_formula_manifest,
     parse_formula,
     run_cli,
@@ -31,6 +33,12 @@ from autobrain.release_formula import generate_formula as _raw_generate_formula
 ROOT = Path(__file__).parents[1]
 FIXTURES = Path(__file__).parent / "fixtures" / "release"
 MANIFEST = ROOT / "release" / "homebrew-formula.json"
+PREPARED_TAP_FORMULA = Path(
+    os.environ.get(
+        "AUTOBRAIN_PREPARED_TAP_FORMULA",
+        ROOT.parent / "homebrew-autobrain-wt-completeness" / "Formula" / "autobrain.rb",
+    )
+)
 PUBLISHED_PLATFORM_WHEELS = {
     "cffi",
     "cryptography",
@@ -528,20 +536,26 @@ def test_generated_formula_uses_one_explicit_audited_route_for_all_native_wheels
     assert "resource(name).cached_download" in generated
 
 
-def test_generator_is_byte_idempotent_and_matches_tap_formula() -> None:
+def test_prepared_generator_is_byte_idempotent_and_matches_tap_formula() -> None:
     manifest = load_formula_manifest(MANIFEST)
-    generated_once = generate_formula(
+    generated_once = generate_prepared_formula(
         manifest,
         uv_lock_path=ROOT / "uv.lock",
         pyproject_path=ROOT / "pyproject.toml",
     )
-    generated_twice = generate_formula(
+    generated_twice = generate_prepared_formula(
         manifest,
         uv_lock_path=ROOT / "uv.lock",
         pyproject_path=ROOT / "pyproject.toml",
     )
 
     assert generated_once.encode() == generated_twice.encode()
+    assert generated_once.encode() == PREPARED_TAP_FORMULA.read_bytes()
+    assert "NON-PUBLISHABLE" in generated_once
+    assert (
+        'odie "AutoBrain 0.1.1 is not approved for publication or installation"' in generated_once
+    )
+    assert "/archive/refs/tags/v0.1.1" not in generated_once
 
 
 @pytest.mark.parametrize(
