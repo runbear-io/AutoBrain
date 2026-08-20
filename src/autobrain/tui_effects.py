@@ -12,8 +12,14 @@ from pathlib import Path
 from typing import Protocol
 
 from autobrain.auth.models import Provider
+from autobrain.cancellation import RunCancellation
 from autobrain.experiment import ExperimentPlan
 from autobrain.subscription_domain import ProviderId
+
+
+@dataclass(frozen=True, order=True)
+class EffectHandle:
+    value: str
 
 
 @dataclass(frozen=True)
@@ -25,17 +31,19 @@ class LoadConnections:
 @dataclass(frozen=True)
 class InteractiveLogin:
     provider: Provider | ProviderId
+    handle: EffectHandle
 
 
 @dataclass(frozen=True)
 class RunExperiment:
     plan: ExperimentPlan
     provider: ProviderId
+    handle: EffectHandle
 
 
 @dataclass(frozen=True)
 class CancelActiveRun:
-    pass
+    handle: EffectHandle
 
 
 @dataclass(frozen=True)
@@ -64,6 +72,54 @@ class TerminalLifecycle(Protocol):
 
 class LoginRunner(Protocol):
     def __call__(self, effect: InteractiveLogin) -> None: ...
+
+
+@dataclass(frozen=True)
+class _RunExecution:
+    cancellation: RunCancellation
+    started_at: float
+
+
+class EffectRegistry:
+    """The sole mutable registry for host-owned effect resources."""
+
+    def __init__(self) -> None:
+        self._runs: dict[EffectHandle, _RunExecution] = {}
+        self._logins: dict[EffectHandle, AbstractContextManager[None]] = {}
+
+    def register_run(self, handle: EffectHandle, *, started_at: float) -> RunCancellation:
+        if handle in self._runs:
+            raise ValueError(f"duplicate run effect handle: {handle.value}")
+        cancellation = RunCancellation()
+        self._runs[handle] = _RunExecution(cancellation, started_at)
+        return cancellation
+
+    def run_started_at(self, handle: EffectHandle) -> float | None:
+        execution = self._runs.get(handle)
+        return execution.started_at if execution is not None else None
+
+    def cancel_run(self, handle: EffectHandle) -> bool:
+        execution = self._runs.get(handle)
+        if execution is None:
+            return False
+        execution.cancellation.cancel()
+        return True
+
+    def settle_run(self, handle: EffectHandle) -> RunCancellation | None:
+        execution = self._runs.pop(handle, None)
+        return execution.cancellation if execution is not None else None
+
+    def register_login(
+        self,
+        handle: EffectHandle,
+        suspension: AbstractContextManager[None],
+    ) -> None:
+        if handle in self._logins:
+            raise ValueError(f"duplicate login effect handle: {handle.value}")
+        self._logins[handle] = suspension
+
+    def settle_login(self, handle: EffectHandle) -> AbstractContextManager[None] | None:
+        return self._logins.pop(handle, None)
 
 
 class EffectExecutor(Protocol):

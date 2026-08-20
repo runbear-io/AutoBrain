@@ -8,6 +8,7 @@ from autobrain.auth.models import Provider
 from autobrain.models import CandidateId
 from autobrain.orchestration import RunResult, StageEvent
 from autobrain.subscription_domain import ProviderId
+from autobrain.tui_effects import EffectHandle
 from autobrain.tui_runtime import ConnectionSnapshot
 
 
@@ -62,18 +63,35 @@ class ConnectionsLoaded:
 
 
 @dataclass(frozen=True)
+class LoginSettled:
+    handle: EffectHandle
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class StartRun:
     pass
 
 
 @dataclass(frozen=True)
+class RunStarted:
+    handle: EffectHandle
+    started_at: float
+
+
+@dataclass(frozen=True)
 class StageObserved:
     event: StageEvent
-    elapsed_seconds: int
+    observed_at: float
 
 
 @dataclass(frozen=True)
 class CancelRun:
+    pass
+
+
+@dataclass(frozen=True)
+class RequestQuit:
     pass
 
 
@@ -108,9 +126,12 @@ type UiAction = (
     | RefreshConnections
     | RequestLogin
     | ConnectionsLoaded
+    | LoginSettled
     | StartRun
+    | RunStarted
     | StageObserved
     | CancelRun
+    | RequestQuit
     | RunCompleted
     | RunFailed
     | OpenReport

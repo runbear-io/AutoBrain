@@ -4,26 +4,28 @@ from __future__ import annotations
 
 import queue
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import ClassVar
 
 from autobrain.auth.models import Provider
+from autobrain.cancellation import RunCancellation
 from autobrain.models import CandidateId
-from autobrain.orchestration import RunCancellation, RunResult, StageEvent
+from autobrain.orchestration import RunResult, StageEvent
 from autobrain.subscription_domain import ProviderId
 from autobrain.tui_actions import (
     BeginSetup,
     CancelRun,
     ConnectionsLoaded,
     GoBack,
+    LoginSettled,
     Navigate,
     OpenReport,
     RefreshConnections,
     RequestLogin,
+    RequestQuit,
     ResetRun,
     RunCompleted,
     RunFailed,
+    RunStarted,
     SelectProvider,
     StageObserved,
     StartRun,
@@ -33,14 +35,15 @@ from autobrain.tui_actions import (
 )
 from autobrain.tui_effects import (
     CancelActiveRun,
+    EffectRegistry,
     ExitApplication,
     InteractiveLogin,
     LoadConnections,
     OpenExactReport,
     RunExperiment,
     UiEffect,
-    execute_interactive_login,
     open_exact_report,
+    run_login_process,
 )
 from autobrain.tui_runtime import connection_snapshot, execute_plan
 from autobrain.tui_state import UiScreen, UiState, reduce_ui
@@ -104,17 +107,11 @@ if _TEXTUAL_IMPORT_ERROR is None:
         def on_mount(self) -> None:
             self.refresh_view()
 
-        def on_action_requested(self, message: ActionRequested) -> None:
-            self.app.dispatch_ui(message.action)  # type: ignore[attr-defined]
-
         def action_request_quit(self) -> None:
-            if self.app.state.running:  # type: ignore[attr-defined]
-                self.app.dispatch_ui(CancelRun())  # type: ignore[attr-defined]
-            else:
-                self.app.exit()
+            self.post_message(ActionRequested(RequestQuit()))
 
         def action_go_back(self) -> None:
-            self.app.dispatch_ui(GoBack())  # type: ignore[attr-defined]
+            self.post_message(ActionRequested(GoBack()))
 
         def refresh_view(self) -> None:
             model = build_view_model(self.app.state)  # type: ignore[attr-defined]
@@ -207,11 +204,10 @@ if _TEXTUAL_IMPORT_ERROR is None:
             yield ActionButton("Cancel", CancelRun(), id="cancel")
 
         def action_cancel(self) -> None:
-            self.app.dispatch_ui(CancelRun())  # type: ignore[attr-defined]
+            self.post_message(ActionRequested(CancelRun()))
 
         def action_cancel_and_quit(self) -> None:
-            self.app.quit_after_settlement = True  # type: ignore[attr-defined]
-            self.app.dispatch_ui(CancelRun())  # type: ignore[attr-defined]
+            self.post_message(ActionRequested(RequestQuit()))
 
     class ResultsScreen(CockpitScreen):
         screen_id = UiScreen.RESULTS
@@ -248,13 +244,14 @@ if _TEXTUAL_IMPORT_ERROR is None:
                 screen=UiScreen.CONNECTIONS if force_setup else UiScreen.HOME,
                 provider=provider,
             )
-            self.run_cancellation: RunCancellation | None = None
-            self.run_started_at = 0.0
-            self.quit_after_settlement = False
+            self.effect_registry = EffectRegistry()
 
         def on_mount(self) -> None:
             self._show_state_screen()
             self.dispatch_ui(RefreshConnections())
+
+        def on_action_requested(self, message: ActionRequested) -> None:
+            self.dispatch_ui(message.action)
 
         def dispatch_ui(self, action: UiAction) -> None:
             reduction = reduce_ui(self.state, action)
@@ -278,12 +275,25 @@ if _TEXTUAL_IMPORT_ERROR is None:
             if isinstance(effect, LoadConnections):
                 self.load_connections(effect)
             elif isinstance(effect, InteractiveLogin):
-                self.interactive_login(effect)
+                suspension = self.suspend()
+                suspension.__enter__()
+                self.effect_registry.register_login(effect.handle, suspension)
+                try:
+                    self.interactive_login(effect)
+                except BaseException:
+                    registered = self.effect_registry.settle_login(effect.handle)
+                    if registered is not None:
+                        registered.__exit__(None, None, None)
+                    raise
             elif isinstance(effect, RunExperiment):
-                self.run_experiment(effect)
+                started_at = time.monotonic()
+                cancellation = self.effect_registry.register_run(
+                    effect.handle, started_at=started_at
+                )
+                self.dispatch_ui(RunStarted(effect.handle, started_at))
+                self.run_experiment(effect, cancellation)
             elif isinstance(effect, CancelActiveRun):
-                if self.run_cancellation is not None:
-                    self.run_cancellation.cancel()
+                self.effect_registry.cancel_run(effect.handle)
             elif isinstance(effect, OpenExactReport):
                 open_exact_report(effect)
             elif isinstance(effect, ExitApplication):
@@ -302,33 +312,23 @@ if _TEXTUAL_IMPORT_ERROR is None:
                     self.dispatch_ui, RunFailed(f"CONNECTION_PROBE_FAILED: {exc}")
                 )
 
-        @contextmanager
-        def suspended(self) -> Iterator[None]:
-            with self.suspend():
-                yield
-
-        @work(thread=True, exclusive=True, group="login")
+        @work(thread=True, exclusive=True, group="login", exit_on_error=False)
         def interactive_login(self, effect: InteractiveLogin) -> None:
-            try:
-                execute_interactive_login(effect, terminal=self)
-                snapshot = connection_snapshot(
-                    subscription_provider=self.state.provider,
-                    refresh_subscription=True,
-                )
-                self.call_from_thread(self.dispatch_ui, ConnectionsLoaded(snapshot))
-            except Exception as exc:
-                self.call_from_thread(self.dispatch_ui, RunFailed(f"LOGIN_FAILED: {exc}"))
+            run_login_process(effect)
 
         @work(thread=True, exclusive=True, group="run", exit_on_error=False)
-        def run_experiment(self, effect: RunExperiment) -> RunResult:
+        def run_experiment(
+            self,
+            effect: RunExperiment,
+            cancellation: RunCancellation,
+        ) -> RunResult:
             result_queue: queue.Queue[RunResult | BaseException] = queue.Queue(maxsize=1)
-            cancellation = RunCancellation()
-            self.run_cancellation = cancellation
-            self.run_started_at = time.monotonic()
 
             def observed(event: StageEvent) -> None:
-                elapsed = int(time.monotonic() - self.run_started_at)
-                self.call_from_thread(self.dispatch_ui, StageObserved(event, elapsed))
+                self.call_from_thread(
+                    self.dispatch_ui,
+                    StageObserved(event, observed_at=time.monotonic()),
+                )
 
             execute_plan(
                 effect.plan,
@@ -343,17 +343,34 @@ if _TEXTUAL_IMPORT_ERROR is None:
             return completed
 
         def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+            if event.state not in {WorkerState.SUCCESS, WorkerState.ERROR, WorkerState.CANCELLED}:
+                return
+            if event.worker.group == "login":
+                handle = self.state.active_login_handle
+                if handle is None:
+                    return
+                suspension = self.effect_registry.settle_login(handle)
+                if suspension is not None:
+                    suspension.__exit__(None, None, None)
+                error = str(event.worker.error) if event.state is WorkerState.ERROR else ""
+                self.dispatch_ui(LoginSettled(handle, error))
+                return
             if event.worker.group != "run":
                 return
+            handle = self.state.active_run_handle
+            if handle is None:
+                return
+            self.effect_registry.settle_run(handle)
+            quit_after = self.state.quit_after_settlement
             if event.state is WorkerState.SUCCESS:
                 self.dispatch_ui(RunCompleted(event.worker.result))
-                if self.quit_after_settlement:
-                    self.exit()
             elif event.state is WorkerState.ERROR:
                 error = event.worker.error
                 self.dispatch_ui(RunFailed(f"RUN_FAILED: {type(error).__name__}: {error}"))
-                if self.quit_after_settlement:
-                    self.exit()
+            else:
+                self.dispatch_ui(RunFailed("RUN_CANCELLED: worker cancelled"))
+            if quit_after:
+                self.dispatch_ui(RequestQuit())
 
 
 def run_textual(*, force_setup: bool = False, provider: ProviderId = ProviderId.CODEX) -> None:

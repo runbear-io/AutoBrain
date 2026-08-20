@@ -13,8 +13,13 @@ from autobrain.subscription import ProviderId, SubscriptionStatus
 from autobrain.tui_actions import (
     CancelRun,
     ConnectionsLoaded,
+    LoginSettled,
     OpenReport,
+    RequestLogin,
+    RequestQuit,
+    ResetRun,
     RunCompleted,
+    RunStarted,
     SelectProvider,
     StageObserved,
     StartRun,
@@ -22,6 +27,8 @@ from autobrain.tui_actions import (
 )
 from autobrain.tui_effects import (
     CancelActiveRun,
+    EffectHandle,
+    EffectRegistry,
     InteractiveLogin,
     OpenExactReport,
     RunExperiment,
@@ -63,6 +70,52 @@ def test_reducer_is_immutable_and_emits_semantic_effects() -> None:
     assert candidate not in toggled.state.selected_candidates
 
 
+def test_lifecycle_identity_timestamps_and_quit_intent_live_in_immutable_state() -> None:
+    state = reduce_ui(UiState(), ConnectionsLoaded(_connections())).state
+    started = reduce_ui(state, StartRun())
+    effect = started.effects[-1]
+    assert isinstance(effect, RunExperiment)
+    assert started.state.active_run_handle == effect.handle
+    assert started.state.run_started_at is None
+
+    running = reduce_ui(started.state, RunStarted(effect.handle, started_at=41.5))
+    assert running.state.run_started_at == 41.5
+    quitting = reduce_ui(running.state, RequestQuit())
+    assert quitting.state.quit_after_settlement is True
+    assert quitting.effects == (CancelActiveRun(effect.handle),)
+
+    idle_quit = reduce_ui(UiState(), RequestQuit())
+    assert idle_quit.effects[-1].__class__.__name__ == "ExitApplication"
+
+
+def test_login_lifecycle_is_reduced_by_handle_and_refreshes_after_restore() -> None:
+    requested = reduce_ui(UiState(), RequestLogin(ProviderId.CLAUDE))
+    effect = requested.effects[-1]
+    assert isinstance(effect, InteractiveLogin)
+    assert requested.state.active_login_handle == effect.handle
+    settled = reduce_ui(requested.state, LoginSettled(effect.handle))
+    assert settled.state.active_login_handle is None
+    assert settled.effects[-1].__class__.__name__ == "LoadConnections"
+
+
+def test_effect_registry_owns_cancellation_handles() -> None:
+    registry = EffectRegistry()
+    handle = EffectHandle("run-1")
+    cancellation = registry.register_run(handle, started_at=10.0)
+    assert registry.run_started_at(handle) == 10.0
+    assert registry.cancel_run(handle) is True
+    assert cancellation.cancelled is True
+    assert registry.settle_run(handle) is cancellation
+    assert registry.cancel_run(handle) is False
+
+
+def test_reset_is_explicit_and_unknown_actions_are_rejected() -> None:
+    reset = reduce_ui(UiState(screen=UiScreen.RESULTS), ResetRun())
+    assert reset.state.screen is UiScreen.HOME
+    with __import__("pytest").raises(AssertionError):
+        reduce_ui(UiState(), object())  # type: ignore[arg-type]
+
+
 def test_run_stage_cancel_completion_and_exact_report_are_reduced_purely(tmp_path: Path) -> None:
     state = reduce_ui(UiState(), ConnectionsLoaded(_connections())).state
     started = reduce_ui(state, StartRun())
@@ -77,7 +130,10 @@ def test_run_stage_cancel_completion_and_exact_report_are_reduced_purely(tmp_pat
         detail="20 cases",
         started_at="2026-08-20T00:00:00+00:00",
     )
-    observed = reduce_ui(started.state, StageObserved(event, elapsed_seconds=9))
+    effect = started.effects[-1]
+    assert isinstance(effect, RunExperiment)
+    running_state = reduce_ui(started.state, RunStarted(effect.handle, started_at=10.0)).state
+    observed = reduce_ui(running_state, StageObserved(event, observed_at=19.0))
     running = build_view_model(observed.state)
     assert running.stage == "candidate:mem0"
     assert running.elapsed == "00:09"
@@ -85,7 +141,7 @@ def test_run_stage_cancel_completion_and_exact_report_are_reduced_purely(tmp_pat
 
     cancelling = reduce_ui(observed.state, CancelRun())
     assert cancelling.state.cancelling is True
-    assert cancelling.effects == (CancelActiveRun(),)
+    assert cancelling.effects == (CancelActiveRun(effect.handle),)
 
     report = tmp_path / "report.html"
     result = RunResult(
@@ -122,12 +178,61 @@ def test_interactive_login_always_restores_terminal() -> None:
 
     with suppress(RuntimeError):
         execute_interactive_login(
-            InteractiveLogin(ProviderId.CLAUDE),
+            InteractiveLogin(ProviderId.CLAUDE, EffectHandle("login-test")),
             terminal=Terminal(),
             login=fail,
         )
 
     assert lifecycle == ["suspend", "login", "restore"]
+
+
+def test_textual_widgets_have_no_direct_exit_or_parallel_lifecycle_mutation() -> None:
+    path = Path(__file__).parents[1] / "src" / "autobrain" / "tui_textual.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
+    forbidden_attributes = {"run_cancellation", "run_started_at", "quit_after_settlement"}
+    assert not any(
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+        and node.attr in forbidden_attributes
+        for node in ast.walk(tree)
+    )
+    screen_classes = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.If)
+        for child in node.body
+        if isinstance(child, ast.ClassDef)
+        for node in [child]
+        if any(
+            isinstance(base, ast.Name) and base.id in {"Screen", "CockpitScreen", "Button"}
+            for base in child.bases
+        )
+    }
+    methods = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    execute = methods["_execute"]
+    login_worker = methods["interactive_login"]
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "suspend"
+        for node in ast.walk(execute)
+    )
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"suspend", "call_from_thread", "dispatch_ui"}
+        for node in ast.walk(login_worker)
+    )
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name not in screen_classes:
+            continue
+        assert not any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and child.func.attr == "exit"
+            for child in ast.walk(node)
+        ), node.name
 
 
 def test_default_and_shared_tui_modules_do_not_import_curses() -> None:

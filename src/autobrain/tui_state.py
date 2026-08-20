@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import assert_never
 
 from autobrain.auth.models import Provider
 from autobrain.embedding import EmbeddingReadiness, inspect_embedding_backend
@@ -16,12 +17,16 @@ from autobrain.tui_actions import (
     CancelRun,
     ConnectionsLoaded,
     GoBack,
+    LoginSettled,
     Navigate,
     OpenReport,
     RefreshConnections,
     RequestLogin,
+    RequestQuit,
+    ResetRun,
     RunCompleted,
     RunFailed,
+    RunStarted,
     SelectProvider,
     SkipSource,
     StageObserved,
@@ -32,6 +37,8 @@ from autobrain.tui_actions import (
 )
 from autobrain.tui_effects import (
     CancelActiveRun,
+    EffectHandle,
+    ExitApplication,
     InteractiveLogin,
     LoadConnections,
     OpenExactReport,
@@ -82,6 +89,11 @@ class UiState:
     terminal_reason: str = ""
     running: bool = False
     cancelling: bool = False
+    active_run_handle: EffectHandle | None = None
+    active_login_handle: EffectHandle | None = None
+    run_started_at: float | None = None
+    quit_after_settlement: bool = False
+    next_effect_sequence: int = 1
     return_home: bool = False
 
     @property
@@ -227,6 +239,11 @@ def _candidate_stage_statuses(
     return tuple((candidate, values.get(candidate, "PENDING")) for candidate in CandidateId)
 
 
+def _next_handle(state: UiState, kind: str) -> tuple[EffectHandle, UiState]:
+    handle = EffectHandle(f"{kind}-{state.next_effect_sequence}")
+    return handle, replace(state, next_effect_sequence=state.next_effect_sequence + 1)
+
+
 def reduce_ui(state: UiState, action: UiAction) -> Reduction:
     """Apply one semantic action without performing I/O."""
     if isinstance(action, BeginSetup):
@@ -252,7 +269,23 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
     if isinstance(action, RefreshConnections):
         return Reduction(state, (LoadConnections(state.provider, refresh=True),))
     if isinstance(action, RequestLogin):
-        return Reduction(state, (InteractiveLogin(action.provider),))
+        handle, sequenced = _next_handle(state, "login")
+        return Reduction(
+            replace(sequenced, active_login_handle=handle),
+            (InteractiveLogin(action.provider, handle),),
+        )
+    if isinstance(action, LoginSettled):
+        if action.handle != state.active_login_handle:
+            return Reduction(state)
+        settled = replace(
+            state,
+            active_login_handle=None,
+            setup_error=(f"LOGIN_FAILED: {action.error}" if action.error else ""),
+        )
+        effects: tuple[UiEffect, ...] = (
+            () if action.error else (LoadConnections(state.provider, refresh=True),)
+        )
+        return Reduction(settled, effects)
     if isinstance(action, ConnectionsLoaded):
         snapshot = action.snapshot
         loaded = replace(
@@ -267,8 +300,9 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
     if isinstance(action, StartRun):
         if state.plan is None:
             return Reduction(replace(state, setup_error=state.setup_error or "PLAN_UNAVAILABLE"))
+        handle, sequenced = _next_handle(state, "run")
         started = replace(
-            state,
+            sequenced,
             screen=UiScreen.RUNNING,
             running=True,
             cancelling=False,
@@ -277,14 +311,26 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
             elapsed_seconds=0,
             candidate_statuses=tuple((item, "PENDING") for item in state.selected_candidates),
             terminal_reason="",
+            active_run_handle=handle,
+            run_started_at=None,
+            quit_after_settlement=False,
         )
-        return Reduction(started, (RunExperiment(state.plan, state.provider),))
+        return Reduction(started, (RunExperiment(state.plan, state.provider, handle),))
+    if isinstance(action, RunStarted):
+        if action.handle != state.active_run_handle:
+            return Reduction(state)
+        return Reduction(replace(state, run_started_at=action.started_at))
     if isinstance(action, StageObserved):
+        elapsed = (
+            max(0, int(action.observed_at - state.run_started_at))
+            if state.run_started_at is not None
+            else 0
+        )
         return Reduction(
             replace(
                 state,
                 latest_stage=action.event,
-                elapsed_seconds=max(0, action.elapsed_seconds),
+                elapsed_seconds=elapsed,
                 candidate_statuses=_candidate_stage_statuses(
                     state.candidate_statuses, action.event
                 ),
@@ -293,7 +339,18 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
     if isinstance(action, CancelRun):
         if not state.running or state.cancelling:
             return Reduction(state)
-        return Reduction(replace(state, cancelling=True), (CancelActiveRun(),))
+        assert state.active_run_handle is not None
+        return Reduction(
+            replace(state, cancelling=True),
+            (CancelActiveRun(state.active_run_handle),),
+        )
+    if isinstance(action, RequestQuit):
+        if state.running and state.active_run_handle is not None:
+            return Reduction(
+                replace(state, cancelling=True, quit_after_settlement=True),
+                (CancelActiveRun(state.active_run_handle),),
+            )
+        return Reduction(state, (ExitApplication(),))
     if isinstance(action, RunCompleted):
         result = action.result
         statuses = dict(state.candidate_statuses)
@@ -312,6 +369,8 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
                 result=result,
                 terminal_reason=result.status.value,
                 candidate_statuses=tuple(statuses.items()),
+                active_run_handle=None,
+                run_started_at=None,
             )
         )
     if isinstance(action, RunFailed):
@@ -323,19 +382,28 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
                 cancelling=False,
                 terminal_reason=action.reason,
                 setup_error=action.reason,
+                active_run_handle=None,
+                run_started_at=None,
             )
         )
     if isinstance(action, OpenReport):
         if state.result is None or state.result.report_path is None:
             return Reduction(state)
         return Reduction(state, (OpenExactReport(state.result.report_path),))
-    return Reduction(
-        replace(
-            state,
-            screen=UiScreen.HOME,
-            result=None,
-            latest_stage=None,
-            terminal_reason="",
-            elapsed_seconds=0,
-        )
-    )
+    match action:
+        case ResetRun():
+            return Reduction(
+                replace(
+                    state,
+                    screen=UiScreen.HOME,
+                    result=None,
+                    latest_stage=None,
+                    terminal_reason="",
+                    elapsed_seconds=0,
+                    active_run_handle=None,
+                    run_started_at=None,
+                    quit_after_settlement=False,
+                )
+            )
+        case _:
+            assert_never(action)
