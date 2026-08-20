@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import time
 from collections.abc import Callable
@@ -20,6 +21,7 @@ from autobrain.cancellation import RunCancellation
 from autobrain.models import CandidateId
 from autobrain.orchestration import RunResult, StageEvent
 from autobrain.subscription_domain import ProviderId
+from autobrain.subscription_process import sanitize_diagnostic
 from autobrain.tui_actions import (
     BeginSetup,
     CancelRun,
@@ -56,6 +58,18 @@ from autobrain.tui_effects import (
 from autobrain.tui_runtime import connection_snapshot, execute_plan
 from autobrain.tui_state import UiScreen, UiState, reduce_ui
 from autobrain.tui_viewmodels import build_view_model
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _safe_worker_error_name(operation: str, error: BaseException | None) -> str:
+    """Classify worker failures without exposing exception text to UI or logs."""
+    error_name = sanitize_diagnostic(
+        type(error).__name__ if error is not None else "UnknownError",
+        limit=100,
+    )
+    _LOGGER.warning("%s: %s", operation, error_name)
+    return error_name
 
 
 class ActionRequested(Message):
@@ -301,7 +315,11 @@ class AutoBrainApp(App[None]):
             self.call_from_thread(self.dispatch_ui, ConnectionsLoaded(snapshot))
         except Exception as exc:
             self.call_from_thread(
-                self.dispatch_ui, RunFailed(f"CONNECTION_PROBE_FAILED: {exc}")
+                self.dispatch_ui,
+                RunFailed(
+                    "CONNECTION_PROBE_FAILED: "
+                    f"{_safe_worker_error_name('CONNECTION_PROBE_FAILED', exc)}"
+                ),
             )
 
     @work(thread=True, exclusive=True, group="login", exit_on_error=False)
@@ -345,7 +363,11 @@ class AutoBrainApp(App[None]):
             suspension = self.effect_registry.settle_login(handle)
             if suspension is not None:
                 suspension.__exit__(None, None, None)
-            error = str(worker.error) if event.state is WorkerState.ERROR else ""
+            error = (
+                _safe_worker_error_name("LOGIN_FAILED", worker.error)
+                if event.state is WorkerState.ERROR
+                else ""
+            )
             self.dispatch_ui(LoginSettled(handle, error))
             return
         if worker.group != "run":
@@ -358,8 +380,9 @@ class AutoBrainApp(App[None]):
         if event.state is WorkerState.SUCCESS:
             self.dispatch_ui(RunCompleted(cast(RunResult, worker.result)))
         elif event.state is WorkerState.ERROR:
-            error = worker.error
-            self.dispatch_ui(RunFailed(f"RUN_FAILED: {type(error).__name__}: {error}"))
+            self.dispatch_ui(
+                RunFailed(f"RUN_FAILED: {_safe_worker_error_name('RUN_FAILED', worker.error)}")
+            )
         else:
             self.dispatch_ui(RunFailed("RUN_CANCELLED: worker cancelled"))
         if quit_after:
