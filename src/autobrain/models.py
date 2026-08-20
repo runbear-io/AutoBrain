@@ -241,6 +241,8 @@ class LatencySpanKind(StrEnum):
 class ChatProvenance(StrictModel):
     provider: str | None = Field(default=None, min_length=1)
     model: str | None = Field(default=None, min_length=1)
+    cli_version: str | None = Field(default=None, min_length=1)
+    auth_kind: str | None = Field(default=None, min_length=1)
 
 
 class EmbeddingProvenance(StrictModel):

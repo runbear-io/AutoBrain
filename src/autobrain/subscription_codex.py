@@ -72,15 +72,42 @@ class CodexSubscriptionClient:
     runner: Runner = run_provider_process
     interactive_runner: InteractiveRunner = run_interactive_provider_process
     last_answer: ProviderAnswer | None = field(default=None, init=False)
+    _identity: ProviderIdentity | None = field(default=None, init=False)
 
     @property
     def identity(self) -> ProviderIdentity:
+        if self._identity is not None:
+            return self._identity
         return ProviderIdentity(
             provider=ProviderId.CODEX,
             model=self.config.model,
             cli_version=None,
             auth_kind=AuthKind.CONSUMER_SUBSCRIPTION,
         )
+
+    def probe_identity(self) -> ProviderIdentity:
+        try:
+            result = self.runner(
+                [self.config.command, "--version"],
+                "",
+                self.config.timeout_seconds,
+            )
+        except (
+            subprocess.TimeoutExpired,
+            ProviderProcessTimeout,
+            ProviderProcessCancelled,
+            OSError,
+        ):
+            return self.identity
+        cli_version = sanitize_diagnostic(result.stdout) if result.returncode == 0 else ""
+        base_identity = self.identity
+        self._identity = ProviderIdentity(
+            provider=base_identity.provider,
+            model=base_identity.model,
+            cli_version=cli_version or None,
+            auth_kind=base_identity.auth_kind,
+        )
+        return self._identity
 
     @property
     def capabilities(self) -> frozenset[ProviderCapability]:
@@ -160,7 +187,10 @@ class CodexSubscriptionClient:
 
     def status(self) -> SubscriptionStatus:
         """Compatibility mapping from detailed status reports to the legacy enum."""
-        return self.probe_status().status
+        report = self.probe_status()
+        if report.reason is SubscriptionFailureReason.STATUS_NONZERO:
+            return SubscriptionStatus.SUBSCRIPTION_AUTH_UNAVAILABLE
+        return report.status
 
     def ask_answer(self, prompt: str) -> ProviderAnswer:
         if not prompt.strip():
@@ -219,15 +249,17 @@ class CodexSubscriptionClient:
                 "Codex returned no assistant answer",
                 reason=SubscriptionFailureReason.EXECUTION_EMPTY_ANSWER,
             )
+        base_identity = self.identity
+        self._identity = ProviderIdentity(
+            provider=base_identity.provider,
+            model=base_identity.model,
+            cli_version=parsed.cli_version or base_identity.cli_version,
+            auth_kind=base_identity.auth_kind,
+        )
         return ProviderAnswer(
             text=parsed.answer,
             usage=parsed.usage,
-            identity=ProviderIdentity(
-                provider=self.identity.provider,
-                model=self.identity.model,
-                cli_version=parsed.cli_version,
-                auth_kind=self.identity.auth_kind,
-            ),
+            identity=self._identity,
         )
 
     def answer(self, prompt: str) -> ProviderAnswer:

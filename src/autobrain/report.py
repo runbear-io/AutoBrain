@@ -292,6 +292,8 @@ def render_report(artifact: ComparisonArtifact) -> str:
     )
     chat_provider = artifact.provenance.chat.provider or "unavailable"
     chat_model = artifact.provenance.chat.model or "unavailable"
+    chat_cli_version = artifact.provenance.chat.cli_version or "unavailable"
+    chat_auth_kind = artifact.provenance.chat.auth_kind or "unavailable"
     embedding_backend = artifact.provenance.embedding.backend or "unavailable"
     embedding_quality = (
         artifact.provenance.embedding.quality.value
@@ -376,6 +378,8 @@ def render_report(artifact: ComparisonArtifact) -> str:
         <div><dl class="metrics">
           <div><dt>Chat provider</dt><dd>{_escape(chat_provider)}</dd></div>
           <div><dt>Chat model</dt><dd>{_escape(chat_model)}</dd></div>
+          <div><dt>Chat CLI version</dt><dd>{_escape(chat_cli_version)}</dd></div>
+          <div><dt>Chat auth kind</dt><dd>{_escape(chat_auth_kind)}</dd></div>
           <div><dt>Embedding backend</dt><dd>{_escape(embedding_backend)}</dd></div>
           <div><dt>Embedding quality</dt><dd>{_escape(embedding_quality)}</dd></div>
           <div><dt>Usage source</dt><dd>

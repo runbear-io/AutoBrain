@@ -48,7 +48,12 @@ def _candidate() -> CandidateEvaluation:
 
 def _provenance() -> BenchmarkProvenance:
     return BenchmarkProvenance(
-        chat=ChatProvenance(provider="openai", model="gpt-5-mini"),
+        chat=ChatProvenance(
+            provider="openai",
+            model="gpt-5-mini",
+            cli_version=None,
+            auth_kind="api_key",
+        ),
         embedding=EmbeddingProvenance(
             backend="openai:text-embedding-3-small",
             quality=EmbeddingQuality.SEMANTIC,
@@ -94,6 +99,8 @@ def test_provenance_round_trips_with_json_html_parity_and_null_preservation(
     assert payload["provenance"]["chat"] == {
         "provider": "openai",
         "model": "gpt-5-mini",
+        "cli_version": None,
+        "auth_kind": "api_key",
     }
     assert payload["provenance"]["embedding"] == {
         "backend": "openai:text-embedding-3-small",
@@ -307,6 +314,8 @@ def test_orchestration_records_only_known_runtime_provenance(tmp_path: Path) -> 
 
     assert before_usage.chat.provider == "codex"
     assert before_usage.chat.model is None
+    assert before_usage.chat.cli_version is None
+    assert before_usage.chat.auth_kind == "consumer_subscription"
     assert before_usage.embedding.backend == "local-hash-embedding"
     assert before_usage.embedding.quality is EmbeddingQuality.SMOKE_ONLY
     assert before_usage.usage_source is UsageSource.UNAVAILABLE
@@ -329,12 +338,40 @@ def test_orchestration_records_only_known_runtime_provenance(tmp_path: Path) -> 
         candidates=(),
         provider_available=False,
     ).benchmark_provenance([_candidate()])
-    assert api.chat == ChatProvenance(provider="openai", model="gpt-5-mini")
+    assert api.chat == ChatProvenance(
+        provider="openai",
+        model="gpt-5-mini",
+        cli_version=None,
+        auth_kind="api_key",
+    )
     assert api.embedding == EmbeddingProvenance(
         backend="openai:text-embedding-3-small",
         quality=EmbeddingQuality.SEMANTIC,
     )
     assert api.usage_source is UsageSource.MEASURED
+
+
+def test_orchestration_uses_runtime_subscription_identity_for_provenance(tmp_path: Path) -> None:
+    runtime_chat = ChatProvenance(
+        provider="codex",
+        model="gpt-5",
+        cli_version="codex-cli 1.2.3",
+        auth_kind="consumer_subscription",
+    )
+    orchestrator = RunOrchestrator(
+        config=RunConfig(output=tmp_path, provider_mode="codex-subscription"),
+        connectors=(),
+        candidates=(),
+        provider_available=False,
+        chat_provenance_provider=lambda: runtime_chat,
+    )
+
+    assert orchestrator.benchmark_provenance().chat == runtime_chat
+
+    result = orchestrator.run()
+    manifest = json.loads((result.run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["provenance"]["chat"] == runtime_chat.model_dump(mode="json")
 
 
 def test_existing_schema_v1_manifest_reopens_read_only() -> None:

@@ -299,6 +299,7 @@ class RunOrchestrator:
         test_mode: Mapping[str, Any] | None = None,
         candidate_builder: Callable[..., Sequence[Candidate]] | None = None,
         provider_key: str | None = None,
+        chat_provenance_provider: Callable[[], ChatProvenance] | None = None,
         browser_open: Callable[[str], bool] = webbrowser.open,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -316,6 +317,7 @@ class RunOrchestrator:
         self.test_mode = dict(test_mode or {"enabled": False})
         self._candidate_builder = candidate_builder
         self._provider_key = provider_key
+        self._chat_provenance_provider = chat_provenance_provider
         self.browser_open = browser_open
         self.now = now or (lambda: datetime.now(UTC))
         self._stages: list[dict[str, Any]] = []
@@ -400,6 +402,7 @@ class RunOrchestrator:
             )
 
         subscription_upstream: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+        chat_provenance_provider: Callable[[], ChatProvenance] | None = None
         if config.provider_mode == "codex-subscription":
             from autobrain.subscription import (
                 CodexSubscriptionClient,
@@ -419,7 +422,20 @@ class RunOrchestrator:
                     provider_detail=f"{subscription_status.value}: run `codex login`",
                     provider_status=Status.CAPABILITY_UNAVAILABLE,
                 )
+            subscription_identity = subscription_client.probe_identity()
             subscription_upstream = build_subscription_upstream(subscription_client)
+
+            def selected_chat_provenance() -> ChatProvenance:
+                answer = subscription_client.last_answer
+                identity = answer.identity if answer is not None else subscription_identity
+                return ChatProvenance(
+                    provider=identity.provider.value,
+                    model=identity.model,
+                    cli_version=identity.cli_version,
+                    auth_kind=identity.auth_kind.value,
+                )
+
+            chat_provenance_provider = selected_chat_provenance
 
         resolved_api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
         if not resolved_api_key and config.provider_mode == "api":
@@ -489,6 +505,7 @@ class RunOrchestrator:
             provider_available=True,
             candidate_builder=selected_candidate_builder,
             provider_key=resolved_api_key,
+            chat_provenance_provider=chat_provenance_provider,
         )
 
     @classmethod
@@ -1547,12 +1564,17 @@ class RunOrchestrator:
         if self.test_mode.get("enabled") is True:
             return BenchmarkProvenance()
         subscription = self.config.provider_mode == "codex-subscription"
-        chat = ChatProvenance(
-            provider="codex" if subscription else "openai",
-            model=(os.environ.get("AUTOBRAIN_SUBSCRIPTION_MODEL") or None)
-            if subscription
-            else "gpt-5-mini",
-        )
+        if self._chat_provenance_provider is not None:
+            chat = self._chat_provenance_provider()
+        else:
+            chat = ChatProvenance(
+                provider="codex" if subscription else "openai",
+                model=(os.environ.get("AUTOBRAIN_SUBSCRIPTION_MODEL") or None)
+                if subscription
+                else "gpt-5-mini",
+                cli_version=None,
+                auth_kind="consumer_subscription" if subscription else "api_key",
+            )
         embedding = EmbeddingProvenance(
             backend="local-hash-embedding" if subscription else "openai:text-embedding-3-small",
             quality=EmbeddingQuality.SMOKE_ONLY if subscription else EmbeddingQuality.SEMANTIC,

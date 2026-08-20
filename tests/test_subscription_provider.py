@@ -11,6 +11,7 @@ from autobrain.subscription import (
     CodexSubscriptionConfig,
     ProviderCapability,
     ProviderId,
+    ProviderIdentity,
     SubscriptionError,
     SubscriptionFailureReason,
     SubscriptionStatus,
@@ -52,6 +53,26 @@ def test_codex_status_probe_distinguishes_public_failure_reasons(
     assert client.probe_status().reason is SubscriptionFailureReason.AUTH_UNAVAILABLE
 
 
+def test_legacy_status_maps_generic_nonzero_to_auth_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def available(_command: str) -> str:
+        return "/codex"
+
+    monkeypatch.setattr("autobrain.subscription_codex.shutil.which", available)
+
+    def runner(
+        args: Sequence[str],
+        _stdin: str,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 7, "", "generic failure")
+
+    client = CodexSubscriptionClient(CodexSubscriptionConfig(), runner=runner)
+
+    assert client.status() is SubscriptionStatus.SUBSCRIPTION_AUTH_UNAVAILABLE
+
+
 def test_codex_missing_cli_has_login_unavailable_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -64,6 +85,28 @@ def test_codex_missing_cli_has_login_unavailable_reason(
 
     assert report.status is SubscriptionStatus.SUBSCRIPTION_CLI_UNAVAILABLE
     assert report.reason is SubscriptionFailureReason.LOGIN_UNAVAILABLE
+
+
+def test_codex_adapter_probes_cli_version_for_persisted_identity() -> None:
+    def runner(
+        args: Sequence[str],
+        _stdin: str,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        assert list(args) == ["codex", "--version"]
+        return subprocess.CompletedProcess(args, 0, "codex-cli 1.2.3\n", "")
+
+    client = CodexSubscriptionClient(
+        CodexSubscriptionConfig(model="gpt-5"),
+        runner=runner,
+    )
+
+    assert client.probe_identity() == ProviderIdentity(
+        provider=ProviderId.CODEX,
+        model="gpt-5",
+        cli_version="codex-cli 1.2.3",
+        auth_kind=AuthKind.CONSUMER_SUBSCRIPTION,
+    )
 
 
 def test_codex_adapter_exposes_typed_identity_capabilities_and_native_usage() -> None:
