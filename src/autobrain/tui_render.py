@@ -1,6 +1,7 @@
 """Terminal rendering for the AutoBrain cockpit."""
 
 from autobrain.auth.models import Provider
+from autobrain.embedding import EmbeddingReadiness
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
 from autobrain.orchestration import RunResult, StageEvent
@@ -33,6 +34,7 @@ def render_dashboard(
     source_details: dict[Provider, str] | None = None,
     latest_stage: StageEvent | None = None,
     subscription_provider: ProviderId = ProviderId.CODEX,
+    embedding_readiness: EmbeddingReadiness | None = None,
 ) -> list[str]:
     usable_width = max(1, width - 2)
     details = source_details or {}
@@ -58,6 +60,7 @@ def render_dashboard(
             plan=plan,
             setup_error=setup_error,
             source_details=details,
+            embedding_readiness=embedding_readiness,
         )
     elif section == "running":
         lines = _running(
@@ -80,6 +83,7 @@ def render_dashboard(
             plan,
             setup_error,
             details,
+            embedding_readiness,
         )
     return [truncate_terminal_text(line, usable_width) for line in lines]
 

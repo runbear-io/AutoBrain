@@ -27,7 +27,14 @@ from autobrain.auth.service import ConnectionManager
 from autobrain.benchmark import LeakageScanResult, scan_benchmark_leakage
 from autobrain.cancellation import RunCancellation, RunCancelled
 from autobrain.corpus import normalize_raw_items
-from autobrain.decision import select_winner
+from autobrain.decision import eligibility_reasons, select_winner
+from autobrain.embedding import (
+    EmbeddingBackend,
+    EmbeddingBackendConfig,
+    EmbeddingBackendRegistry,
+    build_openai_embedding_upstream,
+    production_embedding_registry,
+)
 from autobrain.evaluate import evaluate_candidate, evaluate_case
 from autobrain.experiment import automatic_experiment_copy
 from autobrain.models import (
@@ -42,8 +49,6 @@ from autobrain.models import (
     CoverageCompleteness,
     CoverageRecord,
     DecisionResult,
-    EmbeddingProvenance,
-    EmbeddingQuality,
     LatencySpan,
     LatencySpanKind,
     SourceKind,
@@ -227,6 +232,12 @@ class RunConfig:
     output: Path | None = None
     run_id: str | None = None
     provider_mode: str = "api"
+    embedding_backend: EmbeddingBackend | str | None = None
+    embedding_registry: EmbeddingBackendRegistry = field(
+        default_factory=production_embedding_registry,
+        repr=False,
+        compare=False,
+    )
     selected_sources: tuple[Provider, ...] = (Provider.SLACK, Provider.NOTION)
     selected_candidates: tuple[CandidateId, ...] = tuple(CandidateId)
     slack_export_path: Path | None = None
@@ -246,6 +257,17 @@ class RunConfig:
         subscription_modes = {f"{provider.value}-subscription" for provider in ProviderId}
         if self.provider_mode not in {"api", *subscription_modes}:
             raise ValueError("provider_mode must be api or <codex|claude|kimi|grok>-subscription")
+        requested_embedding = self.embedding_backend or (
+            EmbeddingBackend.OPENAI if self.provider_mode == "api" else EmbeddingBackend.LOCAL_HASH
+        )
+        embedding = EmbeddingBackendConfig.from_environ(
+            {},
+            requested=requested_embedding,
+            registry=self.embedding_registry,
+        )
+        object.__setattr__(self, "embedding_backend", embedding.backend)
+        if self.provider_mode == "api" and embedding.backend != EmbeddingBackend.OPENAI.value:
+            raise ValueError("api provider mode requires embedding_backend=openai")
         if not self.selected_sources:
             raise ValueError("selected_sources must include Slack or Notion")
         if len(set(self.selected_sources)) != len(self.selected_sources):
@@ -266,6 +288,19 @@ class RunConfig:
             object.__setattr__(self, "experiment_title", automatic_title)
         if not self.experiment_description:
             object.__setattr__(self, "experiment_description", automatic_description)
+
+    def embedding_config(
+        self,
+        *,
+        environ: Mapping[str, str],
+        api_key: str | None = None,
+    ) -> EmbeddingBackendConfig:
+        return EmbeddingBackendConfig.from_environ(
+            environ,
+            requested=self.embedding_backend,
+            api_key=api_key,
+            registry=self.embedding_registry,
+        )
 
 
 @dataclass(frozen=True)
@@ -353,6 +388,10 @@ class RunOrchestrator:
         self._candidate_builder = candidate_builder
         self._provider_key = provider_key
         self._chat_provenance_provider = chat_provenance_provider
+        self._embedding_descriptor = config.embedding_config(
+            environ={},
+            api_key=provider_key,
+        ).descriptor
         self.browser_open = browser_open
         self.now = now or (lambda: datetime.now(UTC))
         self._monotonic = monotonic_clock
@@ -383,6 +422,26 @@ class RunOrchestrator:
         cancellation: RunCancellation | None = None,
     ) -> RunOrchestrator:
         """Build the production workflow without opening provider connections."""
+        resolved_api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
+        embedding_config = config.embedding_config(
+            environ=os.environ,
+            api_key=resolved_api_key,
+        )
+        embedding_readiness = embedding_config.readiness()
+        if (
+            embedding_config.descriptor.recommendation_eligible
+            and not embedding_readiness.recommendation_ready
+        ):
+            return cls(
+                config=config,
+                connectors=(),
+                candidates=(),
+                provider_available=False,
+                provider_detail=embedding_readiness.detail,
+                provider_status=embedding_readiness.status,
+                stage_event_sink=stage_event_sink,
+                cancellation=cancellation,
+            )
         state_root = AutoBrainPaths.from_home().root
         manager = connection_manager or ConnectionManager(state_root)
         connections = manager.status().connections
@@ -476,7 +535,15 @@ class RunOrchestrator:
                     cancellation=cancellation,
                 )
             subscription_identity = subscription_client.probe_identity()
-            subscription_upstream = build_subscription_upstream(subscription_client)
+            embedding_upstream = (
+                build_openai_embedding_upstream(embedding_config)
+                if embedding_config.descriptor.openai_transport
+                else None
+            )
+            subscription_upstream = build_subscription_upstream(
+                subscription_client,
+                embedding_upstream=embedding_upstream,
+            )
 
             def selected_chat_provenance() -> ChatProvenance:
                 answer = subscription_client.last_answer
@@ -490,19 +557,7 @@ class RunOrchestrator:
 
             chat_provenance_provider = selected_chat_provenance
 
-        resolved_api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
-        if not resolved_api_key and config.provider_mode == "api":
-            return cls(
-                config=config,
-                connectors=connectors,
-                candidates=(),
-                provider_available=False,
-                provider_detail="MISSING_PROVIDER: OPENAI_API_KEY is unavailable",
-                provider_status=Status.MISSING_PROVIDER,
-                stage_event_sink=stage_event_sink,
-                cancellation=cancellation,
-            )
-        resolved_api_key = resolved_api_key or "autobrain-local-subscription"
+        candidate_api_key = embedding_config.candidate_api_key
 
         if candidate_builder is None:
 
@@ -559,7 +614,7 @@ class RunOrchestrator:
             candidates=(),
             provider_available=True,
             candidate_builder=selected_candidate_builder,
-            provider_key=resolved_api_key,
+            provider_key=candidate_api_key,
             chat_provenance_provider=chat_provenance_provider,
             stage_event_sink=stage_event_sink,
             cancellation=cancellation,
@@ -706,6 +761,7 @@ class RunOrchestrator:
                 "include_dms": self.config.include_dms,
                 "open_report": self.config.open_report,
                 "provider_mode": self.config.provider_mode,
+                "embedding_backend": self._embedding_descriptor.selector,
                 "selected_sources": [provider.value for provider in self.config.selected_sources],
                 "selected_candidates": [
                     candidate.value for candidate in self.config.selected_candidates
@@ -914,6 +970,19 @@ class RunOrchestrator:
                 evaluator_cases,
                 corpus_sha,
             )
+            provenance = self.benchmark_provenance(evaluations)
+            evaluations = [
+                evaluation.model_copy(
+                    update={
+                        "eligibility_reasons": eligibility_reasons(
+                            evaluation,
+                            embedding=self._embedding_descriptor,
+                            embedding_registry=self.config.embedding_registry,
+                        )
+                    }
+                )
+                for evaluation in evaluations
+            ]
             candidate_results = [
                 replace(
                     outcome,
@@ -926,13 +995,15 @@ class RunOrchestrator:
                 for outcome, evaluation in zip(candidate_results, evaluations, strict=True)
             ]
             self._manifest["candidates"] = [self._outcome_json(item) for item in candidate_results]
-            decision = select_winner(evaluations)
+            decision = select_winner(
+                evaluations,
+                embedding=self._embedding_descriptor,
+                embedding_registry=self.config.embedding_registry,
+            )
             self._manifest["evaluations"] = [
                 evaluation.model_dump(mode="json") for evaluation in evaluations
             ]
-            self._manifest["provenance"] = self.benchmark_provenance(evaluations).model_dump(
-                mode="json"
-            )
+            self._manifest["provenance"] = provenance.model_dump(mode="json")
             self._manifest["decision"] = decision.model_dump(mode="json")
             self._stage(
                 run_dir,
@@ -1676,8 +1747,6 @@ class RunOrchestrator:
         self,
         evaluations: Sequence[CandidateEvaluation] = (),
     ) -> BenchmarkProvenance:
-        if self.test_mode.get("enabled") is True:
-            return BenchmarkProvenance()
         subscription = self.config.provider_mode.endswith("-subscription")
         if self._chat_provenance_provider is not None:
             chat = self._chat_provenance_provider()
@@ -1694,10 +1763,7 @@ class RunOrchestrator:
                 cli_version=None,
                 auth_kind="consumer_subscription" if subscription else "api_key",
             )
-        embedding = EmbeddingProvenance(
-            backend="local-hash-embedding" if subscription else "openai:text-embedding-3-small",
-            quality=EmbeddingQuality.SMOKE_ONLY if subscription else EmbeddingQuality.SEMANTIC,
-        )
+        embedding = self._embedding_descriptor.provenance
         sources = [
             SourceProvenance(
                 source=provider.value,

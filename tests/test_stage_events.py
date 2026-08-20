@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 from autobrain.auth.models import Provider
+from autobrain.embedding import EmbeddingBackendConfig, EmbeddingReadiness
 from autobrain.experiment import build_automatic_plan
 from autobrain.models import CandidateId, Status
 from autobrain.orchestration import (
@@ -25,6 +26,13 @@ from autobrain.orchestration import (
 )
 from autobrain.subscription import SubscriptionStatus
 from autobrain.tui_runtime import start_plan_worker
+
+
+def _semantic_readiness() -> EmbeddingReadiness:
+    return EmbeddingBackendConfig.from_environ(
+        {"OPENAI_API_KEY": "fixture-embedding-key"},
+        requested="openai",
+    ).readiness()
 
 
 def _records(count: int = 24) -> list[dict[str, Any]]:
@@ -256,6 +264,7 @@ def test_tui_runtime_forwards_events_and_worker_settles(
         sources=(Provider.SLACK, Provider.NOTION),
         candidates=tuple(CandidateId),
         subscription_status=SubscriptionStatus.READY,
+        embedding_readiness=_semantic_readiness(),
     )
 
     def sink(event: StageEvent) -> None:
@@ -311,6 +320,7 @@ def test_blocked_tui_worker_cancels_persists_cleanup_queues_result_and_joins(
         sources=(Provider.SLACK, Provider.NOTION),
         candidates=tuple(CandidateId),
         subscription_status=SubscriptionStatus.READY,
+        embedding_readiness=_semantic_readiness(),
     )
 
     worker = start_plan_worker(plan, results, events.append)
@@ -377,6 +387,7 @@ def test_hung_connector_cancellation_settles_with_cleanup_result_and_no_thread_d
         sources=(Provider.SLACK, Provider.NOTION),
         candidates=tuple(CandidateId),
         subscription_status=SubscriptionStatus.READY,
+        embedding_readiness=_semantic_readiness(),
     )
 
     worker = start_plan_worker(plan, results)

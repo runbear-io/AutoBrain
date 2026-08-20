@@ -407,6 +407,7 @@ class DecisionResult(StrictModel):
     verdict: Verdict
     rationale: str
     eligible_candidates: list[CandidateId] = Field(default_factory=list)
+    ineligible_candidates: dict[CandidateId, list[str]] = Field(default_factory=dict)
     considered_candidates: list[CandidateId] = Field(default_factory=list)
     quality_floor: float = 60.0
     close_quality_epsilon: float = 5.0

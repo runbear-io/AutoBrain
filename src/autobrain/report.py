@@ -79,8 +79,9 @@ def build_comparison(
         provenance=provenance or BenchmarkProvenance(),
         methodology={
             "quality_weights": "retrieval recall over gold source IDs, scaled to 0-100",
-            "eligibility": "20 scored cases; 90% valid answers; quality >=60; "
-            "source support >=50%; valid pin and corpus hash; zero direct leakage",
+            "eligibility": "semantic embeddings; 20 scored cases; 90% valid answers; "
+            "quality >=60; source support >=50%; valid pin and corpus hash; "
+            "zero direct leakage",
             "judge_model": "gpt-5-mini at temperature 0; same-model family bias applies",
             "decision_rule": (
                 "quality floor first; within five points cost, then latency and operations"
@@ -280,6 +281,10 @@ def render_report(artifact: ComparisonArtifact) -> str:
         f"<li><code>{_escape(name)}</code>: <code>{_escape(path)}</code></li>"
         for name, path in sorted(artifact.artifact_paths.items())
     )
+    ineligible_candidates = "".join(
+        f"<li><code>{_escape(candidate.value)}</code>: {_escape('; '.join(reasons))}</li>"
+        for candidate, reasons in artifact.decision.ineligible_candidates.items()
+    )
     source_provenance = "".join(
         f"<li><code>{_escape(source.source)}</code>: "
         f"<code>{_escape(source.mutability.value)}</code></li>"
@@ -371,6 +376,7 @@ def render_report(artifact: ComparisonArtifact) -> str:
         <p>{_escape(artifact.decision.rationale)}</p>
         <p class="muted">Run status: {_escape(artifact.status.value)}</p>
         <p class="muted">Decision status: {_escape(artifact.decision.status.value)}</p>
+        <ul>{ineligible_candidates}</ul>
       </div>
     </header>
     <main aria-label="Comparison report">
@@ -408,7 +414,10 @@ def render_report(artifact: ComparisonArtifact) -> str:
           Using the same model family for evaluation can bias comparisons toward
           that model family; this report makes no statistical-significance or
           universal-best claim.</p></div>
-        <div><p>Cost is measured only when proxy/native usage reconciles against
+        <div><p>Recommendation eligibility requires a registered semantic embedding
+          backend. Smoke-only local hash vectors can exercise the pipeline but cannot
+          produce a winner.</p>
+        <p>Cost is measured only when proxy/native usage reconciles against
           price sheet <code>{_escape(artifact.price_sheet_version or "unknown")}</code>.
           Incomplete cost is shown as unknown, never as zero.</p>
         <p>Operating burden and workspace bytes are local evidence only and do

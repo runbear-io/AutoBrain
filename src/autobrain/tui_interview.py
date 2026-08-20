@@ -1,6 +1,7 @@
 """Interview-step copy for first-time AutoBrain setup."""
 
 from autobrain.auth.models import Provider
+from autobrain.embedding import EmbeddingReadiness
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
 from autobrain.subscription import ProviderId, SubscriptionStatus
@@ -24,6 +25,7 @@ def render_interview(
     plan: ExperimentPlan | None,
     setup_error: str,
     source_details: dict[Provider, str],
+    embedding_readiness: EmbeddingReadiness | None = None,
 ) -> list[str]:
     index = next((i for i, item in enumerate(_STEPS) if item[0] == section), 0)
     names = [f"[{label}]" if i == index else label for i, (_, label) in enumerate(_STEPS)]
@@ -34,6 +36,7 @@ def render_interview(
         section,
         subscription_ready=subscription_ready,
         subscription_provider=subscription_provider,
+        embedding_readiness=embedding_readiness,
         slack_status=slack_status,
         notion_status=notion_status,
         selected_sources=selected_sources,
@@ -63,6 +66,7 @@ def _step_body(
     *,
     subscription_ready: bool,
     subscription_provider: ProviderId,
+    embedding_readiness: EmbeddingReadiness | None,
     slack_status: str,
     notion_status: str,
     selected_sources: tuple[Provider, ...],
@@ -73,6 +77,13 @@ def _step_body(
     if section == "connections":
         status = "connected" if subscription_ready else "not connected"
         action = "Continue" if subscription_ready else "Open vendor login"
+        embedding_status = (
+            "ready"
+            if embedding_readiness is not None and embedding_readiness.recommendation_ready
+            else embedding_readiness.detail
+            if embedding_readiness is not None
+            else "not configured"
+        )
         return [
             "Choose a consumer subscription provider",
             "AutoBrain never falls back to another provider.",
@@ -81,6 +92,7 @@ def _step_body(
             _provider_line("3", "Kimi", ProviderId.KIMI, subscription_provider),
             _provider_line("4", "Grok", ProviderId.GROK, subscription_provider),
             f"Selected  {subscription_provider.value}   Status  {status}",
+            f"Semantic embeddings    {embedding_status}",
             f"Enter     {action}   R  Refresh status",
         ]
     if section == "slack":

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from autobrain.auth.models import Provider
+from autobrain.embedding import EmbeddingReadiness
 from autobrain.models import CandidateId
 from autobrain.subscription import ProviderId, SubscriptionStatus
 
@@ -18,6 +19,7 @@ class ExperimentPlan:
     title: str
     description: str
     provider_mode: str
+    embedding_backend: str
     sources: tuple[Provider, ...]
     candidates: tuple[CandidateId, ...]
     budget_usd: float
@@ -49,6 +51,7 @@ def build_automatic_plan(
     sources: tuple[Provider, ...],
     candidates: tuple[CandidateId, ...],
     subscription_status: SubscriptionStatus,
+    embedding_readiness: EmbeddingReadiness,
     subscription_provider: ProviderId = ProviderId.CODEX,
 ) -> ExperimentPlan:
     """Own all experiment decisions except sources and candidate scope."""
@@ -64,12 +67,15 @@ def build_automatic_plan(
         raise ExperimentSetupError(
             f"{subscription_status.value}: connect {provider_label} subscription"
         )
+    if not embedding_readiness.recommendation_ready or embedding_readiness.backend is None:
+        raise ExperimentSetupError(embedding_readiness.detail)
 
     title, description = automatic_experiment_copy(sources=sources, candidates=candidates)
     return ExperimentPlan(
         title=title,
         description=description,
         provider_mode=f"{subscription_provider.value}-subscription",
+        embedding_backend=embedding_readiness.backend,
         sources=sources,
         candidates=candidates,
         budget_usd=25.0,

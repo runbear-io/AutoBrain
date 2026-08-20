@@ -33,12 +33,16 @@ def local_embedding(text: str, *, dimensions: int = 1536) -> list[float]:
 
 def build_subscription_upstream(
     client: AnswerClient,
+    *,
+    embedding_upstream: Callable[[dict[str, object]], dict[str, object]] | None = None,
 ) -> Callable[[dict[str, object]], dict[str, object]]:
-    """Build an OpenAI-compatible upstream backed by subscription chat and local vectors."""
+    """Build an OpenAI-compatible upstream with explicit chat and embedding backends."""
 
     def upstream(payload: dict[str, object]) -> dict[str, object]:
         model = payload.get("model")
         if isinstance(model, str) and model.startswith("text-embedding"):
+            if embedding_upstream is not None:
+                return embedding_upstream(payload)
             inputs = payload.get("input")
             if isinstance(inputs, str):
                 texts = [inputs]

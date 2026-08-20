@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from autobrain.decision import select_winner
+from autobrain.embedding import EmbeddingBackendConfig
 from autobrain.models import (
     CandidateCaseEvidence,
     CandidateEvaluation,
@@ -17,6 +18,15 @@ from autobrain.models import (
     Verdict,
 )
 from autobrain.report import build_comparison, render_report, write_artifacts
+
+_SEMANTIC_EMBEDDING = EmbeddingBackendConfig.from_environ(
+    {"OPENAI_API_KEY": "fixture-embedding-key"},
+    requested="openai",
+).descriptor
+
+
+def _select(candidates: list[CandidateEvaluation]):
+    return select_winner(candidates, embedding=_SEMANTIC_EMBEDDING)
 
 
 class _LinkAndTextParser(HTMLParser):
@@ -93,7 +103,7 @@ def _comparison(
             )
         ],
         candidates=candidates,
-        decision=select_winner(candidates),
+        decision=_select(candidates),
         evidence=evidence or [],
         artifact_paths=artifact_paths,
         warnings=warnings,
@@ -177,7 +187,7 @@ def test_complete_and_incomplete_reports_have_no_document_overflow_at_320px(
 
 
 def test_partial_or_failed_candidates_never_win_but_remain_visible() -> None:
-    result = select_winner(
+    result = _select(
         [
             _candidate(CandidateId.LLM_WIKI, 99, partial_failures=1),
             _candidate(CandidateId.MEM0, 80),
@@ -196,7 +206,7 @@ def test_partial_or_failed_candidates_never_win_but_remain_visible() -> None:
 
 
 def test_no_valid_candidates_returns_no_recommendation() -> None:
-    result = select_winner(
+    result = _select(
         [
             _candidate(CandidateId.LLM_WIKI, 99, status=Status.FAILED),
             _candidate(CandidateId.MEM0, 80, eligible_override=False),
@@ -206,7 +216,7 @@ def test_no_valid_candidates_returns_no_recommendation() -> None:
 
 
 def test_incomplete_cost_is_ineligible_even_with_better_latency() -> None:
-    result = select_winner(
+    result = _select(
         [
             _candidate(
                 CandidateId.LLM_WIKI,
@@ -232,7 +242,7 @@ def test_incomplete_cost_is_ineligible_even_with_better_latency() -> None:
 
 
 def test_incomplete_cost_is_ineligible_even_with_better_operating_burden() -> None:
-    result = select_winner(
+    result = _select(
         [
             _candidate(
                 CandidateId.LLM_WIKI,
@@ -257,7 +267,7 @@ def test_incomplete_cost_is_ineligible_even_with_better_operating_burden() -> No
 
 
 def test_quality_outside_epsilon_still_requires_complete_cost() -> None:
-    result = select_winner(
+    result = _select(
         [
             _candidate(
                 CandidateId.LLM_WIKI,

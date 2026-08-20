@@ -325,6 +325,7 @@ def _draw(
         source_details=connections.source_details,
         latest_stage=latest_stage,
         subscription_provider=state.subscription_provider,
+        embedding_readiness=connections.embeddings,
     )
     column = 1 if width > 2 else 0
     for row, line in enumerate(lines[: max(1, height - 1)]):

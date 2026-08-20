@@ -150,6 +150,89 @@ def test_installed_style_fixture_run_is_local_deterministic_and_source_linked(
     )
 
 
+def test_fixture_cli_local_hash_persists_smoke_only_no_recommendation(
+    tmp_path: Path,
+) -> None:
+    fixture = _write_fixture(tmp_path)
+    output = tmp_path / "local-hash-runs"
+    stage_events = tmp_path / "stage-events.jsonl"
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "--provider",
+            "codex-subscription",
+            "--embedding-backend",
+            "local-hash",
+            "--stage-events",
+            str(stage_events),
+            "--no-open",
+            "--output",
+            str(output),
+        ],
+        env={
+            "HOME": str(tmp_path / "home"),
+            "AUTOBRAIN_ALLOW_TEST_FIXTURE": "1",
+            "AUTOBRAIN_TEST_FIXTURE_PATH": str(fixture),
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = _run_dir(result.output)
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    comparison = json.loads((run_dir / "comparison.json").read_text(encoding="utf-8"))
+    report = (run_dir / "report.html").read_text(encoding="utf-8")
+    expected_reason = (
+        "recommendation requires semantic embeddings; configured backend "
+        "local-hash-embedding is smoke-only"
+    )
+
+    assert manifest["test_mode"]["enabled"] is True
+    assert manifest["provenance"]["embedding"] == {
+        "backend": "local-hash-embedding",
+        "quality": "smoke_only",
+    }
+    assert comparison["provenance"]["embedding"] == manifest["provenance"]["embedding"]
+    assert comparison["decision"]["verdict"] == "NO_RECOMMENDATION"
+    assert expected_reason in comparison["decision"]["ineligible_candidates"]["llm-wiki"]
+    assert "Candidate comparison: NO_RECOMMENDATION" in report
+    assert expected_reason in report
+    assert stage_events.read_text(encoding="utf-8").splitlines()
+
+
+def test_fixture_cli_explicit_test_semantic_backend_can_recommend(tmp_path: Path) -> None:
+    fixture = _write_fixture(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "--provider",
+            "codex-subscription",
+            "--embedding-backend",
+            "test-semantic",
+            "--no-open",
+            "--output",
+            str(tmp_path / "semantic-runs"),
+        ],
+        env={
+            "HOME": str(tmp_path / "home"),
+            "AUTOBRAIN_ALLOW_TEST_FIXTURE": "1",
+            "AUTOBRAIN_TEST_FIXTURE_PATH": str(fixture),
+            "AUTOBRAIN_ENABLE_TEST_SEMANTIC_EMBEDDING": "1",
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = _run_dir(result.output)
+    comparison = json.loads((run_dir / "comparison.json").read_text(encoding="utf-8"))
+    assert comparison["provenance"]["embedding"] == {
+        "backend": "test:semantic-fixture",
+        "quality": "semantic",
+    }
+    assert comparison["decision"]["verdict"] == "llm-wiki"
+    assert comparison["decision"]["eligible_candidates"] == ["llm-wiki"]
+
+
 def test_installed_cli_rejects_absolute_fixture_path_with_lexical_parent_traversal(
     tmp_path: Path,
 ) -> None:

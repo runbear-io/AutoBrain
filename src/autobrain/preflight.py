@@ -1,11 +1,12 @@
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import Field
 
+from autobrain.embedding import check_embedding_backend
 from autobrain.models import CandidatePin, CheckResult, DoctorPaths, Status, StrictModel
 from autobrain.paths import AutoBrainPaths, PathConfinementError
 from autobrain.preflight_slack import check_slack_source
@@ -60,6 +61,7 @@ class Preflight:
         callback_available: Callable[[str, int], bool] = default_callback_available,
         browser_available: Callable[[], bool] = default_browser_available,
         subscription_provider: ProviderId = ProviderId.CODEX,
+        embedding_environ: Mapping[str, str] | None = None,
     ) -> None:
         self.paths = paths
         self.environment = environment
@@ -73,6 +75,7 @@ class Preflight:
         self.callback_probe = callback_available
         self.browser_probe = browser_available
         self.subscription_provider = subscription_provider
+        self.embedding_environ = dict(embedding_environ or {})
 
     def run(self) -> DoctorReport:
         checks = [self._runtime("python", (3, 12, 0)), self._runtime("node", _MIN_NODE)]
@@ -86,6 +89,7 @@ class Preflight:
                     command_runner=self.command_runner,
                     executable_finder=self.executable_finder,
                 ),
+                check_embedding_backend(self.embedding_environ),
                 check_slack_source(paths=self.paths, readiness=readiness),
             )
         )

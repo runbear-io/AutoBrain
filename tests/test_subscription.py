@@ -65,6 +65,47 @@ def test_subscription_upstream_handles_local_embeddings_without_codex() -> None:
     assert len(cast(list[float], data[0]["embedding"])) == 1536
 
 
+def test_subscription_chat_can_use_an_explicit_semantic_embedding_backend() -> None:
+    embedding_calls: list[dict[str, object]] = []
+    chat_calls: list[str] = []
+
+    class FakeClient(CodexSubscriptionClient):
+        def ask(self, prompt: str) -> str:
+            chat_calls.append(prompt)
+            return "subscription response"
+
+    def semantic_embedding(payload: dict[str, object]) -> dict[str, object]:
+        embedding_calls.append(payload)
+        return {
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.25, 0.75]}],
+            "model": "fake-semantic-embedding",
+            "usage": {"prompt_tokens": 2, "total_tokens": 2},
+        }
+
+    upstream = build_subscription_upstream(
+        FakeClient(CodexSubscriptionConfig()),
+        embedding_upstream=semantic_embedding,
+    )
+
+    embedding_response = upstream(
+        {"model": "text-embedding-3-small", "input": ["semantic document"]}
+    )
+    chat_response = upstream(
+        {
+            "model": "gpt-5-mini",
+            "messages": [{"role": "user", "content": "answer this"}],
+        }
+    )
+
+    assert embedding_response["model"] == "fake-semantic-embedding"
+    assert embedding_calls == [{"model": "text-embedding-3-small", "input": ["semantic document"]}]
+    assert chat_calls and "user: answer this" in chat_calls[0]
+    choices = cast(list[dict[str, object]], chat_response["choices"])
+    message = cast(dict[str, object], choices[0]["message"])
+    assert message["content"] == "subscription response"
+
+
 def test_subscription_upstream_translates_chat_to_codex_messages() -> None:
     calls: list[str] = []
 
@@ -92,9 +133,23 @@ def test_subscription_upstream_translates_chat_to_codex_messages() -> None:
 
 
 def test_run_config_accepts_subscription_provider_mode() -> None:
-    assert RunConfig(provider_mode="codex-subscription").provider_mode == "codex-subscription"
+    config = RunConfig(provider_mode="codex-subscription")
+
+    assert config.provider_mode == "codex-subscription"
+    assert config.embedding_backend == "local-hash"
+    assert (
+        RunConfig(
+            provider_mode="codex-subscription",
+            embedding_backend="openai",
+        ).embedding_backend
+        == "openai"
+    )
     with pytest.raises(ValueError, match="provider_mode"):
         RunConfig(provider_mode="unsupported")
+    with pytest.raises(ValueError, match="AUTOBRAIN_EMBEDDING_BACKEND"):
+        RunConfig(provider_mode="codex-subscription", embedding_backend="looks-semantic")
+    with pytest.raises(ValueError, match="requires embedding_backend=openai"):
+        RunConfig(provider_mode="api", embedding_backend="local-hash")
 
 
 def test_subscription_ask_uses_read_only_ephemeral_codex_exec() -> None:

@@ -5,6 +5,7 @@ from typing import Annotated, NoReturn
 
 import typer
 
+from autobrain.embedding import EmbeddingBackend, production_embedding_registry
 from autobrain.fixture import (
     FixtureValidationError,
     fixture_candidates,
@@ -191,6 +192,7 @@ def doctor(
         callback_port=settings.callback_port,
         callback_port_error=settings.callback_port_error,
         subscription_provider=provider,
+        embedding_environ=os.environ,
     ).run()
     if json_output:
         typer.echo(report.model_dump_json(indent=2))
@@ -231,6 +233,14 @@ def run_comparison(
             case_sensitive=False,
         ),
     ] = "api",
+    embedding_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embedding-backend",
+            help="Explicit embedding backend: openai or local-hash.",
+            case_sensitive=False,
+        ),
+    ] = None,
     stage_events: Annotated[
         Path | None,
         typer.Option(
@@ -243,6 +253,11 @@ def run_comparison(
     try:
         paths = AutoBrainPaths.from_home()
         slack_status = SlackSourceStore(paths.sources).status()
+        fixture_path_raw = os.environ.get("AUTOBRAIN_TEST_FIXTURE_PATH")
+        fixture_allowed = os.environ.get("AUTOBRAIN_ALLOW_TEST_FIXTURE") == "1"
+        embedding_registry = production_embedding_registry()
+        if fixture_allowed and os.environ.get("AUTOBRAIN_ENABLE_TEST_SEMANTIC_EMBEDDING") == "1":
+            embedding_registry = embedding_registry.with_test_semantic_backend()
         config = RunConfig(
             budget_usd=budget_usd,
             max_questions=max_questions,
@@ -250,6 +265,17 @@ def run_comparison(
             open_report=not no_open,
             output=output,
             provider_mode=provider.lower(),
+            embedding_backend=(
+                embedding_backend.lower()
+                if embedding_backend is not None
+                else os.environ.get("AUTOBRAIN_EMBEDDING_BACKEND")
+                or (
+                    EmbeddingBackend.OPENAI.value
+                    if provider.lower() == "api"
+                    else EmbeddingBackend.LOCAL_HASH.value
+                )
+            ),
+            embedding_registry=embedding_registry,
             slack_export_path=slack_status.archive_path if slack_status.ready else None,
             slack_export_sha256=(
                 slack_status.config.archive_sha256
@@ -257,8 +283,6 @@ def run_comparison(
                 else None
             ),
         )
-        fixture_path_raw = os.environ.get("AUTOBRAIN_TEST_FIXTURE_PATH")
-        fixture_allowed = os.environ.get("AUTOBRAIN_ALLOW_TEST_FIXTURE") == "1"
         if fixture_path_raw and not fixture_allowed:
             raise ValueError(
                 "MCP_AUTH_UNAVAILABLE: test fixture requires AUTOBRAIN_ALLOW_TEST_FIXTURE=1"

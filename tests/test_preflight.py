@@ -42,6 +42,47 @@ def test_preflight_reports_independent_missing_requirements(tmp_path: Path) -> N
     json.loads(report.model_dump_json())
 
 
+def test_preflight_exposes_semantic_embedding_readiness(tmp_path: Path) -> None:
+    semantic = Preflight(
+        paths=AutoBrainPaths.from_home(tmp_path / "semantic"),
+        environment=RuntimeEnvironment.from_environ({"OPENAI_API_KEY": "fixture-key"}),
+        command_runner=_runner,
+        executable_finder=lambda name: f"/fake/{name}",
+        embedding_environ={
+            "AUTOBRAIN_EMBEDDING_BACKEND": "openai",
+            "OPENAI_API_KEY": "fixture-key",
+        },
+    ).run()
+    smoke = Preflight(
+        paths=AutoBrainPaths.from_home(tmp_path / "smoke"),
+        environment=RuntimeEnvironment.from_environ({}),
+        command_runner=_runner,
+        executable_finder=lambda name: f"/fake/{name}",
+        embedding_environ={"AUTOBRAIN_EMBEDDING_BACKEND": "local-hash"},
+    ).run()
+
+    semantic_check = next(check for check in semantic.checks if check.name == "semantic_embeddings")
+    smoke_check = next(check for check in smoke.checks if check.name == "semantic_embeddings")
+    assert semantic_check.status is Status.OK
+    assert semantic_check.detail == "READY: openai:text-embedding-3-small (semantic)"
+    assert smoke_check.status is Status.CAPABILITY_UNAVAILABLE
+    assert "cannot produce a recommendation" in smoke_check.detail
+
+
+def test_preflight_rejects_unknown_embedding_backend_without_inference(tmp_path: Path) -> None:
+    report = Preflight(
+        paths=AutoBrainPaths.from_home(tmp_path),
+        environment=RuntimeEnvironment.from_environ({}),
+        command_runner=_runner,
+        executable_finder=lambda name: f"/fake/{name}",
+        embedding_environ={"AUTOBRAIN_EMBEDDING_BACKEND": "looks-semantic"},
+    ).run()
+
+    check = next(check for check in report.checks if check.name == "semantic_embeddings")
+    assert check.status is Status.ENV_UNAVAILABLE
+    assert "must be one of: local-hash, openai" in check.detail
+
+
 def test_python_check_uses_the_running_interpreter(tmp_path: Path) -> None:
     commands: list[tuple[str, ...]] = []
 

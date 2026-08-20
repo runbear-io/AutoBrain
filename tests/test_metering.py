@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from autobrain.decision import select_winner
+from autobrain.embedding import EmbeddingBackendConfig
 from autobrain.metering import (
     COST_COMPLETE,
     COST_INCOMPLETE,
@@ -417,7 +418,11 @@ def test_mixed_role_summary_cannot_supply_a_complete_winner_cost() -> None:
                 cost_status=COST_COMPLETE,
                 latency=100,
             ),
-        ]
+        ],
+        embedding=EmbeddingBackendConfig.from_environ(
+            {"OPENAI_API_KEY": "fixture-embedding-key"},
+            requested="openai",
+        ).descriptor,
     )
 
     assert mixed.cost_status == COST_INCOMPLETE

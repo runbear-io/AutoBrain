@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from autobrain.auth.models import Provider
 from autobrain.cli import app
+from autobrain.embedding import EmbeddingBackendConfig
 from autobrain.experiment import build_automatic_plan
 from autobrain.models import CandidateId, ChatProvenance
 from autobrain.orchestration import RunConfig, RunOrchestrator
@@ -240,10 +241,15 @@ def test_claude_preserves_timeout_cancel_and_nonzero_execution(
 
 
 def test_claude_selection_is_explicit_in_plan_and_provenance() -> None:
+    embedding_readiness = EmbeddingBackendConfig.from_environ(
+        {"OPENAI_API_KEY": "fixture-embedding-key"},
+        requested="openai",
+    ).readiness()
     plan = build_automatic_plan(
         sources=(Provider.SLACK,),
         candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
         subscription_status=SubscriptionStatus.READY,
+        embedding_readiness=embedding_readiness,
         subscription_provider=ProviderId.CLAUDE,
     )
     config = RunConfig(provider_mode="claude-subscription")

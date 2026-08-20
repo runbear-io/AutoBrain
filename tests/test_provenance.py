@@ -87,7 +87,7 @@ def test_provenance_round_trips_with_json_html_parity_and_null_preservation(
         benchmark_hash="c" * 64,
         coverage=[],
         candidates=[candidate],
-        decision=select_winner([candidate]),
+        decision=select_winner([candidate], embedding=_provenance().embedding),
         evidence=[],
         provenance=_provenance(),
     )
@@ -164,7 +164,7 @@ def test_schema_v1_comparison_loads_with_unavailable_defaults(tmp_path: Path) ->
         benchmark_hash="c" * 64,
         coverage=[],
         candidates=[candidate],
-        decision=select_winner([candidate]),
+        decision=select_winner([candidate], embedding=_provenance().embedding),
         evidence=[],
         provenance=_provenance(),
     )
@@ -200,7 +200,7 @@ def test_comparison_missing_schema_version_is_rejected(tmp_path: Path) -> None:
         benchmark_hash="c" * 64,
         coverage=[],
         candidates=[candidate],
-        decision=select_winner([candidate]),
+        decision=select_winner([candidate], embedding=_provenance().embedding),
         evidence=[],
         provenance=_provenance(),
     ).model_dump(mode="json")
@@ -222,7 +222,7 @@ def test_comparison_rejects_non_integer_schema_versions(
         benchmark_hash="c" * 64,
         coverage=[],
         candidates=[candidate],
-        decision=select_winner([candidate]),
+        decision=select_winner([candidate], embedding=_provenance().embedding),
         evidence=[],
         provenance=_provenance(),
     ).model_dump(mode="json")
@@ -240,7 +240,7 @@ def test_schema_v2_comparison_missing_provenance_is_rejected(tmp_path: Path) -> 
         benchmark_hash="c" * 64,
         coverage=[],
         candidates=[candidate],
-        decision=select_winner([candidate]),
+        decision=select_winner([candidate], embedding=_provenance().embedding),
         evidence=[],
         provenance=_provenance(),
     ).model_dump(mode="json")

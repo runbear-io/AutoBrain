@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from autobrain.embedding import (
+    EmbeddingBackendDescriptor,
+    EmbeddingBackendRegistry,
+    recommendation_eligibility_reason,
+)
 from autobrain.models import (
     CandidateEvaluation,
+    CandidateId,
     CostStatus,
     DecisionResult,
+    EmbeddingProvenance,
     Status,
     UsageSource,
     Verdict,
@@ -20,7 +27,14 @@ MIN_SUCCESS_RATE = 0.9
 MIN_SOURCE_SUPPORT_RATE = 0.5
 
 
-def _eligibility(candidate: CandidateEvaluation, quality_floor: float) -> list[str]:
+def eligibility_reasons(
+    candidate: CandidateEvaluation,
+    *,
+    embedding: EmbeddingBackendDescriptor | EmbeddingProvenance | None = None,
+    embedding_registry: EmbeddingBackendRegistry | None = None,
+    quality_floor: float = QUALITY_FLOOR,
+) -> list[str]:
+    """Return every independent reason a candidate cannot be recommended."""
     reasons: list[str] = []
     if candidate.eligible_override is False:
         reasons.append("explicitly marked ineligible")
@@ -48,12 +62,25 @@ def _eligibility(candidate: CandidateEvaluation, quality_floor: float) -> list[s
         reasons.append(f"candidate status is {candidate.status.value}")
     if candidate.partial_failures > 0:
         reasons.append("partial candidate failures are not eligible to win")
+    provenance = (
+        embedding.provenance
+        if isinstance(embedding, EmbeddingBackendDescriptor)
+        else embedding or EmbeddingProvenance()
+    )
+    embedding_reason = recommendation_eligibility_reason(
+        provenance,
+        registry=embedding_registry,
+    )
+    if embedding_reason is not None:
+        reasons.append(embedding_reason)
     return reasons
 
 
 def select_winner(
     candidates: Sequence[CandidateEvaluation],
     *,
+    embedding: EmbeddingBackendDescriptor | EmbeddingProvenance | None = None,
+    embedding_registry: EmbeddingBackendRegistry | None = None,
     quality_floor: float = QUALITY_FLOOR,
     close_quality_epsilon: float = CLOSE_QUALITY_EPSILON,
 ) -> DecisionResult:
@@ -66,11 +93,26 @@ def select_winner(
             tie_break_metric="candidate_query_p95_ms",
         )
     eligible: list[CandidateEvaluation] = []
+    ineligible: dict[CandidateId, list[str]] = {}
     incomplete_cost_candidates: list[str] = []
     unmeasured_usage_candidates: list[str] = []
     considered = [candidate.candidate for candidate in candidates]
+    provenance = (
+        embedding.provenance
+        if isinstance(embedding, EmbeddingBackendDescriptor)
+        else embedding or EmbeddingProvenance()
+    )
+    embedding_reason = recommendation_eligibility_reason(
+        provenance,
+        registry=embedding_registry,
+    )
     for candidate in candidates:
-        reasons = _eligibility(candidate, quality_floor)
+        reasons = eligibility_reasons(
+            candidate,
+            embedding=provenance,
+            embedding_registry=embedding_registry,
+            quality_floor=quality_floor,
+        )
         if candidate.cost_status is not CostStatus.COMPLETE or candidate.total_cost_usd is None:
             incomplete_cost_candidates.append(candidate.candidate.value)
         if candidate.usage_source is not UsageSource.MEASURED:
@@ -78,7 +120,9 @@ def select_winner(
                 f"{candidate.candidate.value} ({candidate.usage_source.value})"
             )
         candidate = candidate.model_copy(update={"eligibility_reasons": reasons})
-        if not reasons:
+        if reasons:
+            ineligible[candidate.candidate] = reasons
+        else:
             eligible.append(candidate)
     if not eligible:
         cost_detail = (
@@ -91,13 +135,16 @@ def select_winner(
             if unmeasured_usage_candidates
             else ""
         )
+        embedding_detail = f" {embedding_reason}." if embedding_reason is not None else ""
         return DecisionResult(
             status=Status.NO_RECOMMENDATION,
             verdict=Verdict.NO_RECOMMENDATION,
             rationale=(
                 "No candidate met the quality, reliability, provenance, leakage, "
-                f"and complete-cost gates.{cost_detail}{usage_detail}"
+                "complete-cost, measured-usage, and semantic-embedding gates."
+                f"{embedding_detail}{cost_detail}{usage_detail}"
             ),
+            ineligible_candidates=ineligible,
             considered_candidates=considered,
             quality_floor=quality_floor,
             close_quality_epsilon=close_quality_epsilon,
@@ -142,6 +189,7 @@ def select_winner(
         verdict=Verdict(winner.candidate.value),
         rationale=rationale,
         eligible_candidates=[candidate.candidate for candidate in eligible],
+        ineligible_candidates=ineligible,
         considered_candidates=considered,
         quality_floor=quality_floor,
         close_quality_epsilon=close_quality_epsilon,

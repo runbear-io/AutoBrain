@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 import autobrain.cli as cli
 from autobrain.auth.models import Provider
 from autobrain.cli import app
+from autobrain.embedding import EmbeddingBackendConfig, EmbeddingReadiness
 from autobrain.experiment import ExperimentPlan, build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState, Status
 from autobrain.orchestration import RunConfig, RunResult, StageEvent
@@ -29,6 +30,13 @@ from autobrain.tui_render import (
     render_dashboard,
 )
 from autobrain.tui_runtime import ConnectionSnapshot, execute_plan
+
+
+def _semantic_readiness() -> EmbeddingReadiness:
+    return EmbeddingBackendConfig.from_environ(
+        {"OPENAI_API_KEY": "fixture-embedding-key"},
+        requested="openai",
+    ).readiness()
 
 
 def test_tui_navigation_only_exposes_requested_setup_sections() -> None:
@@ -63,6 +71,7 @@ def test_legacy_tui_provider_key_reprobes_exact_selection(
         calls.append((selected, refresh))
         return ConnectionSnapshot(
             subscription=SubscriptionStatus.UNSUPPORTED,
+            embeddings=_semantic_readiness(),
             sources={},
             subscription_provider=selected,
         )
@@ -121,6 +130,7 @@ def test_execute_plan_preserves_selected_provider_mode(
         title="Claude plan",
         description="explicit provider",
         provider_mode="claude-subscription",
+        embedding_backend="openai",
         sources=(Provider.NOTION,),
         candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
         budget_usd=25.0,
@@ -197,6 +207,7 @@ def test_setup_dashboard_fits_standard_terminal() -> None:
         sources=(Provider.SLACK, Provider.NOTION),
         candidates=tuple(CandidateId),
         subscription_status=SubscriptionStatus.READY,
+        embedding_readiness=_semantic_readiness(),
     )
 
     lines = render_dashboard(
@@ -243,6 +254,7 @@ def test_advertised_minimum_height_preserves_keyboard_footer() -> None:
         sources=(Provider.SLACK, Provider.NOTION),
         candidates=tuple(CandidateId),
         subscription_status=SubscriptionStatus.READY,
+        embedding_readiness=_semantic_readiness(),
     )
 
     lines = render_dashboard(

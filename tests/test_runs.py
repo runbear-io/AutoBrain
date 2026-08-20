@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from autobrain.cli import app
 from autobrain.decision import select_winner
+from autobrain.embedding import EmbeddingBackendConfig
 from autobrain.models import (
     BenchmarkProvenance,
     CandidateEvaluation,
@@ -19,6 +20,16 @@ from autobrain.models import (
 )
 from autobrain.report import build_comparison, write_artifacts
 from autobrain.runs import _candidate_snapshot  # pyright: ignore[reportPrivateUsage]
+
+_SEMANTIC_EMBEDDING = EmbeddingBackendConfig.from_environ(
+    {"OPENAI_API_KEY": "fixture-embedding-key"},
+    requested="openai",
+).descriptor
+_SEMANTIC_PROVENANCE = _SEMANTIC_EMBEDDING.provenance
+
+
+def _select(candidates: list[CandidateEvaluation]):
+    return select_winner(candidates, embedding=_SEMANTIC_EMBEDDING)
 
 
 def _candidate(*, quality: float = 90.0, eligible: bool = True) -> CandidateEvaluation:
@@ -61,7 +72,7 @@ def _write_run(
     run_dir = home / "runs" / run_id
     run_dir.mkdir(parents=True)
     candidate = _candidate(quality=quality, eligible=eligible)
-    decision = select_winner([candidate])
+    decision = _select([candidate])
     manifest = {
         "schema_version": schema_version,
         "run_id": run_id,
@@ -72,7 +83,7 @@ def _write_run(
             "corpus_sha256": corpus_hash,
             "benchmark_sha256": benchmark_hash,
         },
-        "provenance": BenchmarkProvenance().model_dump(mode="json"),
+        "provenance": BenchmarkProvenance(embedding=_SEMANTIC_PROVENANCE).model_dump(mode="json"),
         "decision": decision.model_dump(mode="json"),
         "evaluations": [candidate.model_dump(mode="json")],
         "candidates": [{"candidate": candidate.candidate.value}],
@@ -90,6 +101,7 @@ def _write_run(
             candidates=[candidate],
             decision=decision,
             evidence=[],
+            provenance=BenchmarkProvenance(embedding=_SEMANTIC_PROVENANCE),
         )
         write_artifacts(artifact, run_dir)
     return run_dir
@@ -191,7 +203,7 @@ def test_candidate_snapshot_compares_every_persisted_evaluation_field(field: str
         benchmark_hash="b" * 64,
         coverage=[],
         candidates=[candidate],
-        decision=select_winner([candidate]),
+        decision=_select([candidate]),
         evidence=[],
     )
     update = {field: _CANDIDATE_FIELD_MUTATIONS[field]}
@@ -210,7 +222,7 @@ def test_candidate_snapshot_compares_derived_eligibility() -> None:
         benchmark_hash="b" * 64,
         coverage=[],
         candidates=[candidate],
-        decision=select_winner([candidate]),
+        decision=_select([candidate]),
         evidence=[],
     )
     changed_decision = artifact.decision.model_copy(update={"eligible_candidates": []})

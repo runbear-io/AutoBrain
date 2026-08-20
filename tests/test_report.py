@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from autobrain.decision import select_winner
+from autobrain.embedding import EmbeddingBackendConfig
 from autobrain.models import (
     CandidateCaseEvidence,
     CandidateEvaluation,
@@ -24,6 +25,11 @@ from autobrain.report import (
     render_report,
     write_artifacts,
 )
+
+_SEMANTIC_EMBEDDING = EmbeddingBackendConfig.from_environ(
+    {"OPENAI_API_KEY": "fixture-embedding-key"},
+    requested="openai",
+).descriptor
 
 
 def comparison() -> ComparisonArtifact:
@@ -69,7 +75,7 @@ def comparison() -> ComparisonArtifact:
             )
         ],
         candidates=candidates,
-        decision=select_winner(candidates),
+        decision=select_winner(candidates, embedding=_SEMANTIC_EMBEDDING),
         evidence=[
             CandidateCaseEvidence(
                 candidate=CandidateId.LLM_WIKI,

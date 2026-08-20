@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from autobrain.auth.models import AuthStatusReport, ConnectionStatus, Provider
+from autobrain.embedding import EmbeddingBackendConfig, EmbeddingReadiness
 from autobrain.experiment import ExperimentSetupError, build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState, Status
 from autobrain.orchestration import (
@@ -18,6 +19,17 @@ from autobrain.orchestration import (
 from autobrain.production import build_production_candidates
 from autobrain.subscription import SubscriptionStatus
 from autobrain.tui_runtime import ConnectionSnapshot, resolve_plan
+
+
+def _semantic_readiness() -> EmbeddingReadiness:
+    return EmbeddingBackendConfig.from_environ(
+        {"OPENAI_API_KEY": "fixture-embedding-key"},
+        requested="openai",
+    ).readiness()
+
+
+def _smoke_readiness() -> EmbeddingReadiness:
+    return EmbeddingBackendConfig.from_environ({}, requested="local-hash").readiness()
 
 
 class FakeConnector:
@@ -65,6 +77,39 @@ def test_selected_source_does_not_require_unselected_connection(tmp_path: Path) 
     assert [connector.provider for connector in orchestrator.connectors] == ["slack"]
 
 
+def test_missing_semantic_embedding_config_stops_before_ingestion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    candidate_builder_called = False
+
+    def candidate_builder(*_args: object, **_kwargs: object):
+        nonlocal candidate_builder_called
+        candidate_builder_called = True
+        raise AssertionError("candidate construction must not begin")
+
+    orchestrator = RunOrchestrator.local(
+        RunConfig(
+            output=tmp_path / "runs",
+            open_report=False,
+            provider_mode="codex-subscription",
+            embedding_backend="openai",
+            selected_sources=(Provider.SLACK,),
+        ),
+        connection_manager=FakeConnectionManager(),  # type: ignore[arg-type]
+        connector_builder=lambda _manager, _include_dms: (FakeConnector(),),
+        candidate_builder=candidate_builder,
+    )
+    result = orchestrator.run()
+
+    assert orchestrator.provider_available is False
+    assert "SEMANTIC_EMBEDDING_UNAVAILABLE" in orchestrator.provider_detail
+    assert candidate_builder_called is False
+    assert result.status is Status.MISSING_PROVIDER
+    assert result.candidate_results == ()
+
+
 def test_production_builder_creates_only_selected_candidates(tmp_path: Path) -> None:
     candidates = build_production_candidates(
         tmp_path / "run",
@@ -87,6 +132,7 @@ def test_automatic_plan_owns_questions_budget_and_first_experiment() -> None:
         sources=(Provider.SLACK, Provider.NOTION),
         candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0, CandidateId.GBRAIN),
         subscription_status=SubscriptionStatus.READY,
+        embedding_readiness=_semantic_readiness(),
     )
 
     assert plan.provider_mode == "codex-subscription"
@@ -130,6 +176,7 @@ def test_automatic_plan_requires_source_and_two_candidates() -> None:
             sources=(),
             candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
             subscription_status=SubscriptionStatus.READY,
+            embedding_readiness=_semantic_readiness(),
         )
 
     with pytest.raises(ExperimentSetupError, match="TWO_CANDIDATES_REQUIRED"):
@@ -137,7 +184,24 @@ def test_automatic_plan_requires_source_and_two_candidates() -> None:
             sources=(Provider.SLACK,),
             candidates=(CandidateId.GBRAIN,),
             subscription_status=SubscriptionStatus.READY,
+            embedding_readiness=_semantic_readiness(),
         )
+
+
+def test_tui_blocks_smoke_only_embeddings_before_run() -> None:
+    plan, error = resolve_plan(
+        selected_sources=(Provider.SLACK,),
+        selected_candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
+        connections=ConnectionSnapshot(
+            subscription=SubscriptionStatus.READY,
+            embeddings=_smoke_readiness(),
+            sources={Provider.SLACK: ConnectionState.CONNECTED},
+        ),
+    )
+
+    assert plan is None
+    assert error.startswith("SMOKE_ONLY:")
+    assert "cannot produce a recommendation" in error
 
 
 def test_tui_never_falls_back_to_openai_api_key(
@@ -150,6 +214,7 @@ def test_tui_never_falls_back_to_openai_api_key(
         selected_candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
         connections=ConnectionSnapshot(
             subscription=SubscriptionStatus.SUBSCRIPTION_AUTH_UNAVAILABLE,
+            embeddings=_semantic_readiness(),
             sources={Provider.SLACK: ConnectionState.CONNECTED},
         ),
     )

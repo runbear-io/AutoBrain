@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import curses
+import os
 import queue
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from typing import Protocol
 
 from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
+from autobrain.embedding import EmbeddingReadiness, inspect_embedding_backend
 from autobrain.experiment import ExperimentPlan, ExperimentSetupError, build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState
 from autobrain.orchestration import (
@@ -36,6 +38,7 @@ from autobrain.subscription import (
 @dataclass(frozen=True)
 class ConnectionSnapshot:
     subscription: SubscriptionStatus
+    embeddings: EmbeddingReadiness
     sources: dict[Provider, ConnectionState]
     subscription_provider: ProviderId = ProviderId.CODEX
     source_details: dict[Provider, str] | None = None
@@ -83,6 +86,7 @@ def connection_snapshot(
             .status
         )
     slack_status = (source_store or SlackSourceStore(paths.sources)).status()
+    embeddings = inspect_embedding_backend(os.environ)
     source_details: dict[Provider, str] = {}
     if slack_status.ready and slack_status.config is not None:
         source_states[Provider.SLACK] = ConnectionState.CONNECTED
@@ -90,6 +94,7 @@ def connection_snapshot(
         return ConnectionSnapshot(
             subscription_provider=subscription_provider,
             subscription=subscription,
+            embeddings=embeddings,
             sources=source_states,
             source_details=source_details,
             slack_export_path=slack_status.archive_path,
@@ -98,6 +103,7 @@ def connection_snapshot(
     return ConnectionSnapshot(
         subscription_provider=subscription_provider,
         subscription=subscription,
+        embeddings=embeddings,
         sources=source_states,
         source_details=source_details,
     )
@@ -125,6 +131,7 @@ def resolve_plan(
                 sources=selected_sources,
                 candidates=selected_candidates,
                 subscription_status=connections.subscription,
+                embedding_readiness=connections.embeddings,
                 subscription_provider=subscription_provider,
             ),
             "",
@@ -154,6 +161,7 @@ def execute_plan(
             max_questions=plan.max_questions,
             open_report=False,
             provider_mode=plan.provider_mode,
+            embedding_backend=plan.embedding_backend,
             selected_sources=plan.sources,
             selected_candidates=plan.candidates,
             slack_export_path=(slack_status.archive_path if slack_export_selected else None),

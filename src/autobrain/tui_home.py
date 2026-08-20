@@ -1,6 +1,7 @@
 """Main cockpit shown after AutoBrain onboarding is complete."""
 
 from autobrain.auth.models import Provider
+from autobrain.embedding import EmbeddingReadiness
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
 from autobrain.subscription import ProviderId, SubscriptionStatus
@@ -16,12 +17,20 @@ def render_home(
     plan: ExperimentPlan | None,
     setup_error: str,
     source_details: dict[Provider, str],
+    embedding_readiness: EmbeddingReadiness | None = None,
 ) -> list[str]:
     subscription = (
         "connected" if subscription_status is SubscriptionStatus.READY else "not connected"
     )
     slack = _status(Provider.SLACK, selected_sources, source_states, source_details)
     notion = _status(Provider.NOTION, selected_sources, source_states, source_details)
+    embeddings = (
+        "ready"
+        if embedding_readiness is not None and embedding_readiness.recommendation_ready
+        else embedding_readiness.detail
+        if embedding_readiness is not None
+        else "not configured"
+    )
     brains = ", ".join(item.value for item in selected_candidates) or "none"
     if plan is None:
         action = setup_error or "Open setup to finish the provider or a knowledge source."
@@ -34,6 +43,7 @@ def render_home(
         "Compare LLM Wiki, Mem0 OSS, and GBrain on your knowledge.",
         "",
         f"Provider   {subscription_provider.value} ({subscription})",
+        f"Embeddings {embeddings}",
         f"Slack      {slack}",
         f"Notion     {notion}",
         f"Brains     {brains}",
