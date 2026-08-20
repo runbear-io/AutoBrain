@@ -89,10 +89,6 @@ def test_subscription_connection_flow_passes_exact_provider(
         commands.append(tuple(command))
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr("autobrain.tui_runtime.curses.def_prog_mode", lambda: None)
-    monkeypatch.setattr("autobrain.tui_runtime.curses.endwin", lambda: None)
-    monkeypatch.setattr("autobrain.tui_runtime.curses.reset_prog_mode", lambda: None)
-
     run_connection_flow(_Screen(), provider, runner=runner)  # type: ignore[arg-type]
 
     assert commands[0][-4:] == ("subscription", "setup", "--provider", provider.value)
@@ -111,10 +107,6 @@ def test_slack_connection_key_opens_source_setup_command(
         del check
         commands.append(tuple(command))
         return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr("autobrain.tui_runtime.curses.def_prog_mode", lambda: None)
-    monkeypatch.setattr("autobrain.tui_runtime.curses.endwin", lambda: None)
-    monkeypatch.setattr("autobrain.tui_runtime.curses.reset_prog_mode", lambda: None)
 
     run_connection_flow(_Screen(), Provider.SLACK, runner=runner)  # type: ignore[arg-type]
 

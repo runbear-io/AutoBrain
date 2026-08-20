@@ -1,10 +1,10 @@
-"""Framework-neutral runtime boundaries used by terminal UI hosts."""
+"""Compatibility runtime for the one-release curses cockpit."""
 
 from __future__ import annotations
 
-import os
 import queue
 import subprocess
+import sys
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -13,7 +13,6 @@ from typing import Protocol
 
 from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
-from autobrain.embedding import EmbeddingReadiness, inspect_embedding_backend
 from autobrain.experiment import ExperimentPlan, ExperimentSetupError, build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState
 from autobrain.orchestration import (
@@ -31,32 +30,37 @@ from autobrain.subscription import (
     SubscriptionStatus,
     provider_registry,
 )
-from autobrain.tui_effects import login_command
-
-
-class RefreshableScreen(Protocol):
-    def refresh(self) -> None: ...
-
-
-class ConnectionFlowRunner(Protocol):
-    def __call__(
-        self, command: Sequence[str], *, check: bool
-    ) -> subprocess.CompletedProcess[str]: ...
-
-
-def _subprocess_runner(command: Sequence[str], *, check: bool) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=check, text=True)
 
 
 @dataclass(frozen=True)
 class ConnectionSnapshot:
     subscription: SubscriptionStatus
-    embeddings: EmbeddingReadiness
     sources: dict[Provider, ConnectionState]
     subscription_provider: ProviderId = ProviderId.CODEX
     source_details: dict[Provider, str] | None = None
     slack_export_path: Path | None = None
     slack_export_sha256: str | None = None
+
+
+class LegacyScreen(Protocol):
+    def refresh(self) -> None: ...
+
+
+class ConnectionFlowRunner(Protocol):
+    def __call__(
+        self,
+        command: Sequence[str],
+        *,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+def _subprocess_runner(
+    command: Sequence[str],
+    *,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, check=check, text=True)
 
 
 def connection_snapshot(
@@ -70,13 +74,18 @@ def connection_snapshot(
     paths = AutoBrainPaths.from_home()
     report = (manager or ConnectionManager(paths.root)).status()
     source_states = {item.provider: item.state for item in report.connections}
-    subscription = (
-        subscription_client.status()
-        if subscription_client is not None
-        else provider_registry().probe(subscription_provider, refresh=refresh_subscription).status
-    )
+    if subscription_client is not None:
+        subscription = subscription_client.status()
+    else:
+        subscription = (
+            provider_registry()
+            .probe(
+                subscription_provider,
+                refresh=refresh_subscription,
+            )
+            .status
+        )
     slack_status = (source_store or SlackSourceStore(paths.sources)).status()
-    embeddings = inspect_embedding_backend(os.environ)
     source_details: dict[Provider, str] = {}
     if slack_status.ready and slack_status.config is not None:
         source_states[Provider.SLACK] = ConnectionState.CONNECTED
@@ -84,7 +93,6 @@ def connection_snapshot(
         return ConnectionSnapshot(
             subscription_provider=subscription_provider,
             subscription=subscription,
-            embeddings=embeddings,
             sources=source_states,
             source_details=source_details,
             slack_export_path=slack_status.archive_path,
@@ -93,21 +101,9 @@ def connection_snapshot(
     return ConnectionSnapshot(
         subscription_provider=subscription_provider,
         subscription=subscription,
-        embeddings=embeddings,
         sources=source_states,
         source_details=source_details,
     )
-
-
-def run_connection_flow(
-    screen: RefreshableScreen,
-    provider: Provider | ProviderId,
-    *,
-    runner: ConnectionFlowRunner = _subprocess_runner,
-) -> None:
-    """Compatibility command boundary without terminal-framework ownership."""
-    runner(login_command(provider), check=False)
-    screen.refresh()
 
 
 def resolve_plan(
@@ -132,7 +128,6 @@ def resolve_plan(
                 sources=selected_sources,
                 candidates=selected_candidates,
                 subscription_status=connections.subscription,
-                embedding_readiness=connections.embeddings,
                 subscription_provider=subscription_provider,
             ),
             "",
@@ -162,10 +157,9 @@ def execute_plan(
             max_questions=plan.max_questions,
             open_report=False,
             provider_mode=plan.provider_mode,
-            embedding_backend=plan.embedding_backend,
             selected_sources=plan.sources,
             selected_candidates=plan.candidates,
-            slack_export_path=slack_status.archive_path if slack_export_selected else None,
+            slack_export_path=(slack_status.archive_path if slack_export_selected else None),
             slack_export_sha256=(
                 slack_status.config.archive_sha256
                 if slack_export_selected and slack_status.config is not None
@@ -206,6 +200,7 @@ def start_plan_worker(
     stage_event_sink: StageEventSink | None = None,
     subscription_provider: ProviderId = ProviderId.CODEX,
 ) -> PlanWorker:
+    """Start a cooperatively cancellable legacy TUI worker."""
     cancellation = RunCancellation()
     thread = threading.Thread(
         target=execute_plan,
@@ -213,3 +208,37 @@ def start_plan_worker(
     )
     thread.start()
     return PlanWorker(thread=thread, cancellation=cancellation)
+
+
+def run_connection_flow(
+    screen: LegacyScreen,
+    provider: Provider | ProviderId,
+    *,
+    runner: ConnectionFlowRunner = _subprocess_runner,
+) -> None:
+    if provider is Provider.SLACK:
+        command = [sys.executable, "-m", "autobrain.cli", "source", "slack"]
+    elif isinstance(provider, Provider):
+        command = [sys.executable, "-m", "autobrain.cli", "auth", provider.value]
+    else:
+        command = [
+            sys.executable,
+            "-m",
+            "autobrain.cli",
+            "subscription",
+            "setup",
+            "--provider",
+            provider.value,
+        ]
+    runner(command, check=False)
+    screen.refresh()
+
+
+def connection_key(key: int) -> Provider | ProviderId | None:
+    if key in {ord("c"), ord("C")}:
+        return ProviderId.CODEX
+    if key in {ord("s"), ord("S")}:
+        return Provider.SLACK
+    if key in {ord("n"), ord("N")}:
+        return Provider.NOTION
+    return None

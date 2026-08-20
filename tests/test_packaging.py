@@ -9,6 +9,11 @@ def test_supported_python_range_excludes_unverified_314() -> None:
     assert project["requires-python"] == ">=3.12,<3.14.0a0"
 
 
+def test_textual_is_a_direct_runtime_dependency() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert "textual>=1,<8" in project["dependencies"]
+
+
 def test_candidate_pins_are_an_importable_package_resource() -> None:
     pins = resources.files("autobrain").joinpath("candidate-pins.json")
     assert pins.is_file()

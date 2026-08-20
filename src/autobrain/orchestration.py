@@ -1091,6 +1091,13 @@ class RunOrchestrator:
                     run_dir / "candidates" / f"{candidate.candidate_id}.json",
                     self._outcome_json(outcome),
                 )
+                if "run_id" in self._manifest:
+                    self._stage(
+                        run_dir,
+                        f"candidate:{candidate.candidate_id}",
+                        outcome.status,
+                        outcome.detail,
+                    )
                 budget_exhausted = True
                 continue
             started = self._monotonic()
@@ -1148,6 +1155,13 @@ class RunOrchestrator:
                 run_dir / "candidates" / f"{candidate.candidate_id}.json",
                 self._outcome_json(outcome),
             )
+            if "run_id" in self._manifest:
+                self._stage(
+                    run_dir,
+                    f"candidate:{candidate.candidate_id}",
+                    outcome.status,
+                    outcome.detail or f"{outcome.answered_cases} cases answered",
+                )
             if spent >= self.config.budget_usd:
                 estimate = self.config.budget_usd
                 budget_exhausted = True

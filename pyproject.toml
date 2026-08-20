@@ -19,6 +19,7 @@ dependencies = [
   "openai>=1.90,<2",
   "pydantic>=2.11,<3",
   "typer>=0.16,<1",
+  "textual>=1,<8",
 ]
 
 [project.scripts]
