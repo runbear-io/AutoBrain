@@ -88,6 +88,13 @@ _SPECULATION = re.compile(
     r"^(?:i think|maybe|perhaps|not sure|probably|might be|could be|guessing)\b",
     re.IGNORECASE,
 )
+_PROMPT_LIKE_SOURCE = re.compile(
+    r"\b(?:ignore|disregard|override)\b.*\b(?:instruction|prompt|tool)\b|"
+    r"\b(?:system prompt|follow these instructions|call a (?:write|tool))\b",
+    re.IGNORECASE,
+)
+_MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
+_MARKDOWN_BULLET = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)(.+)$")
 
 
 def _empty_artifact() -> dict[str, Any]:
@@ -1301,12 +1308,23 @@ class RunOrchestrator:
             text = str(document.get("text", "")).strip()
             if isinstance(parent, str) and parent and text:
                 replies_by_parent.setdefault(parent, []).append(text)
+        seen_questions: set[str] = set()
         for document in ordered_documents:
             source_id = str(document.get("source_id", ""))
             raw_question = str(document.get("question", "")).strip()
+            text = str(document.get("text", "")).strip()
+            if not raw_question and RunOrchestrator._is_notion_document(document):
+                for generated in RunOrchestrator._notion_document_cases(document):
+                    normalized_question = " ".join(
+                        re.findall(r"\w+", str(generated["question"]).casefold())
+                    )
+                    if normalized_question in seen_questions:
+                        continue
+                    seen_questions.add(normalized_question)
+                    cases.append(generated)
+                continue
             question = raw_question
             question_is_generated = False
-            text = str(document.get("text", "")).strip()
             if not question and text.endswith("?"):
                 question = text
             if not question:
@@ -1319,6 +1337,10 @@ class RunOrchestrator:
             )
             if not RunOrchestrator._qualifies_question(question, evidence):
                 continue
+            normalized_question = " ".join(re.findall(r"\w+", question.casefold()))
+            if normalized_question in seen_questions:
+                continue
+            seen_questions.add(normalized_question)
             cases.append(
                 {
                     "case_id": f"case-{hashlib.sha256(source_id.encode()).hexdigest()[:16]}",
@@ -1327,15 +1349,38 @@ class RunOrchestrator:
                     "generated": question_is_generated,
                 }
             )
-        available_for_holdout = max(1, len(cases) - MIN_BENCHMARK_CASES) if cases else 0
-        holdout_count = (
-            min(max(1, len(cases) // 10), available_for_holdout) if available_for_holdout else 0
+        holdout_target = (
+            min(
+                max(1, len(cases) // 10),
+                max(1, len(cases) - MIN_BENCHMARK_CASES),
+            )
+            if cases
+            else 0
         )
-        holdout_cases = cases[-holdout_count:] if holdout_count else []
-        holdout_ids = {
-            source_id for case in holdout_cases for source_id in case["source_ids"] if source_id
-        }
-        benchmark_cases = cases[:-holdout_count] if holdout_count else cases
+        holdout_ids: set[str] = set()
+        holdout_case_count = 0
+        for case in reversed(cases):
+            source_ids = {str(source_id) for source_id in case["source_ids"] if source_id}
+            if source_ids & holdout_ids:
+                continue
+            source_case_count = sum(
+                1
+                for candidate in cases
+                if source_ids.intersection(str(item) for item in candidate["source_ids"])
+            )
+            if len(cases) - holdout_case_count - source_case_count < MIN_BENCHMARK_CASES:
+                if not holdout_ids:
+                    holdout_ids.update(source_ids)
+                break
+            holdout_ids.update(source_ids)
+            holdout_case_count += source_case_count
+            if holdout_case_count >= holdout_target:
+                break
+        benchmark_cases = [
+            case
+            for case in cases
+            if not holdout_ids.intersection(str(item) for item in case["source_ids"])
+        ]
         cap = min(max_questions, MAX_BENCHMARK_CASES)
         benchmark_cases = benchmark_cases[:cap]
         if len(benchmark_cases) < MIN_BENCHMARK_CASES:
@@ -1366,8 +1411,9 @@ class RunOrchestrator:
                 if isinstance(source_id, str)
             ]
             source_document = documents_by_source.get(source_ids[0], {})
-            reference = RunOrchestrator._evidence_text(
+            reference = RunOrchestrator._case_reference_text(
                 source_document,
+                safe_case,
                 replies_by_parent.get(source_ids[0], ()) if source_ids else (),
             )
             raw_claims = source_document.get("expected_claims")
@@ -1417,6 +1463,76 @@ class RunOrchestrator:
                 )
             )
         return tuple(records)
+
+    @staticmethod
+    def _is_notion_document(document: Mapping[str, Any]) -> bool:
+        source_id = str(document.get("source_id", ""))
+        source_kind = str(document.get("source_kind", ""))
+        return source_id.startswith("notion:") or source_kind.casefold() in {
+            "notion_page",
+            "sourcekind.notion_page",
+        }
+
+    @staticmethod
+    def _notion_document_cases(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+        source_id = str(document.get("source_id", ""))
+        title = str(document.get("title", "document")).strip() or "document"
+        text = str(document.get("text", ""))
+        heading = title
+        heading_items: dict[str, int] = {}
+        cases: list[dict[str, Any]] = []
+        for line_number, raw_line in enumerate(text.splitlines(), start=1):
+            line = raw_line.strip()
+            heading_match = _MARKDOWN_HEADING.match(line)
+            if heading_match is not None:
+                heading = heading_match.group(1).strip()
+                continue
+            bullet_match = _MARKDOWN_BULLET.match(line)
+            if bullet_match is None or _PROMPT_LIKE_SOURCE.search(line):
+                continue
+            evidence = bullet_match.group(1).strip()
+            if len(re.findall(r"\w+", evidence, re.UNICODE)) < 6:
+                continue
+            heading_items[heading] = heading_items.get(heading, 0) + 1
+            item_number = heading_items[heading]
+            question = f"What does {title} state in {heading}, item {item_number}?"
+            if not RunOrchestrator._qualifies_question(question, evidence):
+                continue
+            case_key = f"{source_id}\x00{line_number}\x00{question}"
+            cases.append(
+                {
+                    "case_id": f"case-{hashlib.sha256(case_key.encode()).hexdigest()[:16]}",
+                    "question": question,
+                    "source_ids": [source_id],
+                    "generated": True,
+                    "provenance": [source_id, f"markdown:line:{line_number}"],
+                }
+            )
+            if len(cases) == 6:
+                break
+        return cases
+
+    @staticmethod
+    def _case_reference_text(
+        document: Mapping[str, Any],
+        case: Mapping[str, Any],
+        thread_replies: Sequence[str] = (),
+    ) -> str:
+        provenance = case.get("provenance")
+        if isinstance(provenance, Sequence) and not isinstance(provenance, str | bytes):
+            for item in cast(Sequence[Any], provenance):
+                if not isinstance(item, str) or not item.startswith("markdown:line:"):
+                    continue
+                try:
+                    line_number = int(item.rsplit(":", 1)[1])
+                except ValueError:
+                    continue
+                lines = str(document.get("text", "")).splitlines()
+                if 1 <= line_number <= len(lines):
+                    bullet = _MARKDOWN_BULLET.match(lines[line_number - 1].strip())
+                    if bullet is not None:
+                        return bullet.group(1).strip()
+        return RunOrchestrator._evidence_text(document, thread_replies)
 
     @staticmethod
     def _parent_source_id(document: Mapping[str, Any]) -> str | None:
