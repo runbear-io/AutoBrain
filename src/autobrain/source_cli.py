@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Annotated
@@ -13,6 +14,7 @@ from autobrain.auth.models import OAuthError, Provider
 from autobrain.auth.oauth import OAuthManager
 from autobrain.auth.service import ConnectionManager
 from autobrain.auth.storage import TokenStore
+from autobrain.connectors.notion_snapshot import NotionSnapshotError, NotionSnapshotStore
 from autobrain.paths import AutoBrainPaths
 from autobrain.secrets import RuntimeEnvironment, RuntimeSettings
 from autobrain.source_store import SlackSourceStore
@@ -148,13 +150,60 @@ def configure_slack_source(
     )
 
 
+@source_app.command("notion-snapshot")
+def configure_notion_snapshot(
+    import_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--import",
+            help="Bounded normalized JSON from an external read-only Notion MCP session.",
+        ),
+    ] = None,
+    remove: Annotated[
+        bool,
+        typer.Option("--remove", help="Remove the imported Notion snapshot."),
+    ] = False,
+) -> None:
+    """Import or remove a credential-free, read-only Notion MCP snapshot."""
+    if (import_path is None) == (not remove):
+        typer.echo("Choose exactly one of --import or --remove.", err=True)
+        raise typer.Exit(2)
+    store = NotionSnapshotStore(AutoBrainPaths.from_home().sources)
+    if remove:
+        store.remove()
+        typer.echo("Removed the imported Notion snapshot.")
+        return
+    assert import_path is not None
+    try:
+        config = store.import_snapshot(import_path)
+    except (NotionSnapshotError, OSError, ValueError) as exc:
+        typer.echo(f"SOURCE_AUTH_UNAVAILABLE: {exc}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(
+        f"Notion snapshot ready: {config.document_count} pages; "
+        "coverage is partial/non-final and content remains untrusted data"
+    )
+
+
 @source_app.command("status")
 def source_status(
     json_output: Annotated[bool, typer.Option("--json", help="Emit JSON status.")] = False,
 ) -> None:
-    """Show the configured local Slack export state."""
-    status = SlackSourceStore(AutoBrainPaths.from_home().sources).status()
+    """Show configured local Slack and Notion snapshot state."""
+    sources = AutoBrainPaths.from_home().sources
+    slack = SlackSourceStore(sources).status()
+    notion = NotionSnapshotStore(sources).status()
     if json_output:
-        typer.echo(status.model_dump_json(indent=2))
+        typer.echo(
+            json.dumps(
+                {
+                    **slack.model_dump(mode="json"),
+                    "slack": slack.model_dump(mode="json"),
+                    "notion_snapshot": notion.model_dump(mode="json"),
+                },
+                indent=2,
+            )
+        )
         return
-    typer.echo(f"{status.state.value}: {status.detail}")
+    typer.echo(f"Slack: {slack.state.value}: {slack.detail}")
+    typer.echo(f"Notion snapshot: {'READY' if notion.ready else 'NOT_CONFIGURED'}: {notion.detail}")

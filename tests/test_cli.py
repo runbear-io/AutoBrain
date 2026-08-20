@@ -74,6 +74,48 @@ def test_source_slack_export_configures_local_archive(tmp_path: Path) -> None:
     assert report["config"]["summary"]["message_count"] == 1
 
 
+def test_source_notion_snapshot_import_and_status(tmp_path: Path) -> None:
+    snapshot = tmp_path / "notion-snapshot.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "notion-mcp-snapshot",
+                "fetched_at": "2026-08-20T10:00:00Z",
+                "documents": [
+                    {
+                        "page_id": "page-1",
+                        "page_url": "https://www.notion.so/page-1",
+                        "title": "Synthetic page",
+                        "fetched_at": "2026-08-20T09:59:00Z",
+                        "content": "Synthetic safe content.",
+                        "metadata": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    imported = runner.invoke(
+        app,
+        ["source", "notion-snapshot", "--import", str(snapshot)],
+        env={"HOME": str(tmp_path)},
+    )
+    status = runner.invoke(
+        app,
+        ["source", "status", "--json"],
+        env={"HOME": str(tmp_path)},
+    )
+
+    assert imported.exit_code == 0
+    assert "partial/non-final" in imported.stdout
+    report = json.loads(status.stdout)
+    assert report["notion_snapshot"]["ready"] is True
+    assert report["notion_snapshot"]["coverage"]["completeness"] == "UNKNOWN"
+
+
 def test_source_slack_interactive_defaults_to_export(tmp_path: Path) -> None:
     archive_path = _slack_export(tmp_path / "slack-export.zip")
 
@@ -157,6 +199,57 @@ def test_run_uses_configured_slack_export(
     assert result.exit_code == 1
     assert captured[0].slack_export_path == archive_path.resolve()
     assert captured[0].slack_export_sha256 is not None
+
+
+def test_run_notion_only_selects_snapshot_without_slack_auth(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    snapshot = tmp_path / "notion-snapshot.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "notion-mcp-snapshot",
+                "fetched_at": "2026-08-20T10:00:00Z",
+                "documents": [
+                    {
+                        "page_id": "page-1",
+                        "page_url": "https://www.notion.so/page-1",
+                        "title": "Synthetic page",
+                        "fetched_at": "2026-08-20T09:59:00Z",
+                        "content": "Synthetic safe content.",
+                        "metadata": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    runner.invoke(
+        app,
+        ["source", "notion-snapshot", "--import", str(snapshot)],
+        env={"HOME": str(tmp_path)},
+    )
+    captured: list[RunConfig] = []
+
+    def capture(config: RunConfig) -> None:
+        captured.append(config)
+        raise ValueError("stop after config capture")
+
+    monkeypatch.setattr("autobrain.cli.RunOrchestrator.local", capture)
+
+    result = runner.invoke(
+        app,
+        ["run", "--notion-only", "--no-open"],
+        env={"HOME": str(tmp_path)},
+    )
+
+    assert result.exit_code == 1
+    assert captured[0].selected_sources == (Provider.NOTION,)
+    assert captured[0].slack_export_path is None
+    assert captured[0].notion_snapshot_path is not None
 
 
 def test_run_stage_events_option_writes_jsonl_from_persisted_sink(

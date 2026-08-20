@@ -5,6 +5,8 @@ from typing import Annotated, NoReturn
 
 import typer
 
+from autobrain.auth.models import Provider
+from autobrain.connectors.notion_snapshot import NotionSnapshotStore
 from autobrain.embedding import EmbeddingBackend, production_embedding_registry
 from autobrain.fixture import (
     FixtureValidationError,
@@ -248,16 +250,29 @@ def run_comparison(
             help="Write persisted stage events as JSONL to this file.",
         ),
     ] = None,
+    notion_only: Annotated[
+        bool,
+        typer.Option(
+            "--notion-only",
+            help=(
+                "Run only the configured Notion snapshot; Slack is recorded absent "
+                "and the result is non-final."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Run one immutable Slack/Notion comparison and report its run ID."""
     try:
         paths = AutoBrainPaths.from_home()
         slack_status = SlackSourceStore(paths.sources).status()
+        notion_snapshot_status = NotionSnapshotStore(paths.sources).status()
         fixture_path_raw = os.environ.get("AUTOBRAIN_TEST_FIXTURE_PATH")
         fixture_allowed = os.environ.get("AUTOBRAIN_ALLOW_TEST_FIXTURE") == "1"
         embedding_registry = production_embedding_registry()
         if fixture_allowed and os.environ.get("AUTOBRAIN_ENABLE_TEST_SEMANTIC_EMBEDDING") == "1":
             embedding_registry = embedding_registry.with_test_semantic_backend()
+        if notion_only and not notion_snapshot_status.ready:
+            raise ValueError("SOURCE_AUTH_UNAVAILABLE: --notion-only requires an imported snapshot")
         config = RunConfig(
             budget_usd=budget_usd,
             max_questions=max_questions,
@@ -281,6 +296,14 @@ def run_comparison(
                 slack_status.config.archive_sha256
                 if slack_status.ready and slack_status.config is not None
                 else None
+            ),
+            notion_snapshot_path=(
+                notion_snapshot_status.snapshot_path if notion_snapshot_status.ready else None
+            ),
+            selected_sources=(
+                (Provider.NOTION,)
+                if notion_only
+                else (Provider.SLACK, Provider.NOTION)
             ),
         )
         if fixture_path_raw and not fixture_allowed:

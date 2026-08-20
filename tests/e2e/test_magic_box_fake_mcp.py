@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from autobrain.auth.models import Provider
 from autobrain.cli import app
 from autobrain.models import CandidateId, CandidateObservation, SourceKind, Status
 from autobrain.orchestration import (
@@ -155,6 +156,45 @@ def _orchestrator(
             provider_available=True,
         ),
         candidates,
+    )
+
+
+def test_notion_only_snapshot_run_is_partial_non_final_and_has_no_recommendation(
+    tmp_path: Path,
+) -> None:
+    records = _documents(50)
+    candidates = [
+        FakeCandidate("llm-wiki", score=92),
+        FakeCandidate("mem0", score=88),
+    ]
+    orchestrator = RunOrchestrator(
+        config=_config(
+            tmp_path,
+            selected_sources=(Provider.NOTION,),
+            selected_candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
+            notion_snapshot_path=tmp_path / "notion-snapshot.json",
+        ),
+        connectors=[FakeConnector("notion", records)],
+        candidates=candidates,
+        provider_available=True,
+    )
+
+    result = orchestrator.run()
+
+    assert result.status is Status.OK
+    assert result.verdict == "NO_RECOMMENDATION"
+    comparison = load_comparison(result.run_dir / "comparison.json")
+    assert comparison.decision.status is Status.NO_RECOMMENDATION
+    slack_coverage = next(
+        record for record in comparison.coverage if record.source is SourceKind.SLACK_MESSAGE
+    )
+    assert slack_coverage.completeness.value == "UNKNOWN"
+    assert slack_coverage.discovered == 0
+    assert all(candidate.eligible_override is False for candidate in comparison.candidates)
+    assert all(
+        "Slack source absent; source coverage is partial and non-final"
+        in candidate.eligibility_reasons
+        for candidate in comparison.candidates
     )
 
 

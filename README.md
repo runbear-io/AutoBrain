@@ -188,13 +188,30 @@ non-sensitive summary. It does not create a second permanent copy.
 
 ### 5. Optionally connect Notion
 
+Use the existing live OAuth connector:
+
 ```bash
 autobrain auth notion
 ```
 
-Notion is optional when you want both knowledge sources in the same experiment.
-The command opens an explicit user-driven authorization flow. A Notion API
-token is not required.
+Or import a bounded normalized snapshot produced by an external read-only Notion
+MCP session, without giving AutoBrain OAuth tokens or MCP credentials:
+
+```bash
+autobrain source notion-snapshot --import ~/Downloads/notion-snapshot.json
+autobrain source status --json
+autobrain run --notion-only --no-open
+```
+
+The snapshot schema is strict version 1: top-level `schema_version`, `source`
+(`notion-mcp-snapshot`), `fetched_at`, and non-empty `documents`; each document
+contains only `page_id`, `page_url`, `title`, `fetched_at`, `content`, and optional
+string-to-string `metadata`. Unknown fields, duplicate IDs, secrets, mutation or
+prompt-like metadata, symlinks, traversal, and oversized input are rejected.
+Prompt-like page content is retained only as inert untrusted data with an explicit
+warning. Snapshot coverage is always reported as partial/non-final. A Notion-only
+run truthfully records Slack as absent and cannot produce a final recommendation.
+The existing Notion OAuth behavior is unchanged when no snapshot is configured.
 
 ### 6. Run the comparison
 

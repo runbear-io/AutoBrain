@@ -242,6 +242,7 @@ class RunConfig:
     selected_candidates: tuple[CandidateId, ...] = tuple(CandidateId)
     slack_export_path: Path | None = None
     slack_export_sha256: str | None = None
+    notion_snapshot_path: Path | None = None
     experiment_title: str = ""
     experiment_description: str = ""
 
@@ -280,6 +281,8 @@ class RunConfig:
             raise ValueError("slack export path and sha256 must be provided together")
         if self.slack_export_path is not None and Provider.SLACK not in self.selected_sources:
             raise ValueError("slack export requires Slack to be selected")
+        if self.notion_snapshot_path is not None and Provider.NOTION not in self.selected_sources:
+            raise ValueError("Notion snapshot requires Notion to be selected")
         automatic_title, automatic_description = automatic_experiment_copy(
             sources=self.selected_sources,
             candidates=self.selected_candidates,
@@ -321,6 +324,7 @@ def _default_connector_builder(
     *,
     slack_export_path: Path | None = None,
     slack_export_sha256: str | None = None,
+    notion_snapshot_path: Path | None = None,
 ) -> Sequence[Connector]:
     from autobrain.production import build_production_connectors
 
@@ -330,6 +334,7 @@ def _default_connector_builder(
         providers=selected_sources,
         slack_export_path=slack_export_path,
         slack_export_sha256=slack_export_sha256,
+        notion_snapshot_path=notion_snapshot_path,
     )
 
 
@@ -429,7 +434,10 @@ class RunOrchestrator:
         oauth_sources = {
             provider
             for provider in selected_sources
-            if not (provider is Provider.SLACK and config.slack_export_path is not None)
+            if not (
+                (provider is Provider.SLACK and config.slack_export_path is not None)
+                or (provider is Provider.NOTION and config.notion_snapshot_path is not None)
+            )
         }
         disconnected = [
             item.provider.value
@@ -478,6 +486,7 @@ class RunOrchestrator:
                         config.selected_sources,
                         slack_export_path=config.slack_export_path,
                         slack_export_sha256=config.slack_export_sha256,
+                        notion_snapshot_path=config.notion_snapshot_path,
                     )
                 )
             else:
@@ -749,6 +758,15 @@ class RunOrchestrator:
             event_sink_errors=tuple(self._event_sink_errors),
         )
 
+    def coverage_eligibility_reasons(self) -> list[str]:
+        """Return source-scope reasons that make a recommendation partial/non-final."""
+        reasons: list[str] = []
+        if Provider.SLACK not in self.config.selected_sources:
+            reasons.append("Slack source absent; source coverage is partial and non-final")
+        if self.config.notion_snapshot_path is not None:
+            reasons.append("Notion snapshot coverage is partial and non-final")
+        return reasons
+
     def _run_workflow(self) -> RunResult:
         run_id = self.config.run_id or self._new_run_id()
         run_dir = self._create_run_dir(run_id)
@@ -834,6 +852,18 @@ class RunOrchestrator:
             self._manifest["coverage"] = {
                 snapshot.provider: dict(snapshot.coverage) for snapshot in snapshots
             }
+            if Provider.SLACK not in self.config.selected_sources:
+                self._manifest["coverage"][Provider.SLACK.value] = {
+                    "completeness": CoverageCompleteness.UNKNOWN.value,
+                    "discovered": 0,
+                    "fetched": 0,
+                    "unsupported": 1,
+                    "crawl_provenance": {
+                        "source_state": "absent",
+                        "partial": "true",
+                        "final": "false",
+                    },
+                }
             self._stage(run_dir, "coverage", Status.OK, f"{len(documents)} documents")
             cases, holdout_ids = self._build_benchmark(documents, self.config.max_questions)
             normalized_candidate_documents = normalize_raw_items(
@@ -972,14 +1002,25 @@ class RunOrchestrator:
                 corpus_sha,
             )
             provenance = self.benchmark_provenance(evaluations)
+            coverage_reasons = self.coverage_eligibility_reasons()
             evaluations = [
                 evaluation.model_copy(
                     update={
-                        "eligibility_reasons": eligibility_reasons(
-                            evaluation,
-                            embedding=self._embedding_descriptor,
-                            embedding_registry=self.config.embedding_registry,
-                        )
+                        "eligible_override": (
+                            False if coverage_reasons else evaluation.eligible_override
+                        ),
+                        "eligibility_reasons": [
+                            *eligibility_reasons(
+                                evaluation.model_copy(
+                                    update={"eligible_override": False}
+                                    if coverage_reasons
+                                    else {}
+                                ),
+                                embedding=self._embedding_descriptor,
+                                embedding_registry=self.config.embedding_registry,
+                            ),
+                            *coverage_reasons,
+                        ],
                     }
                 )
                 for evaluation in evaluations

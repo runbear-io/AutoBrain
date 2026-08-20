@@ -34,6 +34,7 @@ from autobrain.candidates.mem0 import (
     Mem0AdapterConfig,
     Mem0MissingProviderError,
 )
+from autobrain.connectors.notion_snapshot import NotionSnapshotConnector
 from autobrain.connectors.slack_export import SlackExportConnector, SlackExportCrawlResult
 from autobrain.mcp.transport import StreamableHttpConnection
 from autobrain.metering import (
@@ -301,11 +302,18 @@ def build_production_connectors(
     providers: Sequence[Provider] = (Provider.SLACK, Provider.NOTION),
     slack_export_path: Path | None = None,
     slack_export_sha256: str | None = None,
-) -> tuple[SlackMcpConnector | SlackExportSourceConnector | NotionMcpConnector, ...]:
+    notion_snapshot_path: Path | None = None,
+) -> tuple[
+    SlackMcpConnector | SlackExportSourceConnector | NotionMcpConnector | NotionSnapshotConnector,
+    ...,
+]:
     oauth = OAuthManager(manager.store)
     connectors: dict[
         Provider,
-        SlackMcpConnector | SlackExportSourceConnector | NotionMcpConnector,
+        SlackMcpConnector
+        | SlackExportSourceConnector
+        | NotionMcpConnector
+        | NotionSnapshotConnector,
     ] = {}
     if Provider.SLACK in providers:
         if slack_export_path is not None:
@@ -327,17 +335,20 @@ def build_production_connectors(
                 include_dms=include_dms,
             )
     if Provider.NOTION in providers:
-        notion_token = manager.token_for(Provider.NOTION)
-        if notion_token is None:
-            raise ValueError("MCP_AUTH_UNAVAILABLE: authenticated Notion token required")
-        connectors[Provider.NOTION] = NotionMcpConnector(
-            StreamableHttpConnection.with_oauth(
-                Provider.NOTION,
-                config_for(Provider.NOTION).resource,
-                notion_token,
-                manager=oauth,
+        if notion_snapshot_path is not None:
+            connectors[Provider.NOTION] = NotionSnapshotConnector(notion_snapshot_path)
+        else:
+            notion_token = manager.token_for(Provider.NOTION)
+            if notion_token is None:
+                raise ValueError("MCP_AUTH_UNAVAILABLE: authenticated Notion token required")
+            connectors[Provider.NOTION] = NotionMcpConnector(
+                StreamableHttpConnection.with_oauth(
+                    Provider.NOTION,
+                    config_for(Provider.NOTION).resource,
+                    notion_token,
+                    manager=oauth,
+                )
             )
-        )
     return tuple(connectors[provider] for provider in providers)
 
 
