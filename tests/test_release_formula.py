@@ -118,6 +118,22 @@ def test_malformed_formula_is_rejected(formula: str) -> None:
         parse_formula(formula)
 
 
+def test_generator_rejects_missing_unconditional_runtime_dependency(tmp_path: Path) -> None:
+    data = json.loads(MANIFEST.read_text())
+    data["resources"] = [
+        resource for resource in data["resources"] if resource["name"] != "textual"
+    ]
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(data))
+
+    with pytest.raises(FormulaParseError, match=r"unconditional runtime resources.*textual"):
+        generate_formula(
+            load_formula_manifest(manifest_path),
+            uv_lock_path=ROOT / "uv.lock",
+            pyproject_path=ROOT / "pyproject.toml",
+        )
+
+
 def test_generated_formula_installs_locked_build_backend_without_index_lookup() -> None:
     generated = generate_formula(
         load_formula_manifest(MANIFEST),

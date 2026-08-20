@@ -470,6 +470,7 @@ def _validate_locked_resources(lock_bytes: bytes, manifest: FormulaManifest) -> 
         raise FormulaParseError(f"cannot parse uv.lock packages: {error}") from error
 
     locked_artifacts: dict[str, set[tuple[str, str]]] = {}
+    unconditional_dependencies: dict[str, set[str]] = {}
     for raw_package in packages:
         if not isinstance(raw_package, dict):
             raise FormulaParseError("uv.lock package entries must be tables")
@@ -490,6 +491,37 @@ def _validate_locked_resources(lock_bytes: bytes, manifest: FormulaManifest) -> 
             if isinstance(url, str) and isinstance(digest, str) and digest.startswith("sha256:"):
                 artifacts.add((url, digest.removeprefix("sha256:")))
         locked_artifacts[name] = artifacts
+        dependencies: set[str] = set()
+        raw_dependencies = package.get("dependencies", [])
+        if not isinstance(raw_dependencies, list):
+            raise FormulaParseError(f'uv.lock dependencies for "{name}" must be an array')
+        for raw_dependency in cast(list[object], raw_dependencies):
+            if not isinstance(raw_dependency, dict):
+                raise FormulaParseError(f'uv.lock dependency for "{name}" must be a table')
+            dependency = cast(dict[str, Any], raw_dependency)
+            dependency_name = dependency.get("name")
+            if not isinstance(dependency_name, str):
+                raise FormulaParseError(f'uv.lock dependency name for "{name}" must be a string')
+            if "marker" not in dependency:
+                dependencies.add(dependency_name)
+        unconditional_dependencies[name] = dependencies
+
+    required_runtime: set[str] = set()
+    pending = list(unconditional_dependencies.get("autobrain", set()))
+    while pending:
+        name = pending.pop()
+        if name in required_runtime:
+            continue
+        required_runtime.add(name)
+        pending.extend(unconditional_dependencies.get(name, set()) - required_runtime)
+    manifest_runtime = {
+        resource.name for resource in manifest.resources if resource.role == "runtime"
+    }
+    missing_runtime = sorted(required_runtime - manifest_runtime)
+    if missing_runtime:
+        raise FormulaParseError(
+            "manifest is missing unconditional runtime resources: " + ", ".join(missing_runtime)
+        )
 
     for resource in manifest.resources:
         if resource.role != "runtime":

@@ -14,7 +14,7 @@
     "branch": "main"
   },
   "python": "python@3.13",
-  "uv_lock_sha256": "fc5e8094685e2e8b1f829375aa8b962a717ec93270101edaad4405003c062b81",
+  "uv_lock_sha256": "7d3226f58d8986d9d798694dddf5855fd1ad3f6b4ac5627002010f908a48267e",
   "candidate_pins_sha256": "823e6b199432fa9f512062c190b33113ba6e5916d6c73bd0f2ec141046240678",
   "platform_wheel_resources": [
     "cffi",
@@ -251,6 +251,12 @@
       "role": "runtime"
     },
     {
+      "name": "mdit-py-plugins",
+      "url": "https://files.pythonhosted.org/packages/a5/69/6da5581c6a7fede7dc261bf4e67d6adca4196f176b43288b55b3db395b6e/mdit_py_plugins-0.6.1-py3-none-any.whl",
+      "sha256": "214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d",
+      "role": "runtime"
+    },
+    {
       "name": "mdurl",
       "url": "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl",
       "sha256": "84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8",
@@ -278,6 +284,12 @@
       "name": "openai",
       "url": "https://files.pythonhosted.org/packages/1d/2a/7dd3d207ec669cacc1f186fd856a0f61dbc255d24f6fdc1a6715d6051b0f/openai-1.109.1-py3-none-any.whl",
       "sha256": "6bcaf57086cf59159b8e27447e4e7dd019db5d29a438072fbd49c290c7e65315",
+      "role": "runtime"
+    },
+    {
+      "name": "platformdirs",
+      "url": "https://files.pythonhosted.org/packages/19/a9/c34aebedd3a4c9afe5101b1b8713710b3fec18087c8a36c35d2f909861bd/platformdirs-4.11.3-py3-none-any.whl",
+      "sha256": "5ed065d443751de711da036041a7a214122efc4a4de393b3f4137ba5576540e7",
       "role": "runtime"
     },
     {
@@ -416,6 +428,12 @@
       "name": "starlette",
       "url": "https://files.pythonhosted.org/packages/c8/cb/6a6a47d5b464bd08695d254f3da6e7986cc70c9fa5d778eda57538edfe56/starlette-1.6.0-py3-none-any.whl",
       "sha256": "a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c",
+      "role": "runtime"
+    },
+    {
+      "name": "textual",
+      "url": "https://files.pythonhosted.org/packages/9c/78/96ddb99933e11d91bc6e05edae23d2687e44213066bcbaca338898c73c47/textual-7.5.0-py3-none-any.whl",
+      "sha256": "849dfee9d705eab3b2d07b33152b7bd74fb1f5056e002873cc448bce500c6374",
       "role": "runtime"
     },
     {
