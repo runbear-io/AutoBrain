@@ -1,57 +1,49 @@
-Task 10 final QA (redacted)
-===========================
+Task 10 retained QA evidence (redacted, fail-closed)
+===================================================
 
-Scope
------
-- Only the autobrain repository was changed.
-- No OAuth, company data, provider runtime, Plugbear/.omo file, commit, push,
-  or external write was attempted.
+Release binding
+---------------
+- Current release version: 0.1.1.
+- Current candidate commit: 036714b91df82d1eb538d39d8251f86ae9f55a4e.
+- Runtime evidence status: UNBOUND_CURRENT_RELEASE.
+- Reason: the retained QA record names an installed
+  `autobrain-0.1.0-py3-none-any.whl` and does not record a source commit.
+- Therefore the retained report screenshots and runtime observations are not
+  evidence that release 0.1.1 or the current candidate commit passed runtime
+  QA. Their bytes are preserved as historical observations only; they were not
+  regenerated, relabeled, or represented as current-release evidence.
+
+Historical synthetic observations
+---------------------------------
 - Fake-MCP mode used a local JSON fixture guarded by both required environment
-  variables. The fixture contained synthetic Slack and Notion records only,
+  variables. The fixture was recorded as synthetic Slack and Notion data with
   safe HTTPS source URLs, three deterministic candidates, and no oracle,
   reference, raw-corpus, or secret material.
+- The retained record says two fixture runs executed Slack and Notion crawling
+  and all three candidates, with distinct immutable run IDs and stable output
+  after run-ID normalization.
+- The retained record says installed Chrome captured the three report images
+  at 375, 768, and 1280 pixels, with no horizontal overflow, console errors,
+  external requests, scripts, inline handlers, secret patterns, or
+  oracle/reference markers.
+- Those observations remain useful for historical image and text safety review,
+  but current release provenance is NOT_ESTABLISHED.
 
-Reproduction and repairs
-------------------------
-- Installed CLI probe reproduced lexical output traversal:
-  `--output confined/../target` created `target` before repair.
-- Guarded baseline: 319 passed, 3 typed provider/live skips. The three
-  blockers were the live-provider tests for GBrain, LLM Wiki, and Mem0; the
-  default suite now gates them behind explicit `AUTOBRAIN_RUN_LIVE_TESTS=1`.
-- Added lexical traversal rejection before output creation, symlink/run-ID
-  confinement, and typed MISSING_PROVIDER propagation without a report.
-- Added secure installed fake-MCP mode requiring
-  `AUTOBRAIN_ALLOW_TEST_FIXTURE=1` and an absolute
-  `AUTOBRAIN_TEST_FIXTURE_PATH`. It is data-only, strict-schema/hash checked,
-  local-only, and marks test mode in the manifest/report.
-
-Installed fake-E2E
-------------------
-- Fresh wheel install exercised `autobrain --help`, bad traversal input, and
-  two successful fixture runs.
-- Both fixture runs executed Slack + Notion crawling and all three candidates.
-- Run IDs were distinct and run directories were immutable. Stable comparison,
-  corpus, benchmark, candidate, and report content matched after only the
-  run-ID fields were normalized.
-- Cleanup left no candidate process or temporary provider state.
-
-Chrome QA
----------
-- Real installed Chrome captured report screenshots at 375, 768, and 1280px.
-- DOM metrics: scroll width equaled viewport at every width; warning, mobile
-  cards/table, and source links were inside the viewport and readable.
-- Pixel checks: visible warning, candidate cards/table, and source-link crops
-  all returned non-empty rendered PNG content.
-- Console errors, external network requests, scripts, inline XSS handlers,
-  secret patterns, and oracle/reference markers were absent.
+Release evidence policy
+-----------------------
+- The exact six retained files are closed by SHA-256 in `manifest.json`.
+- The manifest self-hash is SHA-256 over its exact UTF-8 bytes after replacing
+  the single `hashes.manifest.json` value with 64 ASCII zeroes.
+- A retained runtime artifact may claim current-release verification only when
+  it records both the current release version and source commit. Missing or
+  mismatched provenance is represented by a typed fail-closed status.
+- No corpus, token, raw provider output, or secret value is retained.
 
 Retained allowlist
 ------------------
-- `task-10-final-qa.txt`
-- `manifest.json`
 - `comparison.json`
+- `manifest.json`
+- `screenshots/report-1280.png`
 - `screenshots/report-375.png`
 - `screenshots/report-768.png`
-- `screenshots/report-1280.png`
-
-No corpus, token, raw provider, or unrelated dated QA evidence is retained.
+- `task-10-final-qa.txt`

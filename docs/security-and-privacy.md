@@ -45,3 +45,16 @@ values. Candidate processes use run-local state and cleanup is guaranteed in a
 The report may link only to safe evidence. Never commit or externally send a
 Slack export, run directory, corpus, screenshot containing source text, or
 token unless company policy explicitly permits it.
+
+## Shipped release evidence
+
+The retained release-evidence directory is an exact six-file allowlist. Its
+manifest records a SHA-256 digest for every file and a self-hash over the exact
+manifest bytes with the self-hash value replaced by 64 ASCII zeroes. The sdist
+must contain that exact closed set and no other `.senpi` material.
+
+Screenshots and runtime reports are fail-closed when provenance is incomplete.
+They may claim verification of the current release only when both the release
+version and source commit were recorded during that run. Older or unbound
+artifacts must remain explicitly typed `UNBOUND_CURRENT_RELEASE`; changing a
+filename, version label, or manifest cannot make stale runtime evidence current.

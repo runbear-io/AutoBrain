@@ -600,6 +600,19 @@ AutoBrain is deliberately conservative at external boundaries:
 Read the longer security notes in
 [`docs/security-and-privacy.md`](docs/security-and-privacy.md).
 
+## Release evidence integrity
+
+The sdist carries only the six files explicitly listed in
+`.senpi/task-10-final-qa/manifest.json`. Every retained file is SHA-256 closed,
+and the manifest self-hash is computed over its exact UTF-8 bytes after the
+single `hashes.manifest.json` value is replaced with 64 ASCII zeroes.
+
+Runtime screenshots and reports are release evidence only when their provenance
+records both the current release version and source commit. Missing or
+mismatched provenance must remain typed `UNBOUND_CURRENT_RELEASE`; historical
+artifacts may be retained for inspection, but must not be relabeled as proof of
+the current release.
+
 ## Development
 
 AutoBrain uses Python, `uv`, pytest, Ruff, and basedpyright.

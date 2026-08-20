@@ -344,17 +344,18 @@ def test_retained_final_qa_allowlist_and_screenshot_hashes_are_strict() -> None:
     }
     actual = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     assert actual == expected
-    assert set(manifest["allowlist"]) == expected
-    for relative in expected:
-        path = root / relative
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if relative == "manifest.json":
-            canonical = json.loads(path.read_text(encoding="utf-8"))
-            canonical["hashes"]["manifest.json"] = "0" * 64
-            digest = hashlib.sha256(
-                json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
+    assert manifest["allowlist"] == sorted(expected)
+    assert set(manifest["hashes"]) == expected
+    for relative in expected - {"manifest.json"}:
+        digest = hashlib.sha256((root / relative).read_bytes()).hexdigest()
         assert manifest["hashes"][relative] == digest
+    manifest_bytes = (root / "manifest.json").read_bytes()
+    claimed_self_hash = manifest["hashes"]["manifest.json"]
+    assert manifest_bytes.count(claimed_self_hash.encode("ascii")) == 1
+    zeroed = manifest_bytes.replace(
+        claimed_self_hash.encode("ascii"), ("0" * 64).encode("ascii"), 1
+    )
+    assert hashlib.sha256(zeroed).hexdigest() == claimed_self_hash
     for width in (375, 768, 1280):
         png = root / f"screenshots/report-{width}.png"
         png_width, png_height = struct.unpack(">II", png.read_bytes()[16:24])

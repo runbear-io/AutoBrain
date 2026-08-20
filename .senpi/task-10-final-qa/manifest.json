@@ -1,27 +1,32 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "task": "10",
   "redacted": true,
   "allowlist": [
-    "task-10-final-qa.txt",
-    "manifest.json",
     "comparison.json",
+    "manifest.json",
+    "screenshots/report-1280.png",
     "screenshots/report-375.png",
     "screenshots/report-768.png",
-    "screenshots/report-1280.png"
+    "task-10-final-qa.txt"
   ],
-  "hash_basis": "manifest.json hash replaces hashes.manifest.json with 64 zeroes",
+  "hash_basis": "SHA-256 of the exact UTF-8 manifest.json bytes after replacing the single hashes.manifest.json value with 64 ASCII zeroes",
   "hashes": {
-    "task-10-final-qa.txt": "7a3683ca4a02de360146e013a0f360dbc1ec0129be154451a3538e8041a280e4",
-    "manifest.json": "9a86623a8f4fb0a19566de43b4db471c1bdc20c17507ff716c43d5759734a1a9",
-    "comparison.json": "83cbbbf98e0500352f4ed6aee6cb300c9c23512975ac409824b7891864c95120",
+    "comparison.json": "9e257551f864cc56b1e8ed6abedb9534b6f20e1ab52ed5b248b3925aabd2f71b",
+    "manifest.json": "33fb22139de666cb9d61f7f3b263b399b41cf3a24062f725e513983e35c88c22",
+    "screenshots/report-1280.png": "b71d918f2f2a9cdaea11bc5e098a711433c5383214505d75450b7b09c416c2cc",
     "screenshots/report-375.png": "2d5a68ca1d222a6fabd9d44c6f67575ce70bb9cfd94ad79f6ef5b4c544ff1ef5",
     "screenshots/report-768.png": "6ea06dcc4347d4c15c117b804e2d6957560678a127278e244fdebb403a454bf2",
-    "screenshots/report-1280.png": "b71d918f2f2a9cdaea11bc5e098a711433c5383214505d75450b7b09c416c2cc"
+    "task-10-final-qa.txt": "445e43b32e00ad5c2cc2bdb05ab030173f6f93aee570edfedc63a7cf8b8f47b4"
   },
-  "evidence": {
-    "installed_wheel": "autobrain-0.1.0-py3-none-any.whl",
-    "fixture_mode": "AUTOBRAIN_ALLOW_TEST_FIXTURE=1 plus absolute JSON path",
+  "release": {
+    "version": "0.1.1",
+    "candidate_commit": "036714b91df82d1eb538d39d8251f86ae9f55a4e"
+  },
+  "runtime_evidence": {
+    "status": "UNBOUND_CURRENT_RELEASE",
+    "reason": "SOURCE_COMMIT_AND_0.1.1_WHEEL_NOT_RECORDED",
+    "observed_installed_wheel": "autobrain-0.1.0-py3-none-any.whl",
     "external_access": "NOT_ATTEMPTED"
   }
 }

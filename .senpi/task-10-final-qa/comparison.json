@@ -11,7 +11,15 @@
     "mem0",
     "gbrain"
   ],
-  "evidence": {
+  "runtime_evidence": {
+    "status": "UNBOUND_CURRENT_RELEASE",
+    "reason": "SOURCE_COMMIT_AND_0.1.1_WHEEL_NOT_RECORDED",
+    "observed_installed_wheel": "autobrain-0.1.0-py3-none-any.whl",
+    "current_release_version": "0.1.1",
+    "current_candidate_commit": "036714b91df82d1eb538d39d8251f86ae9f55a4e",
+    "release_claim": "NOT_ESTABLISHED"
+  },
+  "historical_observations": {
     "fake_run_status": "OK",
     "fake_runs": 2,
     "immutable_distinct_run_ids": true,
@@ -37,7 +45,8 @@
     "console_errors": false,
     "external_network_requests": false,
     "contrast_and_readability": true,
-    "xss_or_secret_oracle_leak": false
+    "xss_or_secret_oracle_leak": false,
+    "current_release_binding": "NOT_ESTABLISHED"
   },
   "secrets_or_corpus": "NOT_INCLUDED"
 }
