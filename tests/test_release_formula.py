@@ -238,6 +238,26 @@ def test_generator_rejects_linux_only_runtime_resource(tmp_path: Path) -> None:
         )
 
 
+def test_generated_formula_uses_current_homebrew_style() -> None:
+    generated = generate_formula(
+        load_formula_manifest(MANIFEST),
+        uv_lock_path=ROOT / "uv.lock",
+        pyproject_path=ROOT / "pyproject.toml",
+    )
+
+    assert 'desc "Compare LLM Wiki, Mem0 OSS, and GBrain on Slack and Notion"' in generated
+    assert 'resource "hatchling" do' in generated
+    assert 'url "https://' in generated
+    assert 'sha256 "' in generated
+    assert "depends_on arch: :arm64\ndepends_on :macos" not in generated
+    assert '  depends_on arch: :arm64\n  depends_on :macos\n  depends_on "python@3.13"' in generated
+    non_url_lines = [
+        line for line in generated.splitlines() if not line.lstrip().startswith("url ")
+    ]
+    assert max(map(len, non_url_lines)) <= 118
+    assert "'" not in generated
+
+
 def test_generated_formula_installs_locked_build_backend_without_index_lookup() -> None:
     generated = generate_formula(
         load_formula_manifest(MANIFEST),
@@ -245,7 +265,7 @@ def test_generated_formula_installs_locked_build_backend_without_index_lookup() 
         pyproject_path=ROOT / "pyproject.toml",
     )
 
-    assert generated.index("resource 'hatchling'") < generated.index("resource 'annotated-doc'")
+    assert generated.index('resource "hatchling"') < generated.index('resource "annotated-doc"')
     assert "venv.pip_install_and_link buildpath, build_isolation: false" in generated
     assert "venv.pip_install_and_link buildpath\n" not in generated
 
@@ -382,6 +402,14 @@ def test_manifest_rejects_normalized_resource_name_collisions(tmp_path: Path) ->
 
     with pytest.raises(FormulaParseError, match="collision"):
         load_formula_manifest(manifest_path)
+
+
+def test_atomic_formula_write_uses_conventional_readable_mode(tmp_path: Path) -> None:
+    output = tmp_path / "autobrain.rb"
+
+    write_formula_atomic(output, b"formula\n")
+
+    assert output.stat().st_mode & 0o777 == 0o644
 
 
 def test_atomic_formula_write_preserves_previous_file_when_replace_is_interrupted(

@@ -175,9 +175,9 @@ def _normalized_resource_name(name: str) -> str:
 
 
 def _ruby_string(value: str) -> str:
-    """Quote a validated manifest value without Ruby interpolation."""
-    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
-    return f"'{escaped}'"
+    """Double-quote a validated manifest value without Ruby interpolation."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _required_sha256(mapping: dict[str, Any], key: str) -> str:
@@ -647,9 +647,9 @@ def generate_formula(
         f"  license {_ruby_string(manifest.license)}",
         f"  head {_ruby_string(manifest.head.url)}, branch: {_ruby_string(manifest.head.branch)}",
         "",
-        f"  depends_on {_ruby_string(manifest.python)}",
-        "  depends_on :macos",
         "  depends_on arch: :arm64",
+        "  depends_on :macos",
+        f"  depends_on {_ruby_string(manifest.python)}",
         "",
         "  PLATFORM_WHEEL_RESOURCES = %w[",
     ]
@@ -697,7 +697,8 @@ def generate_formula(
             "  test do",
             '    assert_match "Usage", shell_output(bin/"autobrain --help")',
             '    assert_match "checks", shell_output(bin/"autobrain doctor --json")',
-            '    system libexec/"bin/python", "-c", "import ' + ", ".join(imports) + '"',
+            '    system libexec/"bin/python", "-c",',
+            '           "import ' + ", ".join(imports) + '"',
             "  end",
             "end",
             "",
@@ -792,6 +793,7 @@ def write_formula_atomic(path: Path, content: bytes) -> None:
             temporary.write(content)
             temporary.flush()
             os.fsync(temporary.fileno())
+        temporary_path.chmod(0o644)
         os.replace(temporary_path, path)
         temporary_path = None
         directory_fd = os.open(path.parent, os.O_RDONLY)
