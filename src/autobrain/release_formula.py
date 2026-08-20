@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import tarfile
 import tempfile
 import tomllib
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ _VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[a-z0-9.-]+)?$")
 _PYTHON_FORMULA = re.compile(r"^python@[0-9]+\.[0-9]+$")
 _BRANCH = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$")
 _LICENSE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-.+]*$")
+_GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,()&+:/_-]*$")
 _RUBY_CONTROL = re.compile(r"#(?:\{|@|\$)|`|%[qQwWiIxrs]?(?=[^A-Za-z0-9\s%])")
 _BUILD_RESOURCES = (
@@ -48,6 +50,10 @@ _BUILD_RESOURCES = (
 
 class FormulaParseError(ValueError):
     """Raised when formula generation inputs or declarations cannot be verified."""
+
+
+class ReleaseSourceError(FormulaParseError):
+    """Raised when an approved source archive cannot be bound to the reviewed tree."""
 
 
 class ArchiveKind(StrEnum):
@@ -85,8 +91,11 @@ class FormulaVerification:
 @dataclass(frozen=True)
 class FormulaSource:
     version: str
+    status: str
     url: str
     sha256: str
+    reviewed_commit: str | None
+    tree_sha256: str
 
 
 @dataclass(frozen=True)
@@ -198,8 +207,8 @@ def load_formula_manifest(path: Path) -> FormulaManifest:
     if not isinstance(raw, dict):
         raise FormulaParseError("formula manifest must be a JSON object")
     data = cast(dict[str, Any], raw)
-    if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
-        raise FormulaParseError("formula manifest schema_version must be integer 1")
+    if type(data.get("schema_version")) is not int or data["schema_version"] != 2:
+        raise FormulaParseError("formula manifest schema_version must be integer 2")
 
     source_raw = data.get("source")
     head_raw = data.get("head")
@@ -264,17 +273,45 @@ def load_formula_manifest(path: Path) -> FormulaManifest:
         raise FormulaParseError("platform wheels missing from resources: " + ", ".join(missing))
 
     source = cast(dict[str, Any], source_raw)
+    status = _required_string(source, "status")
+    if status not in {"prepared", "approved"}:
+        raise FormulaParseError('manifest field "status" must be "prepared" or "approved"')
+    reviewed_commit_raw = source.get("reviewed_commit")
+    if reviewed_commit_raw is not None and (
+        not isinstance(reviewed_commit_raw, str)
+        or _GIT_COMMIT.fullmatch(reviewed_commit_raw) is None
+    ):
+        raise FormulaParseError('manifest field "reviewed_commit" must be a full Git commit SHA')
+    source_url = _https_url(source, "url")
+    source_sha256 = _required_sha256(source, "sha256")
+    if status == "approved":
+        if reviewed_commit_raw is None:
+            raise FormulaParseError('approved source requires manifest field "reviewed_commit"')
+        if source_sha256 == "0" * _SHA256_LENGTH:
+            raise FormulaParseError("approved source requires a non-zero archive SHA-256")
+        if "UNAPPROVED" in source_url:
+            raise FormulaParseError("approved source URL must not contain UNAPPROVED")
+    else:
+        if reviewed_commit_raw is not None:
+            raise FormulaParseError("prepared source must not declare a reviewed commit")
+        if source_sha256 != "0" * _SHA256_LENGTH:
+            raise FormulaParseError("prepared source SHA-256 must be all zeroes")
+        if "UNAPPROVED" not in source_url:
+            raise FormulaParseError("prepared source URL must contain UNAPPROVED")
     head = cast(dict[str, Any], head_raw)
     return FormulaManifest(
-        schema_version=1,
+        schema_version=2,
         class_name=_matching_string(data, "class_name", _CLASS_NAME, "a Ruby class identifier"),
         description=_matching_string(data, "description", _SAFE_TEXT, "single-line release text"),
         homepage=_https_url(data, "homepage"),
         license=_matching_string(data, "license", _LICENSE, "an SPDX-style identifier"),
         source=FormulaSource(
             version=_matching_string(source, "version", _VERSION, "a release version identifier"),
-            url=_https_url(source, "url"),
-            sha256=_required_sha256(source, "sha256"),
+            status=status,
+            url=source_url,
+            sha256=source_sha256,
+            reviewed_commit=reviewed_commit_raw,
+            tree_sha256=_required_sha256(source, "tree_sha256"),
         ),
         head=FormulaHead(
             url=_https_url(head, "url"),
@@ -594,10 +631,140 @@ def _validate_locked_resources(lock_bytes: bytes, manifest: FormulaManifest) -> 
             )
 
 
+def _release_files(project_root: Path) -> tuple[Path, ...]:
+    required = [
+        project_root / "pyproject.toml",
+        project_root / "uv.lock",
+        project_root / "candidate-pins.json",
+    ]
+    source_root = project_root / "src" / "autobrain"
+    try:
+        required.extend(
+            path
+            for path in source_root.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+        )
+    except OSError as error:
+        raise ReleaseSourceError(f"cannot enumerate reviewed source tree: {error}") from error
+    missing = [path.relative_to(project_root).as_posix() for path in required if not path.is_file()]
+    if missing:
+        raise ReleaseSourceError("reviewed source tree is missing: " + ", ".join(missing))
+    return tuple(sorted(required, key=lambda path: path.relative_to(project_root).as_posix()))
+
+
+def _release_tree_digest(files: dict[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    for relative, payload in sorted(files.items()):
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(payload).digest())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _reviewed_release_files(project_root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(project_root).as_posix(): path.read_bytes()
+        for path in _release_files(project_root)
+    }
+
+
+def _source_archive_files(archive_path: Path, reviewed: dict[str, bytes]) -> dict[str, bytes]:
+    try:
+        with tarfile.open(archive_path, "r:*") as archive:
+            members = archive.getmembers()
+            roots: set[str] = set()
+            safe_members: list[tuple[tarfile.TarInfo, tuple[str, ...]]] = []
+            for member in members:
+                path = Path(member.name)
+                parts = path.parts
+                if path.is_absolute() or not parts or ".." in parts or "." in parts:
+                    raise ReleaseSourceError(f"source archive has unsafe member: {member.name}")
+                roots.add(parts[0])
+                safe_members.append((member, parts))
+            if len(roots) != 1:
+                raise ReleaseSourceError(
+                    "source archive must contain exactly one top-level directory"
+                )
+            root = next(iter(roots))
+            found: dict[str, bytes] = {}
+            for member, parts in safe_members:
+                if member.issym() or member.islnk():
+                    raise ReleaseSourceError(f"source archive has linked member: {member.name}")
+                if not member.isfile() or parts[0] != root:
+                    continue
+                relative = Path(*parts[1:]).as_posix()
+                if relative.startswith("src/autobrain/") and relative not in reviewed:
+                    raise ReleaseSourceError(
+                        f"source archive has unreviewed packaged source file: {relative}"
+                    )
+                if relative not in reviewed:
+                    continue
+                if relative in found:
+                    raise ReleaseSourceError(f"source archive has duplicate member: {relative}")
+                if member.size != len(reviewed[relative]):
+                    raise ReleaseSourceError(f"source archive does not contain reviewed {relative}")
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ReleaseSourceError(f"cannot read source archive member: {relative}")
+                found[relative] = extracted.read()
+    except (OSError, tarfile.TarError) as error:
+        raise ReleaseSourceError(f"cannot read source archive: {error}") from error
+    missing = sorted(reviewed.keys() - found.keys())
+    if missing:
+        raise ReleaseSourceError("source archive is missing reviewed files: " + ", ".join(missing))
+    return found
+
+
+def _verify_release_source(
+    manifest: FormulaManifest,
+    *,
+    project_root: Path,
+    source_archive_path: Path | None,
+) -> None:
+    if manifest.source.status != "approved":
+        raise ReleaseSourceError(
+            "release source is not approved; provide the approved external source URL, "
+            "SHA-256, reviewed commit, and downloaded source archive before generating "
+            "a publishable formula"
+        )
+    if source_archive_path is None:
+        raise ReleaseSourceError(
+            "approved release generation requires --source-archive for archive/tree verification"
+        )
+    try:
+        archive_bytes = source_archive_path.read_bytes()
+    except OSError as error:
+        raise ReleaseSourceError(f"cannot read source archive: {error}") from error
+    archive_sha = _sha256(archive_bytes)
+    if archive_sha != manifest.source.sha256:
+        raise ReleaseSourceError(
+            f"source archive SHA-256 mismatch: expected {manifest.source.sha256}, got {archive_sha}"
+        )
+    reviewed = _reviewed_release_files(project_root)
+    reviewed_digest = _release_tree_digest(reviewed)
+    if reviewed_digest != manifest.source.tree_sha256:
+        raise ReleaseSourceError(
+            "reviewed release tree SHA-256 mismatch: "
+            f"expected {manifest.source.tree_sha256}, got {reviewed_digest}"
+        )
+    archived = _source_archive_files(source_archive_path, reviewed)
+    for relative, expected in reviewed.items():
+        if archived[relative] != expected:
+            raise ReleaseSourceError(f"source archive does not contain reviewed {relative}")
+    archived_digest = _release_tree_digest(archived)
+    if archived_digest != manifest.source.tree_sha256:
+        raise ReleaseSourceError(
+            "source archive tree SHA-256 mismatch: "
+            f"expected {manifest.source.tree_sha256}, got {archived_digest}"
+        )
+
+
 def _validate_generation_inputs(
     manifest: FormulaManifest,
     uv_lock_path: Path,
     pyproject_path: Path,
+    source_archive_path: Path | None,
 ) -> None:
     try:
         lock_bytes = uv_lock_path.read_bytes()
@@ -623,6 +790,11 @@ def _validate_generation_inputs(
             "candidate-pins.json SHA-256 mismatch: "
             f"expected {manifest.candidate_pins_sha256}, got {candidate_sha}"
         )
+    _verify_release_source(
+        manifest,
+        project_root=pyproject_path.parent,
+        source_archive_path=source_archive_path,
+    )
 
 
 def generate_formula(
@@ -630,13 +802,16 @@ def generate_formula(
     *,
     uv_lock_path: Path,
     pyproject_path: Path,
+    source_archive_path: Path | None = None,
 ) -> str:
-    """Render a byte-stable formula from the checked-in release lock."""
-    _validate_generation_inputs(manifest, uv_lock_path, pyproject_path)
+    """Render a byte-stable formula from an approved, verified release archive."""
+    _validate_generation_inputs(manifest, uv_lock_path, pyproject_path, source_archive_path)
     lines = [
         "# This file is generated by autobrain-generate-formula. Do not edit.",
         f"# uv.lock sha256: {manifest.uv_lock_sha256}",
         f"# candidate-pins.json sha256: {manifest.candidate_pins_sha256}",
+        f"# reviewed commit: {manifest.source.reviewed_commit}",
+        f"# reviewed release tree sha256: {manifest.source.tree_sha256}",
         f"class {manifest.class_name} < Formula",
         "  include Language::Python::Virtualenv",
         "",
@@ -813,6 +988,11 @@ def generate_main() -> None:
     parser.add_argument("--uv-lock", type=Path, required=True)
     parser.add_argument("--pyproject", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--source-archive",
+        type=Path,
+        help="downloaded archive matching the approved source URL and SHA-256",
+    )
     parser.add_argument("--check", action="store_true", help="fail unless output is byte-identical")
     parser.add_argument(
         "--check-downloads",
@@ -826,6 +1006,7 @@ def generate_main() -> None:
             manifest,
             uv_lock_path=arguments.uv_lock,
             pyproject_path=arguments.pyproject,
+            source_archive_path=arguments.source_archive,
         )
         if arguments.check_downloads:
             verify_downloads(manifest)

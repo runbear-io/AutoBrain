@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
+import io
 import json
+import re
+import tarfile
+import tempfile
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -10,15 +16,17 @@ import pytest
 
 from autobrain.release_formula import (
     ArchiveKind,
+    FormulaManifest,
     FormulaParseError,
+    ReleaseSourceError,
     classify_archive,
-    generate_formula,
     load_formula_manifest,
     parse_formula,
     run_cli,
     verify_formula,
     write_formula_atomic,
 )
+from autobrain.release_formula import generate_formula as _raw_generate_formula
 
 ROOT = Path(__file__).parents[1]
 FIXTURES = Path(__file__).parent / "fixtures" / "release"
@@ -125,6 +133,233 @@ def _write_manifest(tmp_path: Path, data: object) -> Path:
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(data))
     return manifest_path
+
+
+def _release_paths(root: Path) -> list[Path]:
+    paths = [
+        root / "pyproject.toml",
+        root / "uv.lock",
+        root / "candidate-pins.json",
+    ]
+    paths.extend(
+        path
+        for path in (root / "src" / "autobrain").rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+    )
+    return sorted(paths, key=lambda path: path.relative_to(root).as_posix())
+
+
+def _release_tree_sha256(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in _release_paths(root):
+        relative = path.relative_to(root).as_posix().encode()
+        digest.update(relative)
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _write_release_archive(path: Path, root: Path) -> None:
+    tar_payload = io.BytesIO()
+    with tarfile.open(fileobj=tar_payload, mode="w") as archive:
+        for source in _release_paths(root):
+            relative = source.relative_to(root)
+            payload = source.read_bytes()
+            info = tarfile.TarInfo(f"AutoBrain-release/{relative.as_posix()}")
+            info.size = len(payload)
+            info.mode = 0o644
+            info.mtime = 0
+            archive.addfile(info, io.BytesIO(payload))
+    with (
+        path.open("wb") as destination,
+        gzip.GzipFile(filename="", mode="wb", fileobj=destination, mtime=0) as compressed,
+    ):
+        compressed.write(tar_payload.getvalue())
+
+
+def generate_formula(
+    manifest: FormulaManifest,
+    *,
+    uv_lock_path: Path,
+    pyproject_path: Path,
+) -> str:
+    with tempfile.TemporaryDirectory() as temporary:
+        archive_path = Path(temporary) / "release.tar.gz"
+        _write_release_archive(archive_path, pyproject_path.parent)
+        source = replace(
+            manifest.source,
+            status="approved",
+            reviewed_commit="036714b91df82d1eb538d39d8251f86ae9f55a4e",
+            tree_sha256=_release_tree_sha256(pyproject_path.parent),
+            sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+        )
+        return _raw_generate_formula(
+            replace(manifest, source=source),
+            uv_lock_path=uv_lock_path,
+            pyproject_path=pyproject_path,
+            source_archive_path=archive_path,
+        )
+
+
+def _approved_manifest(tmp_path: Path, archive_path: Path) -> Path:
+    data = json.loads(MANIFEST.read_text())
+    data["source"].update(
+        {
+            "status": "approved",
+            "reviewed_commit": "036714b91df82d1eb538d39d8251f86ae9f55a4e",
+            "tree_sha256": _release_tree_sha256(ROOT),
+            "url": "https://github.com/runbear-io/AutoBrain/archive/refs/tags/v0.1.1.tar.gz",
+            "sha256": hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+        }
+    )
+    return _write_manifest(tmp_path, data)
+
+
+def test_basic_formula_verification_cannot_detect_source_tree_mismatch() -> None:
+    formula = (FIXTURES / "valid_formula.rb").read_text()
+
+    assert verify_formula(formula).valid
+    assert "pyproject.toml" not in formula
+    assert "uv.lock" not in formula
+    assert "candidate-pins.json" not in formula
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        Path("pyproject.toml"),
+        Path("uv.lock"),
+        Path("candidate-pins.json"),
+        Path("src/autobrain/release_formula.py"),
+    ],
+)
+def test_generator_rejects_archive_from_a_different_source_tree(
+    tmp_path: Path, relative: Path
+) -> None:
+    stale_root = tmp_path / "stale"
+    stale_root.mkdir()
+    for source in _release_paths(ROOT):
+        target = stale_root / source.relative_to(ROOT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    changed = stale_root / relative
+    changed.write_bytes(changed.read_bytes() + b"\n# stale release tree\n")
+    archive_path = tmp_path / "stale.tar.gz"
+    _write_release_archive(archive_path, stale_root)
+    manifest_path = _approved_manifest(tmp_path, archive_path)
+
+    mismatch = rf"source archive.*{re.escape(relative.as_posix())}"
+    with pytest.raises(FormulaParseError, match=mismatch):
+        _raw_generate_formula(
+            load_formula_manifest(manifest_path),
+            uv_lock_path=ROOT / "uv.lock",
+            pyproject_path=ROOT / "pyproject.toml",
+            source_archive_path=archive_path,
+        )
+
+
+def test_checked_in_prepared_release_fails_closed_with_actionable_error() -> None:
+    with pytest.raises(
+        ReleaseSourceError,
+        match=r"release source is not approved.*source URL.*SHA-256.*archive",
+    ):
+        _raw_generate_formula(
+            load_formula_manifest(MANIFEST),
+            uv_lock_path=ROOT / "uv.lock",
+            pyproject_path=ROOT / "pyproject.toml",
+        )
+
+
+def test_checked_in_manifest_rejects_retired_tag_metadata() -> None:
+    source = json.loads(MANIFEST.read_text())["source"]
+
+    assert source == {
+        "version": "0.1.1",
+        "status": "prepared",
+        "url": "https://github.com/runbear-io/AutoBrain/releases/download/UNAPPROVED/autobrain-0.1.1.tar.gz",
+        "sha256": "0" * 64,
+        "reviewed_commit": None,
+        "tree_sha256": _release_tree_sha256(ROOT),
+    }
+    assert "/archive/refs/tags/v0.1.1" not in source["url"]
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"status": "approved", "reviewed_commit": None}, "approved source requires"),
+        ({"status": "approved", "reviewed_commit": "a" * 40, "sha256": "0" * 64}, "non-zero"),
+        (
+            {"status": "approved", "reviewed_commit": "a" * 40, "sha256": "a" * 64},
+            "UNAPPROVED",
+        ),
+        ({"status": "prepared", "reviewed_commit": "a" * 40}, "prepared source must not"),
+        ({"status": "prepared", "sha256": "a" * 64}, "prepared source SHA-256"),
+    ],
+)
+def test_manifest_source_state_is_fail_closed(
+    tmp_path: Path, updates: dict[str, object], message: str
+) -> None:
+    data = json.loads(MANIFEST.read_text())
+    data["source"].update(updates)
+
+    with pytest.raises(FormulaParseError, match=message):
+        load_formula_manifest(_write_manifest(tmp_path, data))
+
+
+def test_approved_archive_rejects_unreviewed_source_member(tmp_path: Path) -> None:
+    archive_path = tmp_path / "extra-source.tar.gz"
+    tar_payload = io.BytesIO()
+    with tarfile.open(fileobj=tar_payload, mode="w") as archive:
+        for source in _release_paths(ROOT):
+            payload = source.read_bytes()
+            info = tarfile.TarInfo(f"AutoBrain-release/{source.relative_to(ROOT).as_posix()}")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+        payload = b"print('unreviewed')\n"
+        info = tarfile.TarInfo("AutoBrain-release/src/autobrain/unreviewed.py")
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+    with (
+        archive_path.open("wb") as destination,
+        gzip.GzipFile(filename="", mode="wb", fileobj=destination, mtime=0) as compressed,
+    ):
+        compressed.write(tar_payload.getvalue())
+    manifest_path = _approved_manifest(tmp_path, archive_path)
+
+    with pytest.raises(ReleaseSourceError, match="unreviewed packaged source file"):
+        _raw_generate_formula(
+            load_formula_manifest(manifest_path),
+            uv_lock_path=ROOT / "uv.lock",
+            pyproject_path=ROOT / "pyproject.toml",
+            source_archive_path=archive_path,
+        )
+
+
+@pytest.mark.parametrize("member_name", ["../escape", "/absolute", "root/../../escape"])
+def test_approved_archive_rejects_unsafe_member_paths(tmp_path: Path, member_name: str) -> None:
+    archive_path = tmp_path / "unsafe.tar.gz"
+    tar_payload = io.BytesIO()
+    with tarfile.open(fileobj=tar_payload, mode="w") as archive:
+        payload = b"unsafe"
+        info = tarfile.TarInfo(member_name)
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+    with (
+        archive_path.open("wb") as destination,
+        gzip.GzipFile(filename="", mode="wb", fileobj=destination, mtime=0) as compressed,
+    ):
+        compressed.write(tar_payload.getvalue())
+    manifest_path = _approved_manifest(tmp_path, archive_path)
+
+    with pytest.raises(ReleaseSourceError, match="unsafe member"):
+        _raw_generate_formula(
+            load_formula_manifest(manifest_path),
+            uv_lock_path=ROOT / "uv.lock",
+            pyproject_path=ROOT / "pyproject.toml",
+            source_archive_path=archive_path,
+        )
 
 
 def test_generator_rejects_missing_macos_marked_runtime_dependency(tmp_path: Path) -> None:

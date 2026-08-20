@@ -1,13 +1,16 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "class_name": "Autobrain",
   "description": "Compare LLM Wiki, Mem0 OSS, and GBrain on Slack and Notion",
   "homepage": "https://github.com/runbear-io/AutoBrain",
   "license": "MIT",
   "source": {
     "version": "0.1.1",
-    "url": "https://github.com/runbear-io/AutoBrain/archive/refs/tags/v0.1.1.tar.gz",
-    "sha256": "162cdf83a2f53747e07400a825119a07b44171b04809766cdacd09355b92c7a3"
+    "status": "prepared",
+    "url": "https://github.com/runbear-io/AutoBrain/releases/download/UNAPPROVED/autobrain-0.1.1.tar.gz",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "reviewed_commit": null,
+    "tree_sha256": "298266a2f8aca50397d9b7cb75cdfca5726a0a3816261fc44c667080c1dcbca3"
   },
   "head": {
     "url": "https://github.com/runbear-io/AutoBrain.git",
