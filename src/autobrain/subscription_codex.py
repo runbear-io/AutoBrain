@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from time import monotonic
 from typing import cast
 
+from autobrain.cancellation import RunCancellation
 from autobrain.subscription_domain import (
     AnswerUsage,
     AuthKind,
@@ -72,6 +73,7 @@ class CodexSubscriptionClient:
     config: CodexSubscriptionConfig
     runner: Runner = run_provider_process
     interactive_runner: InteractiveRunner = run_interactive_provider_process
+    cancellation: RunCancellation | None = None
     last_answer: ProviderAnswer | None = field(default=None, init=False)
     _identity: ProviderIdentity | None = field(default=None, init=False)
     monotonic_clock: Callable[[], float] = monotonic
@@ -89,10 +91,9 @@ class CodexSubscriptionClient:
 
     def probe_identity(self) -> ProviderIdentity:
         try:
-            result = self.runner(
+            result = self._run(
                 [self.config.command, "--version"],
                 "",
-                self.config.timeout_seconds,
             )
         except (
             subprocess.TimeoutExpired,
@@ -147,10 +148,9 @@ class CodexSubscriptionClient:
                 detail=f"Codex CLI not found: {self.config.command}",
             )
         try:
-            result = self.runner(
+            result = self._run(
                 [self.config.command, "login", "status"],
                 "",
-                self.config.timeout_seconds,
             )
         except (subprocess.TimeoutExpired, ProviderProcessTimeout):
             return SubscriptionStatusReport(
@@ -219,7 +219,7 @@ class CodexSubscriptionClient:
         execution_started = self.monotonic_clock()
         try:
             # Prompt is deliberately stdin-only; it must never become argv data.
-            result = self.runner(args, prompt, self.config.timeout_seconds)
+            result = self._run(args, prompt)
         except (subprocess.TimeoutExpired, ProviderProcessTimeout) as exc:
             raise SubscriptionError(
                 SubscriptionStatus.SUBSCRIPTION_EXECUTION_UNAVAILABLE,
@@ -276,6 +276,16 @@ class CodexSubscriptionClient:
     def ask(self, prompt: str) -> str:
         """Legacy string-returning facade; use ``answer`` for typed usage."""
         return self.answer(prompt).text
+
+    def _run(self, args: Sequence[str], stdin: str) -> subprocess.CompletedProcess[str]:
+        if self.runner is run_provider_process:
+            return run_provider_process(
+                args,
+                stdin,
+                self.config.timeout_seconds,
+                self.cancellation,
+            )
+        return self.runner(args, stdin, self.config.timeout_seconds)
 
     def _status_detail(self, status: SubscriptionStatus) -> str:
         if status is SubscriptionStatus.SUBSCRIPTION_CLI_UNAVAILABLE:

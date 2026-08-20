@@ -3,7 +3,7 @@
 from autobrain.auth.models import Provider
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
-from autobrain.orchestration import RunResult
+from autobrain.orchestration import RunResult, StageEvent
 from autobrain.subscription import SubscriptionStatus
 from autobrain.terminal_text import truncate_terminal_text
 from autobrain.tui_home import render_home
@@ -31,6 +31,7 @@ def render_dashboard(
     width: int,
     height: int | None = None,
     source_details: dict[Provider, str] | None = None,
+    latest_stage: StageEvent | None = None,
 ) -> list[str]:
     usable_width = max(1, width - 2)
     details = source_details or {}
@@ -57,7 +58,13 @@ def render_dashboard(
             source_details=details,
         )
     elif section == "running":
-        lines = _running(plan, selected_sources, selected_candidates, elapsed_seconds)
+        lines = _running(
+            plan,
+            selected_sources,
+            selected_candidates,
+            elapsed_seconds,
+            latest_stage,
+        )
     elif section == "results" and result is not None:
         lines = _results(result)
     else:
@@ -79,6 +86,7 @@ def _running(
     selected_sources: tuple[Provider, ...],
     selected_candidates: tuple[CandidateId, ...],
     elapsed_seconds: int,
+    latest_stage: StageEvent | None,
 ) -> list[str]:
     return [
         "AutoBrain",
@@ -88,10 +96,14 @@ def _running(
         f"Sources     {', '.join(item.value.title() for item in selected_sources)}",
         f"Brains      {', '.join(item.value for item in selected_candidates)}",
         f"Elapsed     {elapsed_seconds}s",
-        "1. Freeze corpus   2. Compile LLM Wiki",
-        "3. Retrieve and answer   4. Score quality / latency / cost",
+        f"Stage       {latest_stage.name if latest_stage is not None else 'starting'}",
+        (
+            f"Status      {latest_stage.status.value} - {latest_stage.detail}"
+            if latest_stage is not None
+            else "Status      waiting for first persisted stage"
+        ),
         "",
-        "Experiment is running. Wait for the evidence-backed result.",
+        "Experiment is running. C or Q cancels and settles the run.",
     ]
 
 

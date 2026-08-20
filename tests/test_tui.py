@@ -11,7 +11,7 @@ from autobrain.auth.models import Provider
 from autobrain.cli import app
 from autobrain.experiment import build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState, Status
-from autobrain.orchestration import RunResult
+from autobrain.orchestration import RunResult, StageEvent
 from autobrain.subscription import SubscriptionStatus
 from autobrain.terminal_text import terminal_width
 from autobrain.tui import (
@@ -229,9 +229,38 @@ def test_setup_footers_only_advertise_available_actions() -> None:
     assert not any("Connections" in line for line in source_lines)
 
 
-def test_running_state_rejects_navigation_and_duplicate_run_keys() -> None:
+def test_running_dashboard_shows_latest_persisted_stage() -> None:
+    lines = render_dashboard(
+        section=WizardSection.RUNNING.value,
+        selected_sources=(Provider.SLACK,),
+        selected_candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
+        source_states={Provider.SLACK: ConnectionState.CONNECTED},
+        subscription_status=SubscriptionStatus.READY,
+        plan=None,
+        setup_error="",
+        result=None,
+        elapsed_seconds=3,
+        width=80,
+        height=24,
+        latest_stage=StageEvent(
+            sequence=4,
+            run_id="demo",
+            name="coverage",
+            status=Status.OK,
+            detail="24 documents",
+            started_at="2026-08-19T00:00:00+00:00",
+        ),
+    )
+
+    assert "Stage       coverage" in lines
+    assert "Status      OK - 24 documents" in lines
+
+
+def test_running_state_only_accepts_cooperative_cancel_keys() -> None:
     state = TUIState(section=WizardSection.RUNNING)
 
+    for key in (ord("c"), ord("C"), ord("q"), ord("Q")):
+        assert accepts_key_for_state(state, key, width=80, height=24)
     for key in (
         ord("b"),
         curses.KEY_BACKSPACE,
@@ -239,8 +268,6 @@ def test_running_state_rejects_navigation_and_duplicate_run_keys() -> None:
         curses.KEY_BTAB,
         10,
         ord("1"),
-        ord("c"),
-        ord("q"),
     ):
         assert not accepts_key_for_state(state, key, width=80, height=24)
 

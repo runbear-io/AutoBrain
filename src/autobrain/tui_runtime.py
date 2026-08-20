@@ -6,6 +6,7 @@ import curses
 import queue
 import subprocess
 import sys
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,13 @@ from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
 from autobrain.experiment import ExperimentPlan, ExperimentSetupError, build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState
-from autobrain.orchestration import RunConfig, RunOrchestrator, RunResult
+from autobrain.orchestration import (
+    RunCancellation,
+    RunConfig,
+    RunOrchestrator,
+    RunResult,
+    StageEventSink,
+)
 from autobrain.paths import AutoBrainPaths
 from autobrain.source_store import SlackSourceStore
 from autobrain.subscription import (
@@ -111,6 +118,8 @@ def resolve_plan(
 def execute_plan(
     plan: ExperimentPlan,
     result_queue: queue.Queue[RunResult | BaseException],
+    stage_event_sink: StageEventSink | None = None,
+    cancellation: RunCancellation | None = None,
 ) -> None:
     try:
         paths = AutoBrainPaths.from_home()
@@ -132,9 +141,45 @@ def execute_plan(
             experiment_title=plan.title,
             experiment_description=plan.description,
         )
-        result_queue.put(RunOrchestrator.local(config).run())
+        result_queue.put(
+            RunOrchestrator.local(
+                config,
+                stage_event_sink=stage_event_sink,
+                cancellation=cancellation,
+            ).run()
+        )
     except BaseException as exc:
         result_queue.put(exc)
+
+
+@dataclass(frozen=True)
+class PlanWorker:
+    thread: threading.Thread
+    cancellation: RunCancellation
+
+    def cancel_and_join(self, *, timeout: float) -> bool:
+        self.cancellation.cancel()
+        self.thread.join(timeout=timeout)
+        return not self.thread.is_alive()
+
+    def join(self, *, timeout: float) -> bool:
+        self.thread.join(timeout=timeout)
+        return not self.thread.is_alive()
+
+
+def start_plan_worker(
+    plan: ExperimentPlan,
+    result_queue: queue.Queue[RunResult | BaseException],
+    stage_event_sink: StageEventSink | None = None,
+) -> PlanWorker:
+    """Start a cooperatively cancellable legacy TUI worker."""
+    cancellation = RunCancellation()
+    thread = threading.Thread(
+        target=execute_plan,
+        args=(plan, result_queue, stage_event_sink, cancellation),
+    )
+    thread.start()
+    return PlanWorker(thread=thread, cancellation=cancellation)
 
 
 def run_connection_flow(

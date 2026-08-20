@@ -534,7 +534,12 @@ def test_normal_orchestration_does_not_eligibilize_incomplete_cost(
     assert result.verdict == CandidateId.MEM0.value
 
     assert complete.context is not None
-    assert set(vars(complete.context)) == {"documents", "questions", "case_ids"}
+    assert set(vars(complete.context)) == {
+        "documents",
+        "questions",
+        "case_ids",
+        "cancellation",
+    }
     assert 20 <= len(complete.context.questions) <= 30
     candidate_corpus = json.dumps(
         complete.context.documents,

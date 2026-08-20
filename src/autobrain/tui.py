@@ -5,7 +5,6 @@ from __future__ import annotations
 import curses
 import queue
 import sys
-import threading
 import time
 import webbrowser
 
@@ -13,16 +12,17 @@ from autobrain.auth.models import Provider
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
 from autobrain.onboarding import is_onboarded, mark_onboarded
-from autobrain.orchestration import RunResult
+from autobrain.orchestration import RunResult, StageEvent
 from autobrain.paths import AutoBrainPaths
 from autobrain.subscription import SubscriptionStatus
 from autobrain.tui_render import render_dashboard, terminal_too_small
 from autobrain.tui_runtime import (
     ConnectionSnapshot,
+    PlanWorker,
     connection_snapshot,
-    execute_plan,
     resolve_plan,
     run_connection_flow,
+    start_plan_worker,
 )
 from autobrain.tui_state import TUIState, WizardSection
 from autobrain.tui_style import line_style
@@ -52,7 +52,9 @@ def accepts_key_for_state(
 ) -> bool:
     if not accepts_key_at_size(key, width=width, height=height):
         return False
-    return state.section is not WizardSection.RUNNING
+    if state.section is WizardSection.RUNNING:
+        return key in {ord("q"), ord("Q"), ord("c"), ord("C")}
+    return True
 
 
 def _run(screen: curses.window, *, force_setup: bool) -> None:
@@ -75,6 +77,12 @@ def _run(screen: curses.window, *, force_setup: bool) -> None:
     result: RunResult | None = None
     started_at = 0.0
     runtime_error = ""
+    latest_stage: StageEvent | None = None
+    runtime_worker: PlanWorker | None = None
+
+    def record_stage(event: StageEvent) -> None:
+        nonlocal latest_stage
+        latest_stage = event
 
     while True:
         plan, setup_error = resolve_plan(
@@ -93,12 +101,17 @@ def _run(screen: curses.window, *, force_setup: bool) -> None:
             setup_error,
             result,
             int(time.monotonic() - started_at) if started_at else 0,
+            latest_stage,
         )
         if state.section is WizardSection.RUNNING:
             try:
                 completed = result_queue.get_nowait()
             except queue.Empty:
                 completed = None
+            if completed is not None and runtime_worker is not None:
+                if not runtime_worker.join(timeout=0.5):
+                    runtime_error = "RUN_SETTLEMENT_TIMEOUT: worker did not exit after result"
+                runtime_worker = None
             if isinstance(completed, BaseException):
                 runtime_error = f"RUN_FAILED: {type(completed).__name__}: {completed}"
                 state = state.with_section(WizardSection.REVIEW)
@@ -116,7 +129,20 @@ def _run(screen: curses.window, *, force_setup: bool) -> None:
             height=current_height,
         ):
             continue
-        if key in {ord("q"), ord("Q")} and state.section is not WizardSection.RUNNING:
+        if state.section is WizardSection.RUNNING and key in {
+            ord("q"),
+            ord("Q"),
+            ord("c"),
+            ord("C"),
+        }:
+            settled = runtime_worker is not None and runtime_worker.cancel_and_join(timeout=2.0)
+            if not settled:
+                runtime_error = "RUN_CANCELLATION_TIMEOUT: worker did not settle"
+                continue
+            if key in {ord("q"), ord("Q")}:
+                return
+            continue
+        if key in {ord("q"), ord("Q")}:
             return
         if key in {ord("b"), ord("B"), curses.KEY_BACKSPACE}:
             runtime_error = ""
@@ -165,12 +191,9 @@ def _run(screen: curses.window, *, force_setup: bool) -> None:
                     state = state.start_setup()
                 else:
                     state = state.with_section(WizardSection.RUNNING)
+                    latest_stage = None
                     started_at = time.monotonic()
-                    threading.Thread(
-                        target=execute_plan,
-                        args=(plan, result_queue),
-                        daemon=True,
-                    ).start()
+                    runtime_worker = start_plan_worker(plan, result_queue, record_stage)
             elif state.section is WizardSection.CONNECTIONS:
                 if connections.subscription is not SubscriptionStatus.READY:
                     run_connection_flow(screen, "subscription")
@@ -202,12 +225,9 @@ def _run(screen: curses.window, *, force_setup: bool) -> None:
                     state = state.advance()
             elif state.section is WizardSection.REVIEW and plan is not None:
                 state = state.with_section(WizardSection.RUNNING)
+                latest_stage = None
                 started_at = time.monotonic()
-                threading.Thread(
-                    target=execute_plan,
-                    args=(plan, result_queue),
-                    daemon=True,
-                ).start()
+                runtime_worker = start_plan_worker(plan, result_queue, record_stage)
             else:
                 state = state.advance()
 
@@ -220,6 +240,7 @@ def _draw(
     setup_error: str,
     result: RunResult | None,
     elapsed_seconds: int,
+    latest_stage: StageEvent | None,
 ) -> None:
     screen.erase()
     height, width = screen.getmaxyx()
@@ -236,6 +257,7 @@ def _draw(
         width=width,
         height=height,
         source_details=connections.source_details,
+        latest_stage=latest_stage,
     )
     column = 1 if width > 2 else 0
     for row, line in enumerate(lines[: max(1, height - 1)]):

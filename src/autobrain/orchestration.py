@@ -25,6 +25,7 @@ from typing import Any, Protocol, cast
 from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
 from autobrain.benchmark import LeakageScanResult, scan_benchmark_leakage
+from autobrain.cancellation import RunCancellation, RunCancelled
 from autobrain.corpus import normalize_raw_items
 from autobrain.decision import select_winner
 from autobrain.evaluate import evaluate_candidate, evaluate_case
@@ -95,6 +96,31 @@ class Connector(Protocol):
     def crawl(self, *, include_dms: bool) -> ConnectorSnapshot: ...
 
 
+@dataclass(frozen=True)
+class StageEvent:
+    """One immutable stage entry reconstructed from the persisted manifest value."""
+
+    sequence: int
+    run_id: str
+    name: str
+    status: Status
+    detail: str
+    started_at: str
+
+    def as_manifest_entry(self) -> dict[str, int | str]:
+        return {
+            "sequence": self.sequence,
+            "run_id": self.run_id,
+            "name": self.name,
+            "status": self.status.value,
+            "detail": self.detail,
+            "started_at": self.started_at,
+        }
+
+
+StageEventSink = Callable[[StageEvent], None]
+
+
 class Candidate(Protocol):
     candidate_id: str
 
@@ -141,6 +167,7 @@ class CandidateContext:
     documents: tuple[Mapping[str, Any], ...]
     questions: tuple[str, ...]
     case_ids: tuple[str, ...]
+    cancellation: RunCancellation = field(default_factory=RunCancellation)
 
     @property
     def normalized_documents(self) -> tuple[Any, ...]:
@@ -247,6 +274,7 @@ class RunResult:
     report_path: Path | None
     candidate_results: tuple[CandidateOutcome, ...]
     verdict: str
+    event_sink_errors: tuple[str, ...] = ()
 
 
 def _default_connector_builder(
@@ -305,6 +333,8 @@ class RunOrchestrator:
         browser_open: Callable[[str], bool] = webbrowser.open,
         now: Callable[[], datetime] | None = None,
         monotonic_clock: Callable[[], float] = monotonic,
+        stage_event_sink: StageEventSink | None = None,
+        cancellation: RunCancellation | None = None,
     ) -> None:
         self.config = config
         self.connectors = tuple(connectors)
@@ -324,6 +354,10 @@ class RunOrchestrator:
         self.browser_open = browser_open
         self.now = now or (lambda: datetime.now(UTC))
         self._monotonic = monotonic_clock
+        self._stage_event_sink = stage_event_sink
+        self._event_sink_errors: list[str] = []
+        self._run_started = False
+        self.cancellation = cancellation or RunCancellation()
         self._stages: list[dict[str, Any]] = []
         self._ledger: list[dict[str, Any]] = []
         self._manifest: dict[str, Any] = {}
@@ -343,6 +377,8 @@ class RunOrchestrator:
         connector_builder: Callable[[ConnectionManager, bool], Sequence[Connector]] | None = None,
         candidate_builder: Callable[..., Sequence[Candidate]] | None = None,
         api_key: str | None = None,
+        stage_event_sink: StageEventSink | None = None,
+        cancellation: RunCancellation | None = None,
     ) -> RunOrchestrator:
         """Build the production workflow without opening provider connections."""
         state_root = AutoBrainPaths.from_home().root
@@ -367,6 +403,8 @@ class RunOrchestrator:
                 provider_available=False,
                 provider_detail="MCP_AUTH_UNAVAILABLE: " + ", ".join(disconnected),
                 provider_status=Status.MCP_AUTH_UNAVAILABLE,
+                stage_event_sink=stage_event_sink,
+                cancellation=cancellation,
             )
 
         try:
@@ -403,6 +441,8 @@ class RunOrchestrator:
                 if message.startswith(("MCP_AUTH_UNAVAILABLE:", "CAPABILITY_UNAVAILABLE:"))
                 else f"{status.value}: {exc}",
                 provider_status=status,
+                stage_event_sink=stage_event_sink,
+                cancellation=cancellation,
             )
 
         subscription_upstream: Callable[[dict[str, Any]], dict[str, Any]] | None = None
@@ -415,7 +455,10 @@ class RunOrchestrator:
                 build_subscription_upstream,
             )
 
-            subscription_client = CodexSubscriptionClient(CodexSubscriptionConfig.from_environ())
+            subscription_client = CodexSubscriptionClient(
+                CodexSubscriptionConfig.from_environ(),
+                cancellation=cancellation,
+            )
             subscription_status = subscription_client.status()
             if subscription_status is not SubscriptionStatus.READY:
                 return cls(
@@ -425,6 +468,8 @@ class RunOrchestrator:
                     provider_available=False,
                     provider_detail=f"{subscription_status.value}: run `codex login`",
                     provider_status=Status.CAPABILITY_UNAVAILABLE,
+                    stage_event_sink=stage_event_sink,
+                    cancellation=cancellation,
                 )
             subscription_identity = subscription_client.probe_identity()
             subscription_upstream = build_subscription_upstream(subscription_client)
@@ -450,6 +495,8 @@ class RunOrchestrator:
                 provider_available=False,
                 provider_detail="MISSING_PROVIDER: OPENAI_API_KEY is unavailable",
                 provider_status=Status.MISSING_PROVIDER,
+                stage_event_sink=stage_event_sink,
+                cancellation=cancellation,
             )
         resolved_api_key = resolved_api_key or "autobrain-local-subscription"
 
@@ -510,6 +557,8 @@ class RunOrchestrator:
             candidate_builder=selected_candidate_builder,
             provider_key=resolved_api_key,
             chat_provenance_provider=chat_provenance_provider,
+            stage_event_sink=stage_event_sink,
+            cancellation=cancellation,
         )
 
     @classmethod
@@ -521,6 +570,8 @@ class RunOrchestrator:
         fixture_sha256: str,
         connectors: Sequence[Connector],
         candidates: Sequence[Candidate],
+        stage_event_sink: StageEventSink | None = None,
+        cancellation: RunCancellation | None = None,
     ) -> RunOrchestrator:
         return cls(
             config=config,
@@ -532,9 +583,17 @@ class RunOrchestrator:
                 "fixture_id": fixture_id,
                 "fixture_sha256": fixture_sha256,
             },
+            stage_event_sink=stage_event_sink,
+            cancellation=cancellation,
         )
 
+    def cancel(self) -> None:
+        self.cancellation.cancel()
+
     def run(self) -> RunResult:
+        if self._run_started:
+            raise RuntimeError("RunOrchestrator is single-use; construct a new instance")
+        self._run_started = True
         result = self._run_workflow()
         cleanup_errors: list[str] = []
         cleanup_interruptions: list[str] = []
@@ -624,7 +683,11 @@ class RunOrchestrator:
         total_ms = round((self._monotonic() - self._started) * 1000)
         self._manifest["timings"]["total_ms"] = total_ms if total_ms > 0 else None
         self._persist(result.run_dir)
-        return replace(result, status=final_status)
+        return replace(
+            result,
+            status=final_status,
+            event_sink_errors=tuple(self._event_sink_errors),
+        )
 
     def _run_workflow(self) -> RunResult:
         run_id = self.config.run_id or self._new_run_id()
@@ -689,6 +752,8 @@ class RunOrchestrator:
 
             try:
                 probes = self._probe(run_dir)
+            except RunCancelled:
+                raise
             except Exception as exc:
                 final_status = Status.CAPABILITY_UNAVAILABLE
                 self._stage(run_dir, "capability-probe", final_status, type(exc).__name__)
@@ -794,6 +859,7 @@ class RunOrchestrator:
                 documents=tuple(candidate_documents),
                 questions=tuple(case["question"] for case in cases),
                 case_ids=tuple(case["case_id"] for case in cases),
+                cancellation=self.cancellation,
             )
             self._stage(run_dir, "evaluation-gate", Status.OK, "benchmark and corpus gates passed")
             candidate_results = self._run_candidates(run_dir, context)
@@ -897,13 +963,17 @@ class RunOrchestrator:
             return RunResult(
                 run_id, run_dir, final_status, report_path, tuple(candidate_results), verdict
             )
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, RunCancelled):
             final_status = Status.CANCELLED
-            warning = "run interrupted; no resume is attempted"
+            warning = (
+                "operator cancelled run; no resume is attempted"
+                if self.cancellation.cancelled
+                else "run interrupted; no resume is attempted"
+            )
             self._manifest.setdefault("warnings", []).append(warning)
             self._stage(
                 run_dir,
-                "interrupted",
+                "cancelled" if self.cancellation.cancelled else "interrupted",
                 final_status,
                 warning,
             )
@@ -923,6 +993,15 @@ class RunOrchestrator:
         estimate = max(0.5, len(context.questions) * 0.05)
         budget_exhausted = False
         for candidate in self.candidates:
+            if self.cancellation.cancelled:
+                results.append(
+                    CandidateOutcome(
+                        candidate=candidate.candidate_id,
+                        status=Status.CANCELLED,
+                        detail="operator cancelled run",
+                    )
+                )
+                break
             if budget_exhausted or spent + estimate > self.config.budget_usd:
                 outcome = CandidateOutcome(
                     candidate=candidate.candidate_id,
@@ -941,11 +1020,15 @@ class RunOrchestrator:
             started = self._monotonic()
             try:
                 outcome = candidate.run(context)
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, RunCancelled):
                 outcome = CandidateOutcome(
                     candidate=candidate.candidate_id,
                     status=Status.CANCELLED,
-                    detail="candidate interrupted",
+                    detail=(
+                        "operator cancelled run"
+                        if self.cancellation.cancelled
+                        else "candidate interrupted"
+                    ),
                 )
             except Exception as exc:
                 outcome = CandidateOutcome(
@@ -1023,7 +1106,16 @@ class RunOrchestrator:
     def _probe(self, run_dir: Path) -> dict[str, Mapping[str, Any]]:
         results: dict[str, Mapping[str, Any]] = {}
         for connector in self.connectors:
-            result = connector.probe()
+            self.cancellation.raise_if_cancelled()
+            parameters = inspect.signature(connector.probe).parameters
+            result: Mapping[str, Any]
+            if "cancellation" in parameters:
+                result = cast(
+                    Mapping[str, Any],
+                    connector.probe(cancellation=self.cancellation),  # type: ignore[call-arg]
+                )
+            else:
+                result = connector.probe()
             results[connector.provider] = dict(result)
             self._ledger.append(
                 {"kind": "probe", "provider": connector.provider, "read_only": True}
@@ -1034,7 +1126,19 @@ class RunOrchestrator:
     def _crawl(self, run_dir: Path) -> list[ConnectorSnapshot]:
         snapshots: list[ConnectorSnapshot] = []
         for connector in self.connectors:
-            snapshot = connector.crawl(include_dms=self.config.include_dms)
+            self.cancellation.raise_if_cancelled()
+            parameters = inspect.signature(connector.crawl).parameters
+            snapshot: ConnectorSnapshot
+            if "cancellation" in parameters:
+                snapshot = cast(
+                    ConnectorSnapshot,
+                    connector.crawl(
+                        include_dms=self.config.include_dms,
+                        cancellation=self.cancellation,  # type: ignore[call-arg]
+                    ),
+                )
+            else:
+                snapshot = connector.crawl(include_dms=self.config.include_dms)
             snapshots.append(snapshot)
             self._ledger.append(
                 {
@@ -1749,14 +1853,43 @@ class RunOrchestrator:
         return f"${evaluation.total_cost_usd:.4f}"
 
     def _stage(self, run_dir: Path, name: str, status: Status, detail: str) -> None:
-        entry = {
+        raw_entry = {
+            "sequence": len(self._stages) + 1,
+            "run_id": str(self._manifest["run_id"]),
             "name": name,
             "status": status.value,
             "detail": detail,
             "started_at": self.now().isoformat(),
         }
-        self._stages.append(entry)
+        persisted_entry = cast(
+            dict[str, Any],
+            redact(raw_entry, known_secrets=self._known_secrets),
+        )
+        self._stages.append(persisted_entry)
         self._persist(run_dir)
+        if self._stage_event_sink is None:
+            return
+        event = StageEvent(
+            sequence=int(persisted_entry["sequence"]),
+            run_id=str(persisted_entry["run_id"]),
+            name=str(persisted_entry["name"]),
+            status=Status(str(persisted_entry["status"])),
+            detail=str(persisted_entry["detail"]),
+            started_at=str(persisted_entry["started_at"]),
+        )
+        try:
+            self._stage_event_sink(event)
+        except BaseException as exc:
+            diagnostic = self._sink_diagnostic(name, exc)
+            self._event_sink_errors.append(diagnostic)
+            warnings = self._manifest.setdefault("warnings", [])
+            if diagnostic not in warnings:
+                warnings.append(diagnostic)
+
+    def _sink_diagnostic(self, stage_name: str, exc: BaseException) -> str:
+        raw = f"stage event sink failed after {stage_name}: {type(exc).__name__}"
+        sanitized = str(redact(raw, known_secrets=self._known_secrets))
+        return sanitized if len(sanitized) <= 500 else sanitized[:497] + "..."
 
     def _record_pins(self, run_dir: Path) -> None:
         try:

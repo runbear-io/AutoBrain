@@ -34,6 +34,7 @@ else:
     _mem0_telemetry.MEM0_TELEMETRY = False
 from pydantic import Field, ValidationError, field_validator
 
+from autobrain.cancellation import RunCancellation
 from autobrain.models import NormalizedDocument, SourceId, Status, StrictModel
 from autobrain.secrets import RuntimeEnvironment, redact
 
@@ -422,9 +423,19 @@ class Mem0Adapter:
             if previous_timer[0] > 0:
                 signal.setitimer(signal.ITIMER_REAL, *previous_timer)
 
-    def _bounded(self, operation: str, call: Callable[[], _T]) -> _T:
+    def _bounded(
+        self,
+        operation: str,
+        call: Callable[[], _T],
+        cancellation: RunCancellation | None = None,
+    ) -> _T:
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         with self._operation_deadline(operation):
-            return call()
+            result = call()
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
+        return result
 
     def _assert_no_secrets(self, value: Any, *, boundary: str) -> None:
         serialized = json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
@@ -442,6 +453,7 @@ class Mem0Adapter:
         *,
         heldout_source_ids: set[str] | None = None,
         forbidden_markers: set[str] | None = None,
+        cancellation: RunCancellation | None = None,
     ) -> Mem0IngestResult:
         heldout = set(self.config.heldout_source_ids)
         heldout.update(heldout_source_ids or set())
@@ -469,6 +481,7 @@ class Mem0Adapter:
                         metadata=metadata,
                         infer=True,
                     ),
+                    cancellation,
                 )
             except Mem0OperationTimeout:
                 raise
@@ -489,6 +502,7 @@ class Mem0Adapter:
                         metadata=metadata,
                         infer=False,
                     ),
+                    cancellation,
                 )
                 results = self._results(response, operation="add")
             self._assert_no_secrets(results, boundary="native add artifact emission")
@@ -503,7 +517,13 @@ class Mem0Adapter:
             )
         return Mem0IngestResult(native_results=native_results, memory_ids=memory_ids)
 
-    def search_native(self, question: str, *, top_k: int | None = None) -> dict[str, Any]:
+    def search_native(
+        self,
+        question: str,
+        *,
+        top_k: int | None = None,
+        cancellation: RunCancellation | None = None,
+    ) -> dict[str, Any]:
         self._assert_no_secrets(question, boundary="native search prompt")
         limit = self.config.top_k if top_k is None else top_k
         if limit < 1:
@@ -518,6 +538,7 @@ class Mem0Adapter:
                     threshold=0.0,
                     rerank=False,
                 ),
+                cancellation,
             )
         except Mem0OperationTimeout:
             raise
@@ -549,6 +570,8 @@ class Mem0Adapter:
         self,
         question: str,
         native_results: Sequence[Mapping[str, Any]],
+        *,
+        cancellation: RunCancellation | None = None,
     ) -> Mem0Answer:
         self._assert_no_secrets(question, boundary="answer provider prompt")
         validated_results = self.filter_native_results(native_results)
@@ -588,6 +611,7 @@ class Mem0Adapter:
                     response_format={"type": "json_object"},
                     temperature=0,
                 ),
+                cancellation,
             )
             content = response.choices[0].message.content
             if not isinstance(content, str):

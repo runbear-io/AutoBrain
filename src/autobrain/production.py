@@ -7,6 +7,7 @@ adapters into the orchestration protocol.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -21,6 +22,7 @@ from autobrain.auth.models import Provider
 from autobrain.auth.oauth import OAuthManager
 from autobrain.auth.providers import config_for
 from autobrain.auth.service import ConnectionManager
+from autobrain.cancellation import RunCancellation, RunCancelled
 from autobrain.candidates.gbrain import (
     GBrainAdapter,
     GBrainMissingProviderError,
@@ -76,7 +78,7 @@ def _provider_upstream(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(outgoing, timeout=30) as response:
+            with urllib.request.urlopen(outgoing, timeout=1.0) as response:
                 value = json.loads(response.read())
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError(f"provider request failed ({type(error).__name__})") from None
@@ -135,8 +137,29 @@ def _budget_outcome(
     )
 
 
-def _run_async(coro: Any) -> Any:
-    return anyio.run(lambda: coro)
+def _run_async(coro: Any, cancellation: RunCancellation | None = None) -> Any:
+    async def execute() -> Any:
+        task = asyncio.create_task(coro)
+        loop = asyncio.get_running_loop()
+
+        def cancel_task() -> None:
+            loop.call_soon_threadsafe(task.cancel)
+
+        remove_callback = (
+            cancellation.add_callback(cancel_task) if cancellation is not None else lambda: None
+        )
+        try:
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
+            return await task
+        except asyncio.CancelledError:
+            if cancellation is not None and cancellation.cancelled:
+                raise RunCancelled("operator cancelled run") from None
+            raise
+        finally:
+            remove_callback()
+
+    return anyio.run(execute)
 
 
 class _McpConnector:
@@ -144,7 +167,7 @@ class _McpConnector:
         self.provider = provider.value
         self.connection = connection
 
-    def probe(self) -> Mapping[str, Any]:
+    def probe(self, cancellation: RunCancellation | None = None) -> Mapping[str, Any]:
         async def inspect() -> Mapping[str, Any]:
             async with self.connection as connection:
                 snapshot = connection.snapshot
@@ -166,7 +189,7 @@ class _McpConnector:
                     "capability_available": all(group & allowed for group in required_groups),
                 }
 
-        return cast(Mapping[str, Any], _run_async(inspect()))
+        return cast(Mapping[str, Any], _run_async(inspect(), cancellation))
 
     @property
     def provider_enum(self) -> Provider:
@@ -183,7 +206,12 @@ class SlackMcpConnector(_McpConnector):
         super().__init__(Provider.SLACK, connection)
         self.include_dms = include_dms
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
+    def crawl(
+        self,
+        *,
+        include_dms: bool,
+        cancellation: RunCancellation | None = None,
+    ) -> ConnectorSnapshot:
         from autobrain.connectors.slack import SlackCrawler
 
         async def collect() -> ConnectorSnapshot:
@@ -200,7 +228,7 @@ class SlackMcpConnector(_McpConnector):
                     coverage=result.coverage.model_dump(mode="json"),
                 )
 
-        return cast(ConnectorSnapshot, _run_async(collect()))
+        return cast(ConnectorSnapshot, _run_async(collect(), cancellation))
 
 
 class SlackExportSourceConnector:
@@ -218,12 +246,20 @@ class SlackExportSourceConnector:
             expected_sha256=expected_sha256,
         )
 
-    def probe(self) -> Mapping[str, Any]:
-        return cast(Mapping[str, Any], _run_async(self._connector.probe()))
+    def probe(self, cancellation: RunCancellation | None = None) -> Mapping[str, Any]:
+        return cast(Mapping[str, Any], _run_async(self._connector.probe(), cancellation))
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
+    def crawl(
+        self,
+        *,
+        include_dms: bool,
+        cancellation: RunCancellation | None = None,
+    ) -> ConnectorSnapshot:
         del include_dms
-        result = cast(SlackExportCrawlResult, _run_async(self._connector.crawl()))
+        result = cast(
+            SlackExportCrawlResult,
+            _run_async(self._connector.crawl(), cancellation),
+        )
         return ConnectorSnapshot(
             provider=self.provider,
             documents=tuple(document.model_dump(mode="json") for document in result.documents),
@@ -235,7 +271,12 @@ class NotionMcpConnector(_McpConnector):
     def __init__(self, connection: StreamableHttpConnection) -> None:
         super().__init__(Provider.NOTION, connection)
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
+    def crawl(
+        self,
+        *,
+        include_dms: bool,
+        cancellation: RunCancellation | None = None,
+    ) -> ConnectorSnapshot:
         del include_dms
         from autobrain.connectors.notion import NotionCrawler
 
@@ -250,7 +291,7 @@ class NotionMcpConnector(_McpConnector):
                     coverage=result.coverage.model_dump(mode="json"),
                 )
 
-        return cast(ConnectorSnapshot, _run_async(collect()))
+        return cast(ConnectorSnapshot, _run_async(collect(), cancellation))
 
 
 def build_production_connectors(
@@ -325,13 +366,16 @@ class LLMWikiCandidate:
         self.metering_proxy = metering_proxy
 
     def run(self, context: CandidateContext) -> CandidateOutcome:
+        context.cancellation.raise_if_cancelled()
         queries = _queries(context)
         try:
             result: LLMWikiRunResult = self.adapter.run(
                 context.normalized_documents,
                 queries,
                 api_key=self.api_key,
+                cancellation=context.cancellation,
             )
+            context.cancellation.raise_if_cancelled()
         except BudgetExceededError as exc:
             return _budget_outcome(self.candidate_id, self.metering_proxy, str(exc))
         incomplete_codes = {
@@ -407,19 +451,30 @@ class Mem0Candidate:
 
     def run(self, context: CandidateContext) -> CandidateOutcome:
         try:
+            context.cancellation.raise_if_cancelled()
             queries = _queries(context)
             ingest_started = monotonic()
             self.adapter.ingest(
                 context.normalized_documents,
+                cancellation=context.cancellation,
             )
+            context.cancellation.raise_if_cancelled()
             ingest_ms = round((monotonic() - ingest_started) * 1000)
             candidate_observations: list[CandidateObservation] = []
             query_ms = 0
             for query in queries:
+                context.cancellation.raise_if_cancelled()
                 query_started = monotonic()
                 question = query.question
-                native = self.adapter.search_native(question)
-                answer = self.adapter.answer(question, native["results"])
+                native = self.adapter.search_native(
+                    question,
+                    cancellation=context.cancellation,
+                )
+                answer = self.adapter.answer(
+                    question,
+                    native["results"],
+                    cancellation=context.cancellation,
+                )
                 latency_ms = round((monotonic() - query_started) * 1000)
                 query_ms += latency_ms
                 candidate_observations.append(
@@ -512,6 +567,7 @@ class GBrainCandidate:
         self.metering_proxy = metering_proxy
 
     def run(self, context: CandidateContext) -> CandidateOutcome:
+        context.cancellation.raise_if_cancelled()
         queries = _queries(context)
         try:
             results = self.adapter.run(
@@ -519,7 +575,9 @@ class GBrainCandidate:
                 context.questions,
                 base_url=self.base_url,
                 strict_base_url=True,
+                cancellation=context.cancellation,
             )
+            context.cancellation.raise_if_cancelled()
         except GBrainMissingProviderError as exc:
             return CandidateOutcome(
                 candidate=self.candidate_id,
@@ -537,6 +595,7 @@ class GBrainCandidate:
         known_sources = {document.source_id for document in context.normalized_documents}
         candidate_observations: list[CandidateObservation] = []
         for query, result in zip(queries, results, strict=False):
+            context.cancellation.raise_if_cancelled()
             cited_sources = [
                 citation
                 for citation in result.citations

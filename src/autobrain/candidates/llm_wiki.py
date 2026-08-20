@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Final, cast
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
+from autobrain.cancellation import RunCancellation
 from autobrain.models import (
     BenchmarkCase,
     CandidateId,
@@ -259,6 +260,9 @@ class _ProcessResult:
 class _BoundedRunner:
     """Run one process in a fresh group and settle its entire tree on failure."""
 
+    def __init__(self) -> None:
+        self.cancellation: RunCancellation | None = None
+
     def run(
         self,
         argv: Sequence[str],
@@ -281,8 +285,20 @@ class _BoundedRunner:
         )
         timed_out = False
         terminated = False
+        cancellation = self.cancellation
+
+        def terminate() -> None:
+            self._terminate_group(process, cleanup_grace)
+
+        remove_callback = (
+            cancellation.add_callback(terminate) if cancellation is not None else lambda: None
+        )
         try:
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
             stdout, stderr = process.communicate(timeout=timeout)
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
         except subprocess.TimeoutExpired:
             timed_out = True
             terminated = self._terminate_group(process, cleanup_grace)
@@ -290,6 +306,8 @@ class _BoundedRunner:
         except BaseException:
             self._terminate_group(process, cleanup_grace)
             raise
+        finally:
+            remove_callback()
         elapsed_ms = round((time.monotonic() - started) * 1000)
         return _ProcessResult(
             returncode=process.returncode,
@@ -358,10 +376,14 @@ class LLMWikiAdapter:
         holdouts: Sequence[Holdout] = (),
         oracle_paths: Sequence[Path] = (),
         api_key: str | None,
+        cancellation: RunCancellation | None = None,
     ) -> LLMWikiRunResult:
         """Ingest whole documents and execute native compile/query/export/lint surfaces."""
         started = time.monotonic()
         self._commands = []
+        self._runner.cancellation = cancellation
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         self._validate_inputs(documents, cases, holdouts, oracle_paths)
         if not api_key:
             return self._result(

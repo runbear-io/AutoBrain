@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,7 @@ from autobrain.orchestration import (
     DEFAULT_BUDGET_USD,
     RunConfig,
     RunOrchestrator,
+    StageEvent,
     locate_run,
 )
 from autobrain.paths import AutoBrainPaths
@@ -79,8 +81,6 @@ def subscription_status(
         "command": client.config.command,
     }
     if json_output:
-        import json
-
         typer.echo(json.dumps(detail, indent=2))
         return
     typer.echo(f"{status.value}: {client.config.command}")
@@ -173,6 +173,13 @@ def run_comparison(
             case_sensitive=False,
         ),
     ] = "api",
+    stage_events: Annotated[
+        Path | None,
+        typer.Option(
+            "--stage-events",
+            help="Write persisted stage events as JSONL to this file.",
+        ),
+    ] = None,
 ) -> None:
     """Run one immutable Slack/Notion comparison and report its run ID."""
     try:
@@ -198,19 +205,39 @@ def run_comparison(
             raise ValueError(
                 "MCP_AUTH_UNAVAILABLE: test fixture requires AUTOBRAIN_ALLOW_TEST_FIXTURE=1"
             )
-        if fixture_allowed:
-            if not fixture_path_raw:
-                raise ValueError("MCP_AUTH_UNAVAILABLE: AUTOBRAIN_TEST_FIXTURE_PATH is required")
-            fixture = load_fixture(Path(fixture_path_raw))
-            result = RunOrchestrator.fixture(
-                config,
-                fixture_id=fixture.fixture_id,
-                fixture_sha256=fixture.fixture_sha256,
-                connectors=fixture_connectors(fixture),
-                candidates=fixture_candidates(fixture),
-            ).run()
-        else:
-            result = RunOrchestrator.local(config).run()
+        event_file = stage_events.open("w", encoding="utf-8") if stage_events else None
+
+        def emit_stage_event(event: StageEvent) -> None:
+            if event_file is None:
+                return
+            event_file.write(json.dumps(event.as_manifest_entry(), separators=(",", ":")) + "\n")
+            event_file.flush()
+
+        try:
+            if fixture_allowed:
+                if not fixture_path_raw:
+                    raise ValueError(
+                        "MCP_AUTH_UNAVAILABLE: AUTOBRAIN_TEST_FIXTURE_PATH is required"
+                    )
+                fixture = load_fixture(Path(fixture_path_raw))
+                result = RunOrchestrator.fixture(
+                    config,
+                    fixture_id=fixture.fixture_id,
+                    fixture_sha256=fixture.fixture_sha256,
+                    connectors=fixture_connectors(fixture),
+                    candidates=fixture_candidates(fixture),
+                    stage_event_sink=emit_stage_event if event_file else None,
+                ).run()
+            else:
+                orchestrator = (
+                    RunOrchestrator.local(config, stage_event_sink=emit_stage_event)
+                    if event_file is not None
+                    else RunOrchestrator.local(config)
+                )
+                result = orchestrator.run()
+        finally:
+            if event_file is not None:
+                event_file.close()
     except (FixtureValidationError, ValueError, OSError) as exc:
         typer.echo(f"FAILED: {exc}", err=True)
         raise typer.Exit(1) from None
@@ -219,7 +246,9 @@ def run_comparison(
     typer.echo(f"run-dir: {result.run_dir}")
     if result.report_path is not None:
         typer.echo(f"report: {result.report_path}")
-    if result.status is not Status.OK:
+    for diagnostic in result.event_sink_errors:
+        typer.echo(f"stage-event-error: {diagnostic}", err=True)
+    if result.status is not Status.OK or result.event_sink_errors:
         raise typer.Exit(1)
 
 

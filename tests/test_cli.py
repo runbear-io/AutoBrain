@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -7,7 +8,8 @@ from typer.testing import CliRunner
 
 from autobrain.auth.models import Provider
 from autobrain.cli import app
-from autobrain.orchestration import RunConfig
+from autobrain.models import Status
+from autobrain.orchestration import RunConfig, RunResult, StageEvent
 from autobrain.source_store import SlackSourceState
 
 
@@ -155,6 +157,62 @@ def test_run_uses_configured_slack_export(
     assert result.exit_code == 1
     assert captured[0].slack_export_path == archive_path.resolve()
     assert captured[0].slack_export_sha256 is not None
+
+
+def test_run_stage_events_option_writes_jsonl_from_persisted_sink(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    event_path = tmp_path / "stages.jsonl"
+    run_dir = tmp_path / "runs" / "fixture-run"
+    run_dir.mkdir(parents=True)
+
+    class _FakeOrchestrator:
+        def run(self) -> RunResult:
+            return RunResult(
+                run_id="fixture-run",
+                run_dir=run_dir,
+                status=Status.OK,
+                report_path=None,
+                candidate_results=(),
+                verdict="NO_DECISION",
+            )
+
+    def build(
+        config: RunConfig,
+        *,
+        stage_event_sink: Callable[[StageEvent], None],
+    ) -> _FakeOrchestrator:
+        del config
+        stage_event_sink(
+            StageEvent(
+                sequence=1,
+                run_id="fixture-run",
+                name="preflight",
+                status=Status.OK,
+                detail="persisted",
+                started_at="2026-08-19T00:00:00+00:00",
+            )
+        )
+        return _FakeOrchestrator()
+
+    monkeypatch.setattr("autobrain.cli.RunOrchestrator.local", build)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "--no-open", "--stage-events", str(event_path)],
+        env={"HOME": str(tmp_path)},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(event_path.read_text()) == {
+        "sequence": 1,
+        "run_id": "fixture-run",
+        "name": "preflight",
+        "status": "OK",
+        "detail": "persisted",
+        "started_at": "2026-08-19T00:00:00+00:00",
+    }
 
 
 def test_setup_command_is_registered() -> None:

@@ -334,7 +334,12 @@ def test_candidate_context_contains_only_documents_and_questions(
 
     assert result.status is Status.OK
     assert candidate.context is not None
-    assert set(vars(candidate.context)) == {"documents", "questions", "case_ids"}
+    assert set(vars(candidate.context)) == {
+        "documents",
+        "questions",
+        "case_ids",
+        "cancellation",
+    }
     serialized_context = json.dumps(vars(candidate.context), default=str).casefold()
     assert "expected_claim" not in serialized_context
     assert "reference_answer" not in serialized_context

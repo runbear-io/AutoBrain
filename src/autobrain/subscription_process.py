@@ -12,6 +12,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from autobrain.cancellation import RunCancellation, RunCancelled
+
 _MAX_DIAGNOSTIC_CHARS = 2048
 _SENSITIVE_NAME = re.compile(
     r"(?:^|[_-])(?:API[_-]?KEY|KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|TOKEN|BEARER|"
@@ -49,6 +51,7 @@ class ProcessRequest:
     stdin: str = ""
     timeout_seconds: float = 120.0
     environment: Mapping[str, str] | None = None
+    cancellation: RunCancellation | None = None
 
 
 @dataclass(frozen=True)
@@ -128,11 +131,27 @@ class ProviderProcessRunner:
                 ),
                 start_new_session=True,
             )
+            cancellation = request.cancellation
+
+            def terminate() -> None:
+                self._terminate_group(process)
+
+            remove_callback = (
+                cancellation.add_callback(terminate) if cancellation is not None else lambda: None
+            )
             try:
+                if cancellation is not None:
+                    cancellation.raise_if_cancelled()
                 stdout, stderr = process.communicate(
                     input=request.stdin,
                     timeout=request.timeout_seconds,
                 )
+                if cancellation is not None:
+                    cancellation.raise_if_cancelled()
+            except RunCancelled as exc:
+                self._terminate_group(process)
+                process.communicate()
+                raise ProviderProcessCancelled("provider execution cancelled") from exc
             except subprocess.TimeoutExpired as exc:
                 self._terminate_group(process)
                 stdout, stderr = process.communicate()
@@ -141,6 +160,8 @@ class ProviderProcessRunner:
                 self._terminate_group(process)
                 process.communicate()
                 raise ProviderProcessCancelled("provider execution cancelled") from exc
+            finally:
+                remove_callback()
             return ProcessResult(
                 argv=request.argv,
                 returncode=process.returncode,
@@ -193,10 +214,16 @@ def run_provider_process(
     args: Sequence[str],
     stdin: str,
     timeout_seconds: float,
+    cancellation: RunCancellation | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Compatibility adapter for the original three-argument Runner contract."""
     result = ProviderProcessRunner().run(
-        ProcessRequest(tuple(args), stdin=stdin, timeout_seconds=timeout_seconds)
+        ProcessRequest(
+            tuple(args),
+            stdin=stdin,
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+        )
     )
     return subprocess.CompletedProcess(
         args=list(result.argv),

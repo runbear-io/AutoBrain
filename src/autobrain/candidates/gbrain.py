@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+from autobrain.cancellation import RunCancellation
 from autobrain.models import NormalizedDocument
 from autobrain.retrieval_ids import provenance_map, resolve_retrieved_source_ids
 
@@ -112,7 +113,11 @@ Runner = Callable[[Sequence[str], Path, dict[str, str], float], CommandResult]
 
 
 def run_process(
-    command: Sequence[str], cwd: Path, env: dict[str, str], timeout: float
+    command: Sequence[str],
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float,
+    cancellation: RunCancellation | None = None,
 ) -> CommandResult:
     """Run one process group and tear it down on timeout or external interruption."""
     started = time.monotonic()
@@ -133,12 +138,22 @@ def run_process(
 
     if owns_signal:
         previous_sigterm = signal.signal(signal.SIGTERM, interrupt)
+    remove_callback = (
+        cancellation.add_callback(lambda: _terminate_process_tree(process))
+        if cancellation is not None
+        else lambda: None
+    )
     try:
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         try:
             stdout, stderr = process.communicate(timeout=timeout)
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
         except subprocess.TimeoutExpired as error:
             raise GBrainProcessError(f"GBrain command timed out: {' '.join(command)}") from error
     finally:
+        remove_callback()
         if process.poll() is None:
             _terminate_process_tree(process)
         if owns_signal and previous_sigterm is not None:
@@ -162,10 +177,10 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
         try:
-            process.wait(timeout=2)
+            process.wait(timeout=0.5)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=2)
+            process.wait(timeout=0.5)
     except (ProcessLookupError, OSError):
         with suppress(ProcessLookupError):
             process.kill()
@@ -359,6 +374,7 @@ class GBrainAdapter:
         self._commands: list[CommandResult] = []
         self._holdout_markers: tuple[str, ...] = ()
         self._lifecycle_warnings: list[str] = []
+        self._cancellation: RunCancellation | None = None
 
     def ensure_checkout(self) -> Path:
         self.tools_root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -411,9 +427,18 @@ class GBrainAdapter:
             and Path(command[1]).name != "cli.ts"
         ):
             raise GBrainError("GBrain must be invoked through pinned src/cli.ts")
-        result = self.runner(
-            command, cwd, self._environment(base_url), timeout or self.timeout_seconds
-        )
+        if self.runner is _default_runner:
+            result = run_process(
+                command,
+                cwd,
+                self._environment(base_url),
+                timeout or self.timeout_seconds,
+                self._cancellation,
+            )
+        else:
+            result = self.runner(
+                command, cwd, self._environment(base_url), timeout or self.timeout_seconds
+            )
         self._commands.append(result)
         if result.returncode != 0:
             detail = result.stderr.strip()[-1000:] or result.stdout.strip()[-1000:]
@@ -486,7 +511,11 @@ class GBrainAdapter:
         base_url: str | None = None,
         proxy_events: Sequence[Mapping[str, Any]] | None = None,
         strict_base_url: bool = False,
+        cancellation: RunCancellation | None = None,
     ) -> list[GBrainResult]:
+        self._cancellation = cancellation
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         if not os.environ.get("OPENAI_API_KEY", "").strip():
             raise GBrainMissingProviderError(
                 "GBrain requires OPENAI_API_KEY for OpenAI embeddings",
