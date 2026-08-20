@@ -196,6 +196,24 @@ def test_release_evidence_manifest_is_complete_canonical_and_fail_closed() -> No
     assert all(pattern.search(retained) is None for pattern in SECRET_PATTERNS)
 
 
+def test_retained_comparison_uses_authoritative_release_source_digest() -> None:
+    formula = json.loads(Path("release/homebrew-formula.json").read_text(encoding="utf-8"))
+    manifest = json.loads(Path(EVIDENCE_ROOT, "manifest.json").read_text(encoding="utf-8"))
+    comparison = json.loads(Path(EVIDENCE_ROOT, "comparison.json").read_text(encoding="utf-8"))
+    expected = _release_source_digest()
+
+    assert formula["source"]["tree_sha256"] == expected
+    assert manifest["release"]["source_digest"]["sha256"] == expected
+    assert comparison["runtime_evidence"]["reviewed_source_sha256"] == expected
+
+
+def test_retained_task_text_uses_authoritative_release_source_digest() -> None:
+    task_text = Path(EVIDENCE_ROOT, "task-10-final-qa.txt").read_text(encoding="utf-8")
+    expected = _release_source_digest()
+
+    assert f"`sha256:{expected}`" in task_text
+
+
 def test_built_sdist_closes_over_exact_verified_release_evidence(tmp_path: Path) -> None:
     subprocess.run(
         [os.environ.get("AUTOBRAIN_TEST_UV", "uv"), "build", "--sdist", "--out-dir", str(tmp_path)],

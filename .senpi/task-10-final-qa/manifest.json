@@ -12,12 +12,12 @@
   ],
   "hash_basis": "SHA-256 of the exact UTF-8 manifest.json bytes after replacing the single hashes.manifest.json value with 64 ASCII zeroes",
   "hashes": {
-    "comparison.json": "647af1e47e86667bc4178381be6a69569d64bb1cb04486a60fe1cb709bbc146f",
-    "manifest.json": "8948b70567987bbadfe02d46f97f8a55039a53cce1a3d10df82ce82520f1be2c",
+    "comparison.json": "a1abfb3069c4ae8952ac803347faaed31d5ffd01c5490c17c086cd46ed599777",
+    "manifest.json": "afc98168d6e55abd2317aea43f00050d94b197442e58582a15b27326568c935c",
     "screenshots/report-1280.png": "b71d918f2f2a9cdaea11bc5e098a711433c5383214505d75450b7b09c416c2cc",
     "screenshots/report-375.png": "2d5a68ca1d222a6fabd9d44c6f67575ce70bb9cfd94ad79f6ef5b4c544ff1ef5",
     "screenshots/report-768.png": "6ea06dcc4347d4c15c117b804e2d6957560678a127278e244fdebb403a454bf2",
-    "task-10-final-qa.txt": "3e15f5e7057cb1fe017b9f3616bb8fcba9627bc263e877cad8273617c5f3456f"
+    "task-10-final-qa.txt": "2e699ca0e7bcb81b60ef2dc43030be1dfc817fe7069a3a0d545bb09893ac3ff5"
   },
   "release": {
     "version": "0.1.1",
