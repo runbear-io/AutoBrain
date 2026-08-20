@@ -422,26 +422,6 @@ class RunOrchestrator:
         cancellation: RunCancellation | None = None,
     ) -> RunOrchestrator:
         """Build the production workflow without opening provider connections."""
-        resolved_api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
-        embedding_config = config.embedding_config(
-            environ=os.environ,
-            api_key=resolved_api_key,
-        )
-        embedding_readiness = embedding_config.readiness()
-        if (
-            embedding_config.descriptor.recommendation_eligible
-            and not embedding_readiness.recommendation_ready
-        ):
-            return cls(
-                config=config,
-                connectors=(),
-                candidates=(),
-                provider_available=False,
-                provider_detail=embedding_readiness.detail,
-                provider_status=embedding_readiness.status,
-                stage_event_sink=stage_event_sink,
-                cancellation=cancellation,
-            )
         state_root = AutoBrainPaths.from_home().root
         manager = connection_manager or ConnectionManager(state_root)
         connections = manager.status().connections
@@ -464,6 +444,27 @@ class RunOrchestrator:
                 provider_available=False,
                 provider_detail="MCP_AUTH_UNAVAILABLE: " + ", ".join(disconnected),
                 provider_status=Status.MCP_AUTH_UNAVAILABLE,
+                stage_event_sink=stage_event_sink,
+                cancellation=cancellation,
+            )
+
+        resolved_api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
+        embedding_config = config.embedding_config(
+            environ=os.environ,
+            api_key=resolved_api_key,
+        )
+        embedding_readiness = embedding_config.readiness()
+        if (
+            embedding_config.descriptor.recommendation_eligible
+            and not embedding_readiness.recommendation_ready
+        ):
+            return cls(
+                config=config,
+                connectors=(),
+                candidates=(),
+                provider_available=False,
+                provider_detail=embedding_readiness.detail,
+                provider_status=embedding_readiness.status,
                 stage_event_sink=stage_event_sink,
                 cancellation=cancellation,
             )

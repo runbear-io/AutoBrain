@@ -61,6 +61,28 @@ class FakeConnectionManager:
         )
 
 
+class TrackingConnectionManager:
+    def __init__(self, *, connected: bool) -> None:
+        self.connected = connected
+        self.status_calls = 0
+
+    def status(self) -> AuthStatusReport:
+        self.status_calls += 1
+        return AuthStatusReport(
+            connections=(
+                ConnectionStatus(
+                    provider=Provider.SLACK,
+                    state=(
+                        ConnectionState.CONNECTED
+                        if self.connected
+                        else ConnectionState.DISCONNECTED
+                    ),
+                    status=Status.OK if self.connected else Status.MCP_AUTH_UNAVAILABLE,
+                ),
+            )
+        )
+
+
 def test_selected_source_does_not_require_unselected_connection(tmp_path: Path) -> None:
     orchestrator = RunOrchestrator.local(
         RunConfig(
@@ -75,6 +97,78 @@ def test_selected_source_does_not_require_unselected_connection(tmp_path: Path) 
 
     assert orchestrator.provider_available is True
     assert [connector.provider for connector in orchestrator.connectors] == ["slack"]
+
+
+def test_source_auth_unavailable_precedes_missing_semantic_embedding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    manager = TrackingConnectionManager(connected=False)
+    builders: list[str] = []
+
+    def connector_builder(*_args: object, **_kwargs: object):
+        builders.append("connector")
+        raise AssertionError("source auth failure must not construct connector clients")
+
+    def candidate_builder(*_args: object, **_kwargs: object):
+        builders.append("candidate")
+        raise AssertionError("source auth failure must not construct candidate clients")
+
+    orchestrator = RunOrchestrator.local(
+        RunConfig(
+            output=tmp_path / "runs",
+            open_report=False,
+            provider_mode="codex-subscription",
+            embedding_backend="openai",
+            selected_sources=(Provider.SLACK,),
+        ),
+        connection_manager=manager,  # type: ignore[arg-type]
+        connector_builder=connector_builder,
+        candidate_builder=candidate_builder,
+    )
+    result = orchestrator.run()
+
+    assert manager.status_calls == 1
+    assert builders == []
+    assert orchestrator.provider_detail == "MCP_AUTH_UNAVAILABLE: slack"
+    assert result.status is Status.MCP_AUTH_UNAVAILABLE
+
+
+def test_missing_semantic_embedding_is_checked_after_source_auth_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    manager = TrackingConnectionManager(connected=True)
+    builders: list[str] = []
+
+    def connector_builder(*_args: object, **_kwargs: object):
+        builders.append("connector")
+        raise AssertionError("embedding failure must stop before connector construction")
+
+    def candidate_builder(*_args: object, **_kwargs: object):
+        builders.append("candidate")
+        raise AssertionError("embedding failure must stop before candidate construction")
+
+    orchestrator = RunOrchestrator.local(
+        RunConfig(
+            output=tmp_path / "runs",
+            open_report=False,
+            provider_mode="codex-subscription",
+            embedding_backend="openai",
+            selected_sources=(Provider.SLACK,),
+        ),
+        connection_manager=manager,  # type: ignore[arg-type]
+        connector_builder=connector_builder,
+        candidate_builder=candidate_builder,
+    )
+    result = orchestrator.run()
+
+    assert manager.status_calls == 1
+    assert builders == []
+    assert "SEMANTIC_EMBEDDING_UNAVAILABLE" in orchestrator.provider_detail
+    assert result.status is Status.MISSING_PROVIDER
 
 
 def test_missing_semantic_embedding_config_stops_before_ingestion(
