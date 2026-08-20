@@ -132,6 +132,7 @@ if _TEXTUAL_IMPORT_ERROR is None:
             )
             self.query_one("#summary", Static).update(
                 f"{sources}\n\n{candidates}\n\n"
+                f"Embeddings: {model.embedding_status} - {model.embedding_detail}\n\n"
                 f"Plan: {model.plan_title or '-'}\n{model.plan_description}\n"
                 f"Stage: {model.stage} {model.stage_detail}\nElapsed: {model.elapsed}\n"
                 f"Terminal: {model.terminal_reason or '-'}\n"

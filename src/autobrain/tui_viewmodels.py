@@ -23,6 +23,9 @@ class UiViewModel:
     title: str
     provider: ProviderId
     provider_status: SubscriptionStatus
+    embedding_status: str
+    embedding_detail: str
+    recommendation_ready: bool
     sources: tuple[tuple[Provider, ConnectionState, bool, str], ...]
     candidates: dict[CandidateId, CandidateView]
     plan_title: str
@@ -48,6 +51,9 @@ def build_view_model(state: UiState) -> UiViewModel:
         title="AutoBrain",
         provider=state.provider,
         provider_status=state.subscription_status,
+        embedding_status=state.embedding_readiness.status.value,
+        embedding_detail=state.embedding_readiness.detail,
+        recommendation_ready=state.embedding_readiness.recommendation_ready,
         sources=tuple(
             (
                 provider,

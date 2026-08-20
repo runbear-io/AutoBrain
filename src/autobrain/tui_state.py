@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from autobrain.auth.models import Provider
+from autobrain.embedding import EmbeddingReadiness, inspect_embedding_backend
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
 from autobrain.orchestration import RunResult, StageEvent
@@ -67,6 +68,9 @@ class UiState:
     selected_candidates: tuple[CandidateId, ...] = tuple(CandidateId)
     provider: ProviderId = ProviderId.CODEX
     subscription_status: SubscriptionStatus = SubscriptionStatus.SUBSCRIPTION_AUTH_UNAVAILABLE
+    embedding_readiness: EmbeddingReadiness = field(
+        default_factory=lambda: inspect_embedding_backend({})
+    )
     source_states: tuple[tuple[Provider, ConnectionState], ...] = ()
     source_details: tuple[tuple[Provider, str], ...] = ()
     plan: ExperimentPlan | None = None
@@ -198,6 +202,7 @@ def _resolved(state: UiState) -> UiState:
 
     snapshot = ConnectionSnapshot(
         subscription=state.subscription_status,
+        embeddings=state.embedding_readiness,
         sources=dict(state.source_states),
         subscription_provider=state.provider,
         source_details=dict(state.source_details),
@@ -254,6 +259,7 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
             state,
             provider=snapshot.subscription_provider,
             subscription_status=snapshot.subscription,
+            embedding_readiness=snapshot.embeddings,
             source_states=tuple(snapshot.sources.items()),
             source_details=tuple((snapshot.source_details or {}).items()),
         )

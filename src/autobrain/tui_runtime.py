@@ -107,7 +107,6 @@ def run_connection_flow(
 ) -> None:
     """Compatibility command boundary without terminal-framework ownership."""
     runner(login_command(provider), check=False)
-    screen.refresh()
 
 
 def resolve_plan(

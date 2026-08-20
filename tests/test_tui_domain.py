@@ -6,6 +6,7 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from autobrain.auth.models import Provider
+from autobrain.embedding import EmbeddingBackendConfig
 from autobrain.models import CandidateId, ConnectionState, Status
 from autobrain.orchestration import RunResult, StageEvent
 from autobrain.subscription import ProviderId, SubscriptionStatus
@@ -34,6 +35,9 @@ from autobrain.tui_viewmodels import build_view_model
 def _connections(provider: ProviderId = ProviderId.CODEX) -> ConnectionSnapshot:
     return ConnectionSnapshot(
         subscription=SubscriptionStatus.READY,
+        embeddings=EmbeddingBackendConfig.from_environ(
+            {"OPENAI_API_KEY": "fixture"}, requested="openai"
+        ).readiness(),
         sources={
             Provider.SLACK: ConnectionState.CONNECTED,
             Provider.NOTION: ConnectionState.CONNECTED,

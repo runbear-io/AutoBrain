@@ -21,12 +21,24 @@ from autobrain.tui_legacy_runtime import (
     PlanWorker,
     connection_snapshot,
     resolve_plan,
-    run_connection_flow,
     start_plan_worker,
+)
+from autobrain.tui_legacy_runtime import (
+    run_connection_flow as _run_connection_flow,
 )
 from autobrain.tui_render import render_dashboard, terminal_too_small
 from autobrain.tui_state import TUIState, WizardSection
 from autobrain.tui_style import line_style
+
+
+def run_connection_flow(screen: curses.window, provider: Provider | ProviderId) -> None:
+    curses.def_prog_mode()
+    curses.endwin()
+    try:
+        _run_connection_flow(screen, provider)
+    finally:
+        curses.reset_prog_mode()
+        screen.refresh()
 
 
 def run_tui(*, force_setup: bool = False, provider: ProviderId = ProviderId.CODEX) -> None:
