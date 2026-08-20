@@ -8,12 +8,16 @@ from autobrain.release_formula import (
     ArchiveKind,
     FormulaParseError,
     classify_archive,
+    generate_formula,
+    load_formula_manifest,
     parse_formula,
     run_cli,
     verify_formula,
 )
 
+ROOT = Path(__file__).parents[1]
 FIXTURES = Path(__file__).parent / "fixtures" / "release"
+MANIFEST = ROOT / "release" / "homebrew-formula.json"
 PUBLISHED_PLATFORM_WHEELS = {
     "cffi",
     "cryptography",
@@ -38,10 +42,11 @@ def test_valid_fixture_accepts_universal_wheels_and_sdists() -> None:
     assert verification.platform_wheel_violations == ()
 
 
-def test_custom_install_route_can_handle_platform_wheels_explicitly() -> None:
+def test_custom_install_route_must_audit_every_platform_wheel() -> None:
     formula = """
 resource "native" do
   url "https://example.test/native-1.0-cp313-cp313-macosx_11_0_arm64.whl"
+  sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 end
 
 def install
@@ -51,8 +56,8 @@ end
 
     verification = verify_formula(formula)
 
-    assert verification.valid
-    assert verification.platform_wheel_violations == ()
+    assert not verification.valid
+    assert verification.platform_wheel_violations == ("native",)
 
 
 def test_published_v0_1_1_formula_identifies_complete_platform_wheel_set() -> None:
@@ -108,6 +113,51 @@ def test_archive_classifier_uses_standard_distribution_tags(
 def test_malformed_formula_is_rejected(formula: str) -> None:
     with pytest.raises(FormulaParseError):
         parse_formula(formula)
+
+
+def test_generated_formula_uses_one_explicit_audited_route_for_all_native_wheels() -> None:
+    manifest = load_formula_manifest(MANIFEST)
+    generated = generate_formula(
+        manifest,
+        uv_lock_path=ROOT / "uv.lock",
+        pyproject_path=ROOT / "pyproject.toml",
+    )
+
+    verification = verify_formula(generated)
+
+    assert verification.valid
+    assert verification.audited_platform_wheels == tuple(sorted(PUBLISHED_PLATFORM_WHEELS))
+    assert verification.platform_wheel_violations == ()
+    assert "virtualenv_install_with_resources" not in generated
+    assert "resource(name).cached_download" in generated
+
+
+def test_generator_is_byte_idempotent_and_matches_tap_formula() -> None:
+    manifest = load_formula_manifest(MANIFEST)
+    generated_once = generate_formula(
+        manifest,
+        uv_lock_path=ROOT / "uv.lock",
+        pyproject_path=ROOT / "pyproject.toml",
+    )
+    generated_twice = generate_formula(
+        manifest,
+        uv_lock_path=ROOT / "uv.lock",
+        pyproject_path=ROOT / "pyproject.toml",
+    )
+
+    assert generated_once.encode() == generated_twice.encode()
+
+
+def test_generator_rejects_stale_lock_metadata(tmp_path: Path) -> None:
+    stale_lock = tmp_path / "uv.lock"
+    stale_lock.write_bytes((ROOT / "uv.lock").read_bytes() + b"\n# stale\n")
+
+    with pytest.raises(FormulaParseError, match=r"uv\.lock SHA-256"):
+        generate_formula(
+            load_formula_manifest(MANIFEST),
+            uv_lock_path=stale_lock,
+            pyproject_path=ROOT / "pyproject.toml",
+        )
 
 
 def test_parenthesized_virtualenv_install_is_detected() -> None:
