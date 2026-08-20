@@ -246,6 +246,19 @@ Every run is a new immutable run directory. A failed run remains inspectable;
 the next invocation receives a new run ID rather than silently resuming or
 overwriting previous evidence.
 
+Inspect the validated local inventory or compare two complete evaluations without
+rewriting either run:
+
+```bash
+autobrain runs list --json
+autobrain runs compare <run-id-a> <run-id-b> --json
+```
+
+Comparisons require matching corpus and benchmark hashes. To inspect runs with
+different hashes, pass `--allow-different-corpus`; the result remains explicitly
+non-equivalent and not directly comparable. `AUTOBRAIN_HOME` can select an isolated
+state root for read-only inspection and QA.
+
 ## Terminal cockpit
 
 After installing AutoBrain once, run it without a subcommand:

@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 
@@ -19,8 +19,9 @@ from autobrain.orchestration import (
     StageEvent,
     locate_run,
 )
-from autobrain.paths import AutoBrainPaths
+from autobrain.paths import AutoBrainPaths, PathConfinementError
 from autobrain.preflight import Preflight
+from autobrain.runs import RunInspectionError, compare_runs, list_runs
 from autobrain.secrets import RuntimeEnvironment, RuntimeSettings
 from autobrain.source_cli import auth_app, source_app
 from autobrain.source_store import SlackSourceStore
@@ -43,6 +44,8 @@ app.add_typer(auth_app, name="auth")
 subscription_app = typer.Typer(help="Use a locally authenticated ChatGPT subscription.")
 app.add_typer(subscription_app, name="subscription")
 app.add_typer(source_app, name="source")
+runs_app = typer.Typer(help="Inspect and compare immutable evaluation runs.")
+app.add_typer(runs_app, name="runs")
 
 
 @app.callback(invoke_without_command=True)
@@ -250,6 +253,73 @@ def run_comparison(
         typer.echo(f"stage-event-error: {diagnostic}", err=True)
     if result.status is not Status.OK or result.event_sink_errors:
         raise typer.Exit(1)
+
+
+def _emit_run_error(error: RunInspectionError | PathConfinementError) -> NoReturn:
+    if isinstance(error, RunInspectionError):
+        payload = error.payload()
+    else:
+        payload = {"status": "PATH_ESCAPE", "detail": str(error)}
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    raise typer.Exit(1)
+
+
+@runs_app.command("list")
+def runs_list(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the validated run inventory as JSON."),
+    ] = False,
+) -> None:
+    """List immutable local evaluations, including failed and incomplete runs."""
+    try:
+        inventory = list_runs(AutoBrainPaths.from_home().runs)
+    except (RunInspectionError, PathConfinementError) as error:
+        _emit_run_error(error)
+    if json_output:
+        typer.echo(inventory.model_dump_json(indent=2))
+        return
+    if not inventory.runs:
+        typer.echo("No immutable runs found.")
+        return
+    for run in inventory.runs:
+        typer.echo(f"{run.run_id}  {run.status}  {run.artifact_status}")
+
+
+@runs_app.command("compare")
+def runs_compare(
+    left_run_id: Annotated[str, typer.Argument(help="First immutable run ID.")],
+    right_run_id: Annotated[str, typer.Argument(help="Second immutable run ID.")],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the typed comparison as JSON."),
+    ] = False,
+    allow_different_corpus: Annotated[
+        bool,
+        typer.Option(
+            "--allow-different-corpus",
+            help="Inspect different corpus/benchmark hashes as explicitly non-equivalent.",
+        ),
+    ] = False,
+) -> None:
+    """Compare provenance, hashes, metrics, eligibility, and verdict."""
+    try:
+        comparison = compare_runs(
+            AutoBrainPaths.from_home().runs,
+            left_run_id,
+            right_run_id,
+            allow_different_corpus=allow_different_corpus,
+        )
+    except (RunInspectionError, PathConfinementError) as error:
+        _emit_run_error(error)
+    if json_output:
+        typer.echo(comparison.model_dump_json(indent=2))
+        return
+    typer.echo(f"status: {comparison.status}")
+    typer.echo(f"equivalent: {str(comparison.equivalent).lower()}")
+    typer.echo(f"comparable: {str(comparison.comparable).lower()}")
+    for difference in comparison.differences:
+        typer.echo(f"{difference.path}: {difference.left!r} -> {difference.right!r}")
 
 
 @app.command("report")

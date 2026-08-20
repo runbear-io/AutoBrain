@@ -275,12 +275,24 @@ class BenchmarkProvenance(StrictModel):
     latency_spans: list[LatencySpan] = Field(default_factory=list)
 
 
+class RunHashes(StrictModel):
+    corpus_sha256: Sha256 | None = None
+    benchmark_sha256: Sha256 | None = None
+
+
 class RunManifest(BaseModel):
     model_config = ConfigDict(extra="allow", strict=True, frozen=True)
 
     schema_version: Literal[1, 2]
     run_id: str = Field(min_length=1)
+    created_at: datetime | None = None
+    status: Status | None = None
+    verdict: str | None = None
+    hashes: RunHashes | None = None
     provenance: BenchmarkProvenance
+    decision: "DecisionResult | None" = None
+    evaluations: list["CandidateEvaluation"] | None = None
+    candidates: list[dict[str, object]] | None = None
 
 
 class QualityComponents(StrictModel):

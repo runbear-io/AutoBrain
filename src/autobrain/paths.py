@@ -1,5 +1,6 @@
 """Confined filesystem layout for AutoBrain state."""
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,22 @@ class OccupiedRunError(FileExistsError):
     """A non-empty run directory already exists."""
 
 
+def is_valid_run_id(run_id: str) -> bool:
+    """Return whether a run ID is safe as one confined path component."""
+    return bool(_RUN_ID.fullmatch(run_id)) and run_id not in {".", ".."}
+
+
+def validate_state_root(root: Path, *, explicit: bool = False) -> None:
+    """Validate an explicitly configured state root before inspecting it."""
+    if any(part == ".." for part in root.parts):
+        raise PathConfinementError(f"state root contains lexical traversal: {root}")
+    if explicit:
+        if root.is_symlink():
+            raise PathConfinementError(f"state root cannot be a symlink: {root}")
+        if not root.is_dir():
+            raise PathConfinementError(f"state root is not a directory: {root}")
+
+
 @dataclass(frozen=True)
 class AutoBrainPaths:
     root: Path
@@ -24,7 +41,9 @@ class AutoBrainPaths:
 
     @classmethod
     def from_home(cls, home: Path | None = None) -> "AutoBrainPaths":
-        root = (home or Path.home()) / ".autobrain"
+        configured = os.environ.get("AUTOBRAIN_HOME") if home is None else None
+        root = Path(configured).expanduser() if configured else (home or Path.home()) / ".autobrain"
+        validate_state_root(root, explicit=configured is not None)
         return cls(root=root, runs=root / "runs", tools=root / "tools", cache=root / "cache")
 
     @property
@@ -53,7 +72,7 @@ class AutoBrainPaths:
                 raise PathConfinementError(f"state directory escapes root: {directory}")
 
     def create_run(self, run_id: str) -> Path:
-        if not _RUN_ID.fullmatch(run_id) or run_id in {".", ".."}:
+        if not is_valid_run_id(run_id):
             raise PathConfinementError(f"invalid run id: {run_id!r}")
         self.ensure_base_dirs()
         runs_root = self.runs.resolve()
