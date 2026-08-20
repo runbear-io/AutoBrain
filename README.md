@@ -608,7 +608,11 @@ and the manifest self-hash is computed over its exact UTF-8 bytes after the
 single `hashes.manifest.json` value is replaced with 64 ASCII zeroes.
 
 Runtime screenshots and reports are release evidence only when their provenance
-records both the current release version and source commit. Missing or
+records both the current release version and the canonical digest of the reviewed
+release source. That digest covers `pyproject.toml`, `uv.lock`,
+`release/homebrew-formula.json`, and every regular file under `src/autobrain/`,
+excluding generated `__pycache__`, `.pyc`, and `.pyo` files; evidence,
+documentation, and tests are intentionally outside its scope. Missing or
 mismatched provenance must remain typed `UNBOUND_CURRENT_RELEASE`; historical
 artifacts may be retained for inspection, but must not be relabeled as proof of
 the current release.

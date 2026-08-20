@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tarfile
 import tomllib
@@ -18,6 +19,17 @@ EVIDENCE_ALLOWLIST = {
     "task-10-final-qa.txt",
 }
 ZERO_SHA256 = "0" * 64
+RELEASE_SOURCE_FIXED_FILES = (
+    "pyproject.toml",
+    "release/homebrew-formula.json",
+    "uv.lock",
+)
+RELEASE_SOURCE_TREE = "src/autobrain"
+RELEASE_SOURCE_EXCLUDES = ("**/__pycache__/**", "**/*.pyc", "**/*.pyo")
+RELEASE_SOURCE_HASH_BASIS = (
+    "SHA-256 over each sorted UTF-8 repository-relative path and exact file bytes, "
+    "each prefixed by its unsigned 8-byte big-endian length"
+)
 SECRET_PATTERNS = (
     re.compile(rb"sk-(?:live|test|proj)-[A-Za-z0-9_-]{8,}"),
     re.compile(rb"xox[baprs]-[A-Za-z0-9-]{8,}"),
@@ -33,6 +45,30 @@ def _manifest_self_hash(raw: bytes, claimed_digest: str) -> str:
     return hashlib.sha256(raw.replace(needle, ZERO_SHA256.encode("ascii"), 1)).hexdigest()
 
 
+def _release_source_files(root: Path = Path(".")) -> tuple[str, ...]:
+    tree = root / RELEASE_SOURCE_TREE
+    tree_files = (
+        path.relative_to(root).as_posix()
+        for path in tree.rglob("*")
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix not in {".pyc", ".pyo"}
+    )
+    return tuple(sorted((*RELEASE_SOURCE_FIXED_FILES, *tree_files)))
+
+
+def _release_source_digest(root: Path = Path(".")) -> str:
+    digest = hashlib.sha256()
+    for relative in _release_source_files(root):
+        path_bytes = relative.encode("utf-8")
+        content = (root / relative).read_bytes()
+        digest.update(len(path_bytes).to_bytes(8, "big"))
+        digest.update(path_bytes)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
 def _evidence_members(archive: tarfile.TarFile) -> dict[str, bytes]:
     evidence: dict[str, bytes] = {}
     for member in archive.getmembers():
@@ -43,6 +79,47 @@ def _evidence_members(archive: tarfile.TarFile) -> dict[str, bytes]:
         assert extracted is not None
         evidence[member.name.split(marker, 1)[1]] = extracted.read()
     return evidence
+
+
+def test_release_version_is_coherent_across_runtime_package_formula_and_evidence() -> None:
+    from autobrain import __version__
+
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+    formula = json.loads(Path("release/homebrew-formula.json").read_text(encoding="utf-8"))
+    evidence = json.loads(Path(EVIDENCE_ROOT, "manifest.json").read_text(encoding="utf-8"))
+
+    assert __version__ == project["version"] == formula["source"]["version"]
+    assert evidence["release"]["version"] == __version__
+
+
+def test_release_source_digest_has_explicit_scope_and_expected_mutation_behavior(
+    tmp_path: Path,
+) -> None:
+    for relative in _release_source_files():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(relative, target)
+
+    baseline = _release_source_digest(tmp_path)
+    assert _release_source_files(tmp_path) == _release_source_files()
+
+    for unrelated in (
+        ".senpi/task-10-final-qa/manifest.json",
+        "docs/security-and-privacy.md",
+        "tests/test_packaging.py",
+    ):
+        target = tmp_path / unrelated
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("unrelated mutation\n", encoding="utf-8")
+    assert _release_source_digest(tmp_path) == baseline
+
+    for relative in (*RELEASE_SOURCE_FIXED_FILES, "src/autobrain/__init__.py"):
+        target = tmp_path / relative
+        original = target.read_bytes()
+        target.write_bytes(original + b"\n")
+        assert _release_source_digest(tmp_path) != baseline
+        target.write_bytes(original)
+    assert _release_source_digest(tmp_path) == baseline
 
 
 def test_supported_python_range_excludes_unverified_314() -> None:
@@ -104,15 +181,17 @@ def test_release_evidence_manifest_is_complete_canonical_and_fail_closed() -> No
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
     release = manifest["release"]
     assert release["version"] == project["version"]
-    assert release["candidate_commit"] == "036714b91df82d1eb538d39d8251f86ae9f55a4e"
-    subprocess.run(
-        ["git", "merge-base", "--is-ancestor", release["candidate_commit"], "HEAD"],
-        check=True,
-        capture_output=True,
-    )
+    assert release["source_digest"] == {
+        "algorithm": "sha256",
+        "hash_basis": RELEASE_SOURCE_HASH_BASIS,
+        "fixed_files": list(RELEASE_SOURCE_FIXED_FILES),
+        "recursive_tree": RELEASE_SOURCE_TREE,
+        "excludes": list(RELEASE_SOURCE_EXCLUDES),
+        "sha256": _release_source_digest(),
+    }
     assert manifest["runtime_evidence"] == {
         "status": "UNBOUND_CURRENT_RELEASE",
-        "reason": "SOURCE_COMMIT_AND_0.1.1_WHEEL_NOT_RECORDED",
+        "reason": "RUNTIME_SOURCE_DIGEST_AND_0.1.1_WHEEL_NOT_RECORDED",
         "observed_installed_wheel": "autobrain-0.1.0-py3-none-any.whl",
         "external_access": "NOT_ATTEMPTED",
     }

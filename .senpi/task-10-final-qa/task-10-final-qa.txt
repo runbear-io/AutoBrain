@@ -4,12 +4,17 @@ Task 10 retained QA evidence (redacted, fail-closed)
 Release binding
 ---------------
 - Current release version: 0.1.1.
-- Current candidate commit: 036714b91df82d1eb538d39d8251f86ae9f55a4e.
+- Reviewed release-source digest:
+  `sha256:6e2cf861c3657112c1289c3eaa6be082c8d10e0b2c3e0e9a4a64cc93fae462f1`.
+- The digest covers exact bytes of `pyproject.toml`, `uv.lock`,
+  `release/homebrew-formula.json`, and every regular file recursively under
+  `src/autobrain/`, excluding generated `__pycache__`, `.pyc`, and `.pyo` files,
+  using the canonical encoding defined in `manifest.json`.
 - Runtime evidence status: UNBOUND_CURRENT_RELEASE.
 - Reason: the retained QA record names an installed
-  `autobrain-0.1.0-py3-none-any.whl` and does not record a source commit.
+  `autobrain-0.1.0-py3-none-any.whl` and does not record the reviewed source digest.
 - Therefore the retained report screenshots and runtime observations are not
-  evidence that release 0.1.1 or the current candidate commit passed runtime
+  evidence that release 0.1.1 or the reviewed release source passed runtime
   QA. Their bytes are preserved as historical observations only; they were not
   regenerated, relabeled, or represented as current-release evidence.
 
@@ -35,7 +40,7 @@ Release evidence policy
 - The manifest self-hash is SHA-256 over its exact UTF-8 bytes after replacing
   the single `hashes.manifest.json` value with 64 ASCII zeroes.
 - A retained runtime artifact may claim current-release verification only when
-  it records both the current release version and source commit. Missing or
+  it records both the current release version and reviewed source digest. Missing or
   mismatched provenance is represented by a typed fail-closed status.
 - No corpus, token, raw provider output, or secret value is retained.
 

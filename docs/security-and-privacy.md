@@ -55,6 +55,10 @@ must contain that exact closed set and no other `.senpi` material.
 
 Screenshots and runtime reports are fail-closed when provenance is incomplete.
 They may claim verification of the current release only when both the release
-version and source commit were recorded during that run. Older or unbound
-artifacts must remain explicitly typed `UNBOUND_CURRENT_RELEASE`; changing a
+version and canonical reviewed-source digest were recorded during that run. The
+digest covers `pyproject.toml`, `uv.lock`, `release/homebrew-formula.json`, and
+every regular file under `src/autobrain/`, excluding generated `__pycache__`,
+`.pyc`, and `.pyo` files; unrelated evidence, documentation, and test changes
+do not alter it. Older or unbound artifacts must remain
+explicitly typed `UNBOUND_CURRENT_RELEASE`; changing a
 filename, version label, or manifest cannot make stale runtime evidence current.
