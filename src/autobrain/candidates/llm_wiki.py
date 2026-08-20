@@ -1061,7 +1061,7 @@ class LLMWikiAdapter:
                 malformed_records += 1
                 continue
             value = cast(dict[str, Any], raw_value)
-            if isinstance(value.get("usd"), bool) or not isinstance(value.get("usd"), (int, float)):
+            if isinstance(value.get("usd"), bool) or not isinstance(value.get("usd"), int | float):
                 malformed = True
                 malformed_records += 1
                 continue
