@@ -271,6 +271,12 @@ def test_checked_in_prepared_release_fails_closed_with_actionable_error() -> Non
         )
 
 
+def test_checked_in_manifest_binds_current_release_tree_digest() -> None:
+    source = json.loads(MANIFEST.read_text())["source"]
+
+    assert source["tree_sha256"] == _release_tree_sha256(ROOT)
+
+
 def test_checked_in_manifest_rejects_retired_tag_metadata() -> None:
     source = json.loads(MANIFEST.read_text())["source"]
 
