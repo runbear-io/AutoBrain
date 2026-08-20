@@ -12,29 +12,28 @@
   ],
   "hash_basis": "SHA-256 of the exact UTF-8 manifest.json bytes after replacing the single hashes.manifest.json value with 64 ASCII zeroes",
   "hashes": {
-    "comparison.json": "cabb51f5ab4f7870b1ac25e73ecb0cabaff2566b518565a849dc0a381a4b7676",
-    "manifest.json": "9ed9c1e4503e5086bf771009a0a4b35158083c253358219d2307e9bdd4a2321e",
+    "comparison.json": "647af1e47e86667bc4178381be6a69569d64bb1cb04486a60fe1cb709bbc146f",
+    "manifest.json": "cc852ff584c51859d47d7f6e5a88485797ca14c28056072228081632909693c8",
     "screenshots/report-1280.png": "b71d918f2f2a9cdaea11bc5e098a711433c5383214505d75450b7b09c416c2cc",
     "screenshots/report-375.png": "2d5a68ca1d222a6fabd9d44c6f67575ce70bb9cfd94ad79f6ef5b4c544ff1ef5",
     "screenshots/report-768.png": "6ea06dcc4347d4c15c117b804e2d6957560678a127278e244fdebb403a454bf2",
-    "task-10-final-qa.txt": "d2d8bcc45dec00654aa2cd9b250f7c3a2ecea2da2ac9e342d3e0da9653e60f34"
+    "task-10-final-qa.txt": "3e15f5e7057cb1fe017b9f3616bb8fcba9627bc263e877cad8273617c5f3456f"
   },
   "release": {
     "version": "0.1.1",
     "source_digest": {
       "algorithm": "sha256",
-      "hash_basis": "SHA-256 over each sorted UTF-8 repository-relative path and exact file bytes, each prefixed by its unsigned 8-byte big-endian length",
+      "hash_basis": "SHA-256 over each sorted UTF-8 repository-relative path, a NUL byte, the SHA-256 digest bytes of the exact file content, and a trailing NUL byte",
       "fixed_files": [
         "pyproject.toml",
-        "release/homebrew-formula.json",
-        "uv.lock"
+        "uv.lock",
+        "candidate-pins.json"
       ],
       "recursive_tree": "src/autobrain",
-      "sha256": "6e2cf861c3657112c1289c3eaa6be082c8d10e0b2c3e0e9a4a64cc93fae462f1",
+      "sha256": "63e4797ef5922951eaaf6655e2109ee1decd56415dd2f0d920ca8a71deab9dac",
       "excludes": [
         "**/__pycache__/**",
-        "**/*.pyc",
-        "**/*.pyo"
+        "**/*.pyc"
       ]
     }
   },

@@ -5,11 +5,11 @@ Release binding
 ---------------
 - Current release version: 0.1.1.
 - Reviewed release-source digest:
-  `sha256:6e2cf861c3657112c1289c3eaa6be082c8d10e0b2c3e0e9a4a64cc93fae462f1`.
-- The digest covers exact bytes of `pyproject.toml`, `uv.lock`,
-  `release/homebrew-formula.json`, and every regular file recursively under
-  `src/autobrain/`, excluding generated `__pycache__`, `.pyc`, and `.pyo` files,
-  using the canonical encoding defined in `manifest.json`.
+  `sha256:63e4797ef5922951eaaf6655e2109ee1decd56415dd2f0d920ca8a71deab9dac`.
+- The digest uses the release-closure algorithm over exact bytes of
+  `pyproject.toml`, `uv.lock`, `candidate-pins.json`, and every regular file
+  recursively under `src/autobrain/`, excluding generated `__pycache__` and
+  `.pyc` files, using the canonical encoding defined in `manifest.json`.
 - Runtime evidence status: UNBOUND_CURRENT_RELEASE.
 - Reason: the retained QA record names an installed
   `autobrain-0.1.0-py3-none-any.whl` and does not record the reviewed source digest.

@@ -21,14 +21,14 @@ EVIDENCE_ALLOWLIST = {
 ZERO_SHA256 = "0" * 64
 RELEASE_SOURCE_FIXED_FILES = (
     "pyproject.toml",
-    "release/homebrew-formula.json",
     "uv.lock",
+    "candidate-pins.json",
 )
 RELEASE_SOURCE_TREE = "src/autobrain"
-RELEASE_SOURCE_EXCLUDES = ("**/__pycache__/**", "**/*.pyc", "**/*.pyo")
+RELEASE_SOURCE_EXCLUDES = ("**/__pycache__/**", "**/*.pyc")
 RELEASE_SOURCE_HASH_BASIS = (
-    "SHA-256 over each sorted UTF-8 repository-relative path and exact file bytes, "
-    "each prefixed by its unsigned 8-byte big-endian length"
+    "SHA-256 over each sorted UTF-8 repository-relative path, a NUL byte, the "
+    "SHA-256 digest bytes of the exact file content, and a trailing NUL byte"
 )
 SECRET_PATTERNS = (
     re.compile(rb"sk-(?:live|test|proj)-[A-Za-z0-9_-]{8,}"),
@@ -50,9 +50,7 @@ def _release_source_files(root: Path = Path(".")) -> tuple[str, ...]:
     tree_files = (
         path.relative_to(root).as_posix()
         for path in tree.rglob("*")
-        if path.is_file()
-        and "__pycache__" not in path.parts
-        and path.suffix not in {".pyc", ".pyo"}
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
     )
     return tuple(sorted((*RELEASE_SOURCE_FIXED_FILES, *tree_files)))
 
@@ -60,12 +58,10 @@ def _release_source_files(root: Path = Path(".")) -> tuple[str, ...]:
 def _release_source_digest(root: Path = Path(".")) -> str:
     digest = hashlib.sha256()
     for relative in _release_source_files(root):
-        path_bytes = relative.encode("utf-8")
-        content = (root / relative).read_bytes()
-        digest.update(len(path_bytes).to_bytes(8, "big"))
-        digest.update(path_bytes)
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256((root / relative).read_bytes()).digest())
+        digest.update(b"\0")
     return digest.hexdigest()
 
 

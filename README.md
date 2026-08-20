@@ -609,10 +609,10 @@ single `hashes.manifest.json` value is replaced with 64 ASCII zeroes.
 
 Runtime screenshots and reports are release evidence only when their provenance
 records both the current release version and the canonical digest of the reviewed
-release source. That digest covers `pyproject.toml`, `uv.lock`,
-`release/homebrew-formula.json`, and every regular file under `src/autobrain/`,
-excluding generated `__pycache__`, `.pyc`, and `.pyo` files; evidence,
-documentation, and tests are intentionally outside its scope. Missing or
+release source. That digest uses the release-closure algorithm over
+`pyproject.toml`, `uv.lock`, `candidate-pins.json`, and every regular file under
+`src/autobrain/`, excluding generated `__pycache__` and `.pyc` files; evidence,
+documentation, tests, and release metadata are intentionally outside its scope. Missing or
 mismatched provenance must remain typed `UNBOUND_CURRENT_RELEASE`; historical
 artifacts may be retained for inspection, but must not be relabeled as proof of
 the current release.
