@@ -260,6 +260,12 @@ class LatencySpan(StrictModel):
     duration_ms: float | None = Field(default=None, ge=0)
     candidate: CandidateId | None = None
 
+    @model_validator(mode="after")
+    def unavailable_is_not_zero(self) -> "LatencySpan":
+        if self.duration_ms == 0:
+            raise ValueError("zero-duration latency spans are unavailable, not measured")
+        return self
+
 
 class BenchmarkProvenance(StrictModel):
     chat: ChatProvenance = Field(default_factory=ChatProvenance)
@@ -360,6 +366,7 @@ class CandidateEvaluation(StrictModel):
     total_output_tokens: int = Field(ge=0)
     total_cost_usd: float | None = Field(default=None, ge=0)
     cost_status: CostStatus
+    usage_source: UsageSource = UsageSource.MEASURED
     ingest_wall_time_ms: int = Field(ge=0, default=0)
     query_wall_time_ms: int = Field(ge=0, default=0)
     query_p50_ms: float | None = Field(default=None, ge=0)
@@ -391,6 +398,7 @@ class DecisionResult(StrictModel):
     considered_candidates: list[CandidateId] = Field(default_factory=list)
     quality_floor: float = 60.0
     close_quality_epsilon: float = 5.0
+    tie_break_metric: str = "candidate_query_p95_ms"
 
 
 class ComparisonArtifact(StrictModel):

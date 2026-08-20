@@ -14,6 +14,7 @@ from autobrain.models import (
     CostStatus,
     QualityComponents,
     Status,
+    UsageSource,
 )
 
 
@@ -70,6 +71,7 @@ def evaluate_candidate(
     *,
     total_cost_usd: float | None,
     cost_status: CostStatus | str,
+    usage_source: UsageSource = UsageSource.UNAVAILABLE,
     valid_pin: bool = True,
     corpus_hash: str | None = "a" * 64,
     direct_leakage: bool = False,
@@ -105,7 +107,11 @@ def evaluate_candidate(
     scored = len(evaluated)
     answered = sum(result.status == Status.OK for result in evaluated)
     quality = sum(result.score for result in evaluated) / scored if scored else 0.0
-    latencies = [result.latency_ms for result in evaluated if result.status == Status.OK]
+    latencies = [
+        result.latency_ms
+        for result in evaluated
+        if result.status == Status.OK and result.latency_ms > 0
+    ]
     return CandidateEvaluation(
         candidate=candidate,
         status=Status.OK if scored else Status.FAILED,
@@ -119,6 +125,7 @@ def evaluate_candidate(
         total_output_tokens=total_output_tokens,
         total_cost_usd=total_cost_usd,
         cost_status=CostStatus(cost_status),
+        usage_source=usage_source,
         ingest_wall_time_ms=ingest_wall_time_ms,
         query_wall_time_ms=query_wall_time_ms,
         query_p50_ms=_percentile(latencies, 50),

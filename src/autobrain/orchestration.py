@@ -181,10 +181,12 @@ class CandidateOutcome:
     scored_cases: int = 0
     cost_usd: float | None = None
     latency_ms: int = 0
+    latency_spans: tuple[LatencySpan, ...] = ()
     detail: str = ""
     artifact: Mapping[str, Any] = field(default_factory=_empty_artifact)
     observations: tuple[CandidateObservation, ...] = ()
     cost_status: CostStatus = CostStatus.COMPLETE
+    usage_source: UsageSource = UsageSource.MEASURED
     evaluation: CandidateEvaluation | None = None
 
 
@@ -302,6 +304,7 @@ class RunOrchestrator:
         chat_provenance_provider: Callable[[], ChatProvenance] | None = None,
         browser_open: Callable[[str], bool] = webbrowser.open,
         now: Callable[[], datetime] | None = None,
+        monotonic_clock: Callable[[], float] = monotonic,
     ) -> None:
         self.config = config
         self.connectors = tuple(connectors)
@@ -320,6 +323,7 @@ class RunOrchestrator:
         self._chat_provenance_provider = chat_provenance_provider
         self.browser_open = browser_open
         self.now = now or (lambda: datetime.now(UTC))
+        self._monotonic = monotonic_clock
         self._stages: list[dict[str, Any]] = []
         self._ledger: list[dict[str, Any]] = []
         self._manifest: dict[str, Any] = {}
@@ -617,7 +621,8 @@ class RunOrchestrator:
         if cleanup_interruptions:
             cleanup_detail = "; ".join(cleanup_interruptions)
         self._stage(result.run_dir, "cleanup", cleanup_status, cleanup_detail)
-        self._manifest["timings"]["total_ms"] = round((monotonic() - self._started) * 1000)
+        total_ms = round((self._monotonic() - self._started) * 1000)
+        self._manifest["timings"]["total_ms"] = total_ms if total_ms > 0 else None
         self._persist(result.run_dir)
         return replace(result, status=final_status)
 
@@ -658,7 +663,7 @@ class RunOrchestrator:
             "test_mode": dict(self.test_mode),
         }
         self._persist(run_dir)
-        started = monotonic()
+        started = self._monotonic()
         candidate_results: list[CandidateOutcome] = []
         report_path: Path | None = None
         final_status = Status.OK
@@ -792,6 +797,7 @@ class RunOrchestrator:
             )
             self._stage(run_dir, "evaluation-gate", Status.OK, "benchmark and corpus gates passed")
             candidate_results = self._run_candidates(run_dir, context)
+            self._candidate_outcomes = tuple(candidate_results)
             if any(outcome.status is Status.CANCELLED for outcome in candidate_results):
                 final_status = Status.CANCELLED
                 warning = (
@@ -932,7 +938,7 @@ class RunOrchestrator:
                 )
                 budget_exhausted = True
                 continue
-            started = monotonic()
+            started = self._monotonic()
             try:
                 outcome = candidate.run(context)
             except KeyboardInterrupt:
@@ -947,21 +953,21 @@ class RunOrchestrator:
                     status=Status.FAILED,
                     detail=str(exc),
                 )
-            elapsed = round((monotonic() - started) * 1000)
-            if outcome.latency_ms == 0:
-                outcome = CandidateOutcome(
-                    candidate=outcome.candidate,
-                    status=outcome.status,
-                    score=outcome.score,
-                    answered_cases=outcome.answered_cases,
-                    scored_cases=outcome.scored_cases,
-                    cost_usd=outcome.cost_usd,
-                    latency_ms=elapsed,
-                    detail=outcome.detail,
-                    artifact=outcome.artifact,
-                    observations=outcome.observations,
-                    cost_status=outcome.cost_status,
-                    evaluation=outcome.evaluation,
+            elapsed = round((self._monotonic() - started) * 1000)
+            if elapsed > 0 and not any(
+                span.name is LatencySpanKind.END_TO_END for span in outcome.latency_spans
+            ):
+                outcome = replace(
+                    outcome,
+                    latency_ms=outcome.latency_ms or elapsed,
+                    latency_spans=(
+                        *outcome.latency_spans,
+                        LatencySpan(
+                            name=LatencySpanKind.END_TO_END,
+                            duration_ms=elapsed,
+                            candidate=CandidateId(outcome.candidate),
+                        ),
+                    ),
                 )
             if outcome.cost_usd is not None:
                 spent += outcome.cost_usd
@@ -1402,6 +1408,7 @@ class RunOrchestrator:
                 evaluated_cases,
                 total_cost_usd=outcome.cost_usd if complete_cost else None,
                 cost_status=effective_cost_status,
+                usage_source=outcome.usage_source,
                 valid_pin=True,
                 corpus_hash=corpus_sha,
                 query_wall_time_ms=sum(
@@ -1591,23 +1598,23 @@ class RunOrchestrator:
             for provider in self.config.selected_sources
         ]
         spans = [
-            LatencySpan(
-                name=LatencySpanKind.CANDIDATE_QUERY,
-                duration_ms=evaluation.query_wall_time_ms,
-                candidate=evaluation.candidate,
-            )
-            for evaluation in evaluations
-            if evaluation.scored_cases > 0
+            span
+            for outcome in getattr(self, "_candidate_outcomes", ())
+            for span in outcome.latency_spans
         ]
-        usage_source = UsageSource.UNAVAILABLE
-        if evaluations:
-            usage_source = (
-                UsageSource.ESTIMATED
-                if subscription
-                else UsageSource.MEASURED
-                if all(evaluation.cost_status is CostStatus.COMPLETE for evaluation in evaluations)
-                else UsageSource.UNAVAILABLE
-            )
+        if not spans:
+            spans = [
+                LatencySpan(
+                    name=LatencySpanKind.CANDIDATE_QUERY,
+                    duration_ms=evaluation.query_wall_time_ms or None,
+                    candidate=evaluation.candidate,
+                )
+                for evaluation in evaluations
+            ]
+        usage_sources = {evaluation.usage_source for evaluation in evaluations}
+        usage_source = (
+            next(iter(usage_sources)) if len(usage_sources) == 1 else UsageSource.UNAVAILABLE
+        )
         return BenchmarkProvenance(
             chat=chat,
             embedding=embedding,
@@ -1811,9 +1818,11 @@ class RunOrchestrator:
             "answered_cases": outcome.answered_cases,
             "scored_cases": outcome.scored_cases,
             "cost_usd": outcome.cost_usd,
-            "latency_ms": outcome.latency_ms,
+            "latency_ms": outcome.latency_ms or None,
+            "latency_spans": [span.model_dump(mode="json") for span in outcome.latency_spans],
             "detail": outcome.detail,
             "cost_status": outcome.cost_status.value,
+            "usage_source": outcome.usage_source.value,
             "artifact": dict(outcome.artifact),
             "observations": [
                 observation.model_dump(mode="json") for observation in outcome.observations

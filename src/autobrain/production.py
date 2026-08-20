@@ -43,7 +43,15 @@ from autobrain.metering import (
     load_price_sheet,
     reconcile_usage,
 )
-from autobrain.models import CandidateId, CandidateObservation, CandidateQuery, CostStatus, Status
+from autobrain.models import (
+    CandidateId,
+    CandidateObservation,
+    CandidateQuery,
+    CostStatus,
+    LatencySpan,
+    LatencySpanKind,
+    Status,
+)
 from autobrain.orchestration import Candidate, CandidateContext, CandidateOutcome, ConnectorSnapshot
 from autobrain.paths import AutoBrainPaths
 
@@ -94,6 +102,24 @@ def _proxy_summary(
     )
 
 
+def _provider_spans(
+    proxy: LoopbackMeteringProxy,
+    candidate: CandidateId,
+) -> tuple[LatencySpan, ...]:
+    measured = [
+        event.provider_execution_ms
+        for event in proxy.events
+        if event.candidate == candidate.value and event.provider_execution_ms is not None
+    ]
+    return (
+        LatencySpan(
+            name=LatencySpanKind.PROVIDER_EXECUTION,
+            duration_ms=sum(measured) or None,
+            candidate=candidate,
+        ),
+    )
+
+
 def _budget_outcome(
     candidate: str,
     proxy: LoopbackMeteringProxy,
@@ -104,6 +130,7 @@ def _budget_outcome(
         status=Status.BUDGET_EXCEEDED,
         detail=detail,
         cost_status=CostStatus.INCOMPLETE,
+        usage_source=_proxy_summary(proxy, candidate).usage_source,
         artifact={"metering": _proxy_summary(proxy, candidate).model_dump(mode="json")},
     )
 
@@ -351,6 +378,15 @@ class LLMWikiCandidate:
             },
             observations=candidate_observations,
             cost_status=CostStatus.COMPLETE if complete_cost else CostStatus.INCOMPLETE,
+            usage_source=summary.usage_source,
+            latency_spans=(
+                LatencySpan(
+                    name=LatencySpanKind.CANDIDATE_QUERY,
+                    duration_ms=sum(item.latency_ms for item in candidate_observations) or None,
+                    candidate=CandidateId.LLM_WIKI,
+                ),
+                *_provider_spans(self.metering_proxy, CandidateId.LLM_WIKI),
+            ),
         )
 
     def cleanup(self) -> None:
@@ -422,6 +458,20 @@ class Mem0Candidate:
                     CostStatus.COMPLETE
                     if summary.cost_status is CostStatus.COMPLETE
                     else CostStatus.INCOMPLETE
+                ),
+                usage_source=summary.usage_source,
+                latency_spans=(
+                    LatencySpan(
+                        name=LatencySpanKind.CANDIDATE_INGEST,
+                        duration_ms=ingest_ms or None,
+                        candidate=CandidateId.MEM0,
+                    ),
+                    LatencySpan(
+                        name=LatencySpanKind.CANDIDATE_QUERY,
+                        duration_ms=query_ms or None,
+                        candidate=CandidateId.MEM0,
+                    ),
+                    *_provider_spans(self.metering_proxy, CandidateId.MEM0),
                 ),
             )
         except Mem0MissingProviderError as exc:
@@ -552,6 +602,18 @@ class GBrainCandidate:
             },
             observations=tuple(candidate_observations),
             cost_status=CostStatus.COMPLETE if complete_cost else CostStatus.INCOMPLETE,
+            usage_source=summary.usage_source,
+            latency_spans=(
+                LatencySpan(
+                    name=LatencySpanKind.CANDIDATE_QUERY,
+                    duration_ms=(
+                        sum(observation.latency_ms for observation in candidate_observations)
+                        or None
+                    ),
+                    candidate=CandidateId.GBRAIN,
+                ),
+                *_provider_spans(self.metering_proxy, CandidateId.GBRAIN),
+            ),
         )
 
     def cleanup(self) -> None:

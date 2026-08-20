@@ -1,5 +1,14 @@
+import pytest
+
 from autobrain.decision import select_winner
-from autobrain.models import CandidateEvaluation, CandidateId, CostStatus, Status, Verdict
+from autobrain.models import (
+    CandidateEvaluation,
+    CandidateId,
+    CostStatus,
+    Status,
+    UsageSource,
+    Verdict,
+)
 
 
 def candidate(
@@ -11,6 +20,7 @@ def candidate(
     latency: float = 100.0,
     eligible: bool = True,
     direct_leakage: bool = False,
+    usage_source: UsageSource = UsageSource.MEASURED,
 ) -> CandidateEvaluation:
     return CandidateEvaluation(
         candidate=name,
@@ -25,6 +35,7 @@ def candidate(
         total_output_tokens=100,
         total_cost_usd=cost,
         cost_status=cost_status,
+        usage_source=usage_source,
         query_p50_ms=latency / 2,
         query_p95_ms=latency,
         workspace_bytes=100,
@@ -73,6 +84,27 @@ def test_latency_breaks_a_complete_cost_tie() -> None:
         ]
     )
     assert result.verdict == Verdict.MEM0
+
+
+@pytest.mark.parametrize("usage_source", [UsageSource.ESTIMATED, UsageSource.UNAVAILABLE])
+def test_unmeasured_usage_is_ineligible_even_with_claimed_complete_cost(
+    usage_source: UsageSource,
+) -> None:
+    result = select_winner(
+        [
+            candidate(
+                CandidateId.MEM0,
+                99,
+                cost=0.01,
+                cost_status=CostStatus.COMPLETE,
+                usage_source=usage_source,
+            )
+        ]
+    )
+
+    assert result.verdict == Verdict.NO_RECOMMENDATION
+    assert result.status == Status.NO_RECOMMENDATION
+    assert usage_source.value in result.rationale
 
 
 def test_holdout_leakage_is_ineligible_without_override() -> None:

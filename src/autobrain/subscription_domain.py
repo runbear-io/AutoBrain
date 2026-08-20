@@ -92,6 +92,7 @@ class ProviderAnswer:
     text: str
     usage: AnswerUsage
     identity: ProviderIdentity
+    execution_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -119,4 +120,5 @@ class SubscriptionProvider(Protocol):
 class StructuredOutput:
     answer: str
     usage: AnswerUsage
+    model: str | None = None
     cli_version: str | None = None

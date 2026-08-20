@@ -214,9 +214,9 @@ def _latency_value(duration_ms: float | None) -> str:
 
 def _candidate_card(candidate: CandidateEvaluation) -> str:
     cost = (
-        f"${candidate.total_cost_usd:.4f}"
+        f"${candidate.total_cost_usd:.4f} measured"
         if candidate.cost_status.value == "COST_COMPLETE" and candidate.total_cost_usd is not None
-        else f"unknown ({candidate.cost_status.value})"
+        else f"unknown ({candidate.cost_status.value}) - {candidate.usage_source.value} usage"
     )
     latency = (
         f"p50 {candidate.query_p50_ms:.0f} ms / p95 {candidate.query_p95_ms:.0f} ms"
@@ -237,13 +237,14 @@ def _candidate_card(candidate: CandidateEvaluation) -> str:
           <div><dt>Partial failures</dt><dd>{candidate.partial_failures}</dd></div>
           <div><dt>Generated cases</dt><dd>{candidate.generated_cases}</dd></div>
           <div><dt>Source support</dt><dd>{candidate.source_support_rate * 100:.1f}%</dd></div>
-          <div><dt>Measured cost</dt><dd>{_escape(cost)}</dd></div>
+          <div><dt>Cost</dt><dd>{_escape(cost)}</dd></div>
           <div><dt>Query latency</dt><dd>{_escape(latency)}</dd></div>
           <div><dt>Workspace</dt><dd>
             {workspace} bytes
           </dd></div>
         </dl>
         <p class="muted">Cost telemetry: {_escape(candidate.cost_status.value)}
+          · Usage source: {_escape(candidate.usage_source.value)}
           · Operating burden: {_escape(burden)}
         </p>
         <p class="muted">{_escape("; ".join(candidate.eligibility_reasons))}</p>
@@ -400,6 +401,9 @@ def render_report(artifact: ComparisonArtifact) -> str:
         <div><p>Quality is retrieval Recall over gold source IDs, scaled to 0-100.
           Extra retrieved documents do not raise the score. Generated answer text
           is not scored.</p>
+        <p>Latency tie-break metric: <code>{_escape(artifact.decision.tie_break_metric)}</code>.
+          Unavailable spans are never displayed as zero and are not reconstructed by
+          subtraction.</p>
         <p>The evaluator uses <strong>gpt-5-mini</strong> at temperature 0.
           Using the same model family for evaluation can bias comparisons toward
           that model family; this report makes no statistical-significance or

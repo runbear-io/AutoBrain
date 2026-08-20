@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import cast
 
 from autobrain.subscription_domain import (
@@ -73,6 +74,7 @@ class CodexSubscriptionClient:
     interactive_runner: InteractiveRunner = run_interactive_provider_process
     last_answer: ProviderAnswer | None = field(default=None, init=False)
     _identity: ProviderIdentity | None = field(default=None, init=False)
+    monotonic_clock: Callable[[], float] = monotonic
 
     @property
     def identity(self) -> ProviderIdentity:
@@ -214,6 +216,7 @@ class CodexSubscriptionClient:
         ]
         if self.config.model is not None:
             args.extend(["--model", self.config.model])
+        execution_started = self.monotonic_clock()
         try:
             # Prompt is deliberately stdin-only; it must never become argv data.
             result = self.runner(args, prompt, self.config.timeout_seconds)
@@ -236,6 +239,7 @@ class CodexSubscriptionClient:
                 detail,
                 reason=SubscriptionFailureReason.EXECUTION_NONZERO,
             )
+        execution_ms = round((self.monotonic_clock() - execution_started) * 1000, 6)
         parsed = _parse_structured_output(result.stdout)
         if parsed is None:
             raise SubscriptionError(
@@ -252,7 +256,7 @@ class CodexSubscriptionClient:
         base_identity = self.identity
         self._identity = ProviderIdentity(
             provider=base_identity.provider,
-            model=base_identity.model,
+            model=parsed.model or base_identity.model,
             cli_version=parsed.cli_version or base_identity.cli_version,
             auth_kind=base_identity.auth_kind,
         )
@@ -260,6 +264,7 @@ class CodexSubscriptionClient:
             text=parsed.answer,
             usage=parsed.usage,
             identity=self._identity,
+            execution_ms=execution_ms if execution_ms > 0 else None,
         )
 
     def answer(self, prompt: str) -> ProviderAnswer:
@@ -297,6 +302,7 @@ _ALLOWED_EVENT_TYPES = {
 def _parse_structured_output(stdout: str) -> StructuredOutput | None:
     messages: list[str] = []
     usage = AnswerUsage(kind=UsageKind.UNAVAILABLE)
+    model: str | None = None
     cli_version: str | None = None
     saw_json = False
     for line in stdout.splitlines():
@@ -316,6 +322,9 @@ def _parse_structured_output(stdout: str) -> StructuredOutput | None:
         version = event.get("version")
         if isinstance(version, str):
             cli_version = version
+        model_value = event.get("model")
+        if isinstance(model_value, str) and model_value:
+            model = model_value
         usage_value = event.get("usage")
         if isinstance(usage_value, dict):
             usage_dict = cast(dict[str, object], usage_value)
@@ -346,5 +355,6 @@ def _parse_structured_output(stdout: str) -> StructuredOutput | None:
     return StructuredOutput(
         answer="\n".join(messages).strip(),
         usage=usage,
+        model=model,
         cli_version=cli_version,
     )

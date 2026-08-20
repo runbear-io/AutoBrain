@@ -9,6 +9,7 @@ from autobrain.models import (
     CostStatus,
     DecisionResult,
     Status,
+    UsageSource,
     Verdict,
 )
 
@@ -37,6 +38,8 @@ def _eligibility(candidate: CandidateEvaluation, quality_floor: float) -> list[s
         reasons.append("corpus hash is missing")
     if candidate.direct_leakage:
         reasons.append("direct holdout/oracle leakage detected")
+    if candidate.usage_source is not UsageSource.MEASURED:
+        reasons.append(f"usage is {candidate.usage_source.value}")
     if candidate.cost_status is not CostStatus.COMPLETE:
         reasons.append(f"candidate cost is {candidate.cost_status.value.lower()}")
     elif candidate.total_cost_usd is None:
@@ -60,14 +63,20 @@ def select_winner(
             status=Status.NO_RECOMMENDATION,
             verdict=Verdict.NO_RECOMMENDATION,
             rationale="No candidate results were available.",
+            tie_break_metric="candidate_query_p95_ms",
         )
     eligible: list[CandidateEvaluation] = []
     incomplete_cost_candidates: list[str] = []
+    unmeasured_usage_candidates: list[str] = []
     considered = [candidate.candidate for candidate in candidates]
     for candidate in candidates:
         reasons = _eligibility(candidate, quality_floor)
         if candidate.cost_status is not CostStatus.COMPLETE or candidate.total_cost_usd is None:
             incomplete_cost_candidates.append(candidate.candidate.value)
+        if candidate.usage_source is not UsageSource.MEASURED:
+            unmeasured_usage_candidates.append(
+                f"{candidate.candidate.value} ({candidate.usage_source.value})"
+            )
         candidate = candidate.model_copy(update={"eligibility_reasons": reasons})
         if not reasons:
             eligible.append(candidate)
@@ -77,16 +86,22 @@ def select_winner(
             if incomplete_cost_candidates
             else ""
         )
+        usage_detail = (
+            " usage is not measured for: " + ", ".join(sorted(unmeasured_usage_candidates)) + "."
+            if unmeasured_usage_candidates
+            else ""
+        )
         return DecisionResult(
             status=Status.NO_RECOMMENDATION,
             verdict=Verdict.NO_RECOMMENDATION,
             rationale=(
                 "No candidate met the quality, reliability, provenance, leakage, "
-                f"and complete-cost gates.{cost_detail}"
+                f"and complete-cost gates.{cost_detail}{usage_detail}"
             ),
             considered_candidates=considered,
             quality_floor=quality_floor,
             close_quality_epsilon=close_quality_epsilon,
+            tie_break_metric="candidate_query_p95_ms",
         )
     highest_quality = max(candidate.quality_score for candidate in eligible)
     close = [
@@ -130,4 +145,5 @@ def select_winner(
         considered_candidates=considered,
         quality_floor=quality_floor,
         close_quality_epsilon=close_quality_epsilon,
+        tie_break_metric="candidate_query_p95_ms",
     )

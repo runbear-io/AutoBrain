@@ -8,9 +8,13 @@ import re
 from collections.abc import Callable
 from typing import Protocol, cast
 
+from autobrain.subscription_domain import ProviderAnswer, UsageKind
+
 
 class AnswerClient(Protocol):
     def ask(self, prompt: str) -> str: ...
+
+    def answer(self, prompt: str) -> ProviderAnswer: ...
 
 
 def local_embedding(text: str, *, dimensions: int = 1536) -> list[float]:
@@ -54,8 +58,11 @@ def build_subscription_upstream(
                     for index, text in enumerate(texts)
                 ],
                 "model": "local-hash-embedding",
+                "_autobrain_provider": "local",
+                "_autobrain_usage_source": "estimated",
                 "usage": {
                     "prompt_tokens": sum(_estimate_tokens(text) for text in texts),
+                    "completion_tokens": 0,
                     "total_tokens": sum(_estimate_tokens(text) for text in texts),
                 },
             }
@@ -73,11 +80,47 @@ def build_subscription_upstream(
             f"{message.get('role', 'user')}: {message.get('content', '')}"
             for message in message_dicts
         ]
-        answer = client.ask("\n".join(prompt_parts))
+        prompt = "\n".join(prompt_parts)
+        answer_method = getattr(client, "answer", None)
+        provider_answer = (
+            answer_method(prompt)
+            if callable(answer_method)
+            and ("answer" in type(client).__dict__ or "ask" not in type(client).__dict__)
+            else None
+        )
+        if isinstance(provider_answer, ProviderAnswer):
+            answer = provider_answer.text
+            identity = provider_answer.identity
+            usage = provider_answer.usage
+            provider = identity.provider.value
+            actual_model = identity.model or "unavailable"
+            usage_source = "measured" if usage.kind is UsageKind.NATIVE else usage.kind.value
+            raw_usage = (
+                {
+                    "prompt_tokens": usage.input_tokens,
+                    "completion_tokens": usage.output_tokens,
+                }
+                if usage.input_tokens is not None and usage.output_tokens is not None
+                else {}
+            )
+            execution_ms = provider_answer.execution_ms
+        else:
+            answer = client.ask(prompt)
+            provider = "codex"
+            actual_model = "unavailable"
+            usage_source = "estimated"
+            raw_usage = {
+                "prompt_tokens": _estimate_tokens(prompt),
+                "completion_tokens": _estimate_tokens(answer),
+            }
+            execution_ms = None
         return {
             "id": "subscription-chat-completion",
             "object": "chat.completion",
-            "model": "chatgpt-subscription",
+            "model": actual_model,
+            "_autobrain_provider": provider,
+            "_autobrain_usage_source": usage_source,
+            "_autobrain_execution_ms": execution_ms,
             "choices": [
                 {
                     "index": 0,
@@ -85,10 +128,7 @@ def build_subscription_upstream(
                     "finish_reason": "stop",
                 }
             ],
-            "usage": {
-                "prompt_tokens": _estimate_tokens("\n".join(prompt_parts)),
-                "completion_tokens": _estimate_tokens(answer),
-            },
+            "usage": raw_usage,
         }
 
     return upstream

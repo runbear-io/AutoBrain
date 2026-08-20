@@ -27,7 +27,9 @@ from autobrain.orchestration import RunConfig, RunOrchestrator
 from autobrain.report import build_comparison, load_comparison, load_manifest, render_report
 
 
-def _candidate() -> CandidateEvaluation:
+def _candidate(
+    usage_source: UsageSource = UsageSource.MEASURED,
+) -> CandidateEvaluation:
     return CandidateEvaluation(
         candidate=CandidateId.MEM0,
         status=Status.OK,
@@ -41,6 +43,7 @@ def _candidate() -> CandidateEvaluation:
         total_output_tokens=5,
         total_cost_usd=0.01,
         cost_status=CostStatus.COMPLETE,
+        usage_source=usage_source,
         valid_pin=True,
         corpus_hash="a" * 64,
     )
@@ -323,11 +326,11 @@ def test_orchestration_records_only_known_runtime_provenance(tmp_path: Path) -> 
         SourceProvenance(source="slack", mutability=SourceMutability.FROZEN_EXPORT),
         SourceProvenance(source="notion", mutability=SourceMutability.LIVE_MCP_CAPTURED),
     ]
-    assert after_usage.usage_source is UsageSource.ESTIMATED
+    assert after_usage.usage_source is UsageSource.MEASURED
     assert after_usage.latency_spans == [
         LatencySpan(
             name=LatencySpanKind.CANDIDATE_QUERY,
-            duration_ms=0,
+            duration_ms=None,
             candidate=CandidateId.MEM0,
         )
     ]
@@ -349,6 +352,52 @@ def test_orchestration_records_only_known_runtime_provenance(tmp_path: Path) -> 
         quality=EmbeddingQuality.SEMANTIC,
     )
     assert api.usage_source is UsageSource.MEASURED
+
+
+def test_subscription_unavailable_usage_is_not_inferred_as_estimated(tmp_path: Path) -> None:
+    orchestrator = RunOrchestrator(
+        config=RunConfig(output=tmp_path, provider_mode="codex-subscription"),
+        connectors=(),
+        candidates=(),
+        provider_available=False,
+    )
+
+    unavailable = orchestrator.benchmark_provenance([_candidate(UsageSource.UNAVAILABLE)])
+    estimated = orchestrator.benchmark_provenance([_candidate(UsageSource.ESTIMATED)])
+
+    assert unavailable.usage_source is UsageSource.UNAVAILABLE
+    assert estimated.usage_source is UsageSource.ESTIMATED
+
+
+@pytest.mark.parametrize(
+    "usage_sources",
+    [
+        (UsageSource.MEASURED, UsageSource.ESTIMATED),
+        (UsageSource.MEASURED, UsageSource.UNAVAILABLE),
+        (UsageSource.ESTIMATED, UsageSource.UNAVAILABLE),
+        (
+            UsageSource.MEASURED,
+            UsageSource.ESTIMATED,
+            UsageSource.UNAVAILABLE,
+        ),
+    ],
+)
+def test_mixed_usage_sources_aggregate_to_unavailable(
+    tmp_path: Path,
+    usage_sources: tuple[UsageSource, ...],
+) -> None:
+    orchestrator = RunOrchestrator(
+        config=RunConfig(output=tmp_path, provider_mode="codex-subscription"),
+        connectors=(),
+        candidates=(),
+        provider_available=False,
+    )
+
+    provenance = orchestrator.benchmark_provenance(
+        [_candidate(usage_source) for usage_source in usage_sources]
+    )
+
+    assert provenance.usage_source is UsageSource.UNAVAILABLE
 
 
 def test_orchestration_uses_runtime_subscription_identity_for_provenance(tmp_path: Path) -> None:

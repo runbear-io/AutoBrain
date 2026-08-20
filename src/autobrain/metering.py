@@ -11,11 +11,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from time import monotonic
 from typing import Any, cast
 
 from pydantic import Field, model_validator
 
-from autobrain.models import CostStatus, StrictModel
+from autobrain.models import CostStatus, StrictModel, UsageSource
 
 COST_COMPLETE = CostStatus.COMPLETE
 COST_INCOMPLETE = CostStatus.INCOMPLETE
@@ -50,6 +51,20 @@ class PriceSheet(StrictModel):
     effective_date: str = Field(min_length=1)
     models: dict[str, PriceQuote] = Field(min_length=1)
 
+    @model_validator(mode="before")
+    @classmethod
+    def qualify_legacy_openai_keys(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        values = dict(cast(Mapping[str, Any], data))
+        raw_models = values.get("models")
+        if isinstance(raw_models, Mapping):
+            models = cast(Mapping[str, Any], raw_models)
+            values["models"] = {
+                key if ":" in str(key) else f"openai:{key}": value for key, value in models.items()
+            }
+        return values
+
 
 class MeteringEvent(StrictModel):
     event_id: str = Field(min_length=1)
@@ -57,7 +72,10 @@ class MeteringEvent(StrictModel):
     candidate: str = Field(min_length=1)
     phase: str = Field(min_length=1)
     role: MeteringRole = MeteringRole.CANDIDATE
+    provider: str = Field(default="openai", min_length=1)
     model: str = Field(min_length=1)
+    usage_source: UsageSource = UsageSource.MEASURED
+    provider_execution_ms: float | None = Field(default=None, gt=0)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     raw_usage: dict[str, Any] = Field(default_factory=dict)
@@ -88,6 +106,7 @@ class MeteringEvent(StrictModel):
 
 class MeteringSummary(StrictModel):
     cost_status: CostStatus
+    usage_source: UsageSource = UsageSource.UNAVAILABLE
     input_tokens: int = Field(ge=0)
     output_tokens: int = Field(ge=0)
     usd: float | None = Field(default=None, ge=0)
@@ -121,6 +140,14 @@ def load_price_sheet(path: Path | None = None) -> PriceSheet:
         return PriceSheet.model_validate(payload)
     except (OSError, json.JSONDecodeError, ValueError) as error:
         raise ValueError(f"corrupt price sheet: {price_path}") from error
+
+
+def _usage_count(raw_usage: Mapping[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = raw_usage.get(key)
+        if type(value) is int and value >= 0:
+            return value
+    return None
 
 
 def _event_cost(event: MeteringEvent, quote: PriceQuote) -> float | None:
@@ -158,6 +185,7 @@ def _event_sort_key(event: MeteringEvent) -> tuple[str, ...]:
         event.phase,
         event.event_id,
         event.request_id,
+        event.provider,
         event.model,
         json.dumps(
             _canonical_event_payload(event),
@@ -188,6 +216,7 @@ def reconcile_usage(
     if not events or not selected:
         return MeteringSummary(
             cost_status=COST_UNAVAILABLE,
+            usage_source=UsageSource.UNAVAILABLE,
             input_tokens=0,
             output_tokens=0,
             usd=None,
@@ -207,15 +236,22 @@ def reconcile_usage(
     costs: list[float] = []
     cost_complete = prices is not None and not mixed_roles
     for event in selected:
+        if event.usage_source is not UsageSource.MEASURED:
+            cost_complete = False
+            warnings.append(
+                f"COST_INCOMPLETE: {event.usage_source.value} usage for {event.request_id}"
+            )
+            continue
         if event.input_tokens is None or event.output_tokens is None:
             cost_complete = False
             warnings.append(f"COST_INCOMPLETE: missing usage for {event.request_id}")
             continue
-        if prices is None or event.model not in prices.models:
+        price_key = f"{event.provider}:{event.model}"
+        if prices is None or price_key not in prices.models:
             cost_complete = False
-            warnings.append(f"COST_INCOMPLETE: no price for {event.model}")
+            warnings.append(f"COST_INCOMPLETE: no price for {price_key}")
             continue
-        cost = _event_cost(event, prices.models[event.model])
+        cost = _event_cost(event, prices.models[price_key])
         if cost is not None:
             costs.append(cost)
     has_gbrain = any(event.candidate == "gbrain" for event in selected)
@@ -236,8 +272,29 @@ def reconcile_usage(
         if required_phase not in present_phases:
             cost_complete = False
             warnings.append(f"COST_INCOMPLETE: required paid phase {required_phase} is missing")
+    usage_sources = {event.usage_source for event in selected}
+    missing_usage = any(
+        event.input_tokens is None or event.output_tokens is None for event in selected
+    )
+    summary_usage_source = (
+        UsageSource.UNAVAILABLE
+        if missing_usage or UsageSource.UNAVAILABLE in usage_sources
+        else UsageSource.ESTIMATED
+        if UsageSource.ESTIMATED in usage_sources
+        else UsageSource.MEASURED
+    )
+    only_unavailable_usage = all(
+        event.input_tokens is None or event.output_tokens is None for event in selected
+    )
     return MeteringSummary(
-        cost_status=COST_COMPLETE if cost_complete else COST_INCOMPLETE,
+        cost_status=(
+            COST_COMPLETE
+            if cost_complete
+            else COST_UNAVAILABLE
+            if only_unavailable_usage
+            else COST_INCOMPLETE
+        ),
+        usage_source=summary_usage_source,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         usd=round(sum(costs), 10) if cost_complete else None,
@@ -275,10 +332,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         payload = cast(dict[str, Any], json.loads(self.rfile.read(length)))
         server = cast(_ProxyServer, self.server)
+        provider_started = server.owner.monotonic_clock()
         try:
             response = server.upstream(payload)
         except BudgetExceededError:
             raise
+        provider_execution_ms = round(
+            (server.owner.monotonic_clock() - provider_started) * 1000,
+            6,
+        )
+        if provider_execution_ms > 0:
+            response.setdefault("_autobrain_execution_ms", provider_execution_ms)
         usage = response.get("usage")
         raw_usage = cast(dict[str, Any], usage) if isinstance(usage, Mapping) else {}
         try:
@@ -360,6 +424,7 @@ class LoopbackMeteringProxy:
         prices: PriceSheet | None = None,
         budget_state: MeteringBudget | None = None,
         default_candidate: str = "",
+        monotonic_clock: Callable[[], float] = monotonic,
     ) -> None:
         self.upstream = upstream
         if budget_state is not None:
@@ -376,6 +441,7 @@ class LoopbackMeteringProxy:
         self.budget_usd = self._budget_state.budget_usd if self._budget_state is not None else None
         self.prices = self._budget_state.prices if self._budget_state is not None else prices
         self.default_candidate = default_candidate
+        self.monotonic_clock = monotonic_clock
         self._local_events: list[MeteringEvent] = []
         self._server: _ProxyServer | None = None
         self._thread: threading.Thread | None = None
@@ -467,23 +533,35 @@ class LoopbackMeteringProxy:
             assert self.budget_usd is not None
             raise BudgetExceededError(self.budget_usd, self.spent_usd)
         request_id = str(response.get("id", f"proxy-{len(self.events) + 1}"))
+        provider = str(response.get("_autobrain_provider", "openai"))
+        actual_model = str(response.get("model", model))
+        usage_source_raw = response.get("_autobrain_usage_source", UsageSource.MEASURED.value)
+        try:
+            usage_source = UsageSource(str(usage_source_raw))
+        except ValueError:
+            usage_source = UsageSource.UNAVAILABLE
+        input_tokens = _usage_count(raw_usage, "prompt_tokens", "input_tokens")
+        output_tokens = _usage_count(raw_usage, "completion_tokens", "output_tokens")
+        if input_tokens is None or output_tokens is None:
+            usage_source = UsageSource.UNAVAILABLE
         event = MeteringEvent(
             event_id=f"{request_id}-{len(self.events) + 1}",
             request_id=request_id,
             candidate=candidate,
             phase=phase,
             role=MeteringRole(role),
-            model=model,
-            input_tokens=(
-                int(raw_usage["prompt_tokens"])
-                if "prompt_tokens" in raw_usage
-                else raw_usage.get("input_tokens")
+            provider=provider,
+            model=actual_model,
+            usage_source=usage_source,
+            provider_execution_ms=(
+                float(response["_autobrain_execution_ms"])
+                if isinstance(response.get("_autobrain_execution_ms"), int | float)
+                and not isinstance(response.get("_autobrain_execution_ms"), bool)
+                and float(response["_autobrain_execution_ms"]) > 0
+                else None
             ),
-            output_tokens=(
-                int(raw_usage["completion_tokens"])
-                if "completion_tokens" in raw_usage
-                else raw_usage.get("output_tokens")
-            ),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             raw_usage=raw_usage,
             tags={"candidate": candidate, "phase": phase},
         )
@@ -492,7 +570,8 @@ class LoopbackMeteringProxy:
             return
         with self._budget_state.lock:
             self._budget_state.events.append(event)
-            quote = self.prices.models.get(model) if self.prices is not None else None
+            price_key = f"{event.provider}:{event.model}"
+            quote = self.prices.models.get(price_key) if self.prices is not None else None
             cost = _event_cost(event, quote) if quote is not None else None
             budget_usd = self.budget_usd
             if cost is not None and budget_usd is not None:
