@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "task": "10",
+  "redacted": true,
+  "allowlist": [
+    "task-10-final-qa.txt",
+    "manifest.json",
+    "comparison.json",
+    "screenshots/report-375.png",
+    "screenshots/report-768.png",
+    "screenshots/report-1280.png"
+  ],
+  "hash_basis": "manifest.json hash replaces hashes.manifest.json with 64 zeroes",
+  "hashes": {
+    "task-10-final-qa.txt": "7a3683ca4a02de360146e013a0f360dbc1ec0129be154451a3538e8041a280e4",
+    "manifest.json": "9a86623a8f4fb0a19566de43b4db471c1bdc20c17507ff716c43d5759734a1a9",
+    "comparison.json": "83cbbbf98e0500352f4ed6aee6cb300c9c23512975ac409824b7891864c95120",
+    "screenshots/report-375.png": "2d5a68ca1d222a6fabd9d44c6f67575ce70bb9cfd94ad79f6ef5b4c544ff1ef5",
+    "screenshots/report-768.png": "6ea06dcc4347d4c15c117b804e2d6957560678a127278e244fdebb403a454bf2",
+    "screenshots/report-1280.png": "b71d918f2f2a9cdaea11bc5e098a711433c5383214505d75450b7b09c416c2cc"
+  },
+  "evidence": {
+    "installed_wheel": "autobrain-0.1.0-py3-none-any.whl",
+    "fixture_mode": "AUTOBRAIN_ALLOW_TEST_FIXTURE=1 plus absolute JSON path",
+    "external_access": "NOT_ATTEMPTED"
+  }
+}

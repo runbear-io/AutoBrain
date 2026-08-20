@@ -1,0 +1,57 @@
+Task 10 final QA (redacted)
+===========================
+
+Scope
+-----
+- Only the autobrain repository was changed.
+- No OAuth, company data, provider runtime, Plugbear/.omo file, commit, push,
+  or external write was attempted.
+- Fake-MCP mode used a local JSON fixture guarded by both required environment
+  variables. The fixture contained synthetic Slack and Notion records only,
+  safe HTTPS source URLs, three deterministic candidates, and no oracle,
+  reference, raw-corpus, or secret material.
+
+Reproduction and repairs
+------------------------
+- Installed CLI probe reproduced lexical output traversal:
+  `--output confined/../target` created `target` before repair.
+- Guarded baseline: 319 passed, 3 typed provider/live skips. The three
+  blockers were the live-provider tests for GBrain, LLM Wiki, and Mem0; the
+  default suite now gates them behind explicit `AUTOBRAIN_RUN_LIVE_TESTS=1`.
+- Added lexical traversal rejection before output creation, symlink/run-ID
+  confinement, and typed MISSING_PROVIDER propagation without a report.
+- Added secure installed fake-MCP mode requiring
+  `AUTOBRAIN_ALLOW_TEST_FIXTURE=1` and an absolute
+  `AUTOBRAIN_TEST_FIXTURE_PATH`. It is data-only, strict-schema/hash checked,
+  local-only, and marks test mode in the manifest/report.
+
+Installed fake-E2E
+------------------
+- Fresh wheel install exercised `autobrain --help`, bad traversal input, and
+  two successful fixture runs.
+- Both fixture runs executed Slack + Notion crawling and all three candidates.
+- Run IDs were distinct and run directories were immutable. Stable comparison,
+  corpus, benchmark, candidate, and report content matched after only the
+  run-ID fields were normalized.
+- Cleanup left no candidate process or temporary provider state.
+
+Chrome QA
+---------
+- Real installed Chrome captured report screenshots at 375, 768, and 1280px.
+- DOM metrics: scroll width equaled viewport at every width; warning, mobile
+  cards/table, and source links were inside the viewport and readable.
+- Pixel checks: visible warning, candidate cards/table, and source-link crops
+  all returned non-empty rendered PNG content.
+- Console errors, external network requests, scripts, inline XSS handlers,
+  secret patterns, and oracle/reference markers were absent.
+
+Retained allowlist
+------------------
+- `task-10-final-qa.txt`
+- `manifest.json`
+- `comparison.json`
+- `screenshots/report-375.png`
+- `screenshots/report-768.png`
+- `screenshots/report-1280.png`
+
+No corpus, token, raw provider, or unrelated dated QA evidence is retained.

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "redacted": true,
+  "comparison": "installed-fake-mcp-three-candidate",
+  "connectors": [
+    "slack",
+    "notion"
+  ],
+  "candidates": [
+    "llm-wiki",
+    "mem0",
+    "gbrain"
+  ],
+  "evidence": {
+    "fake_run_status": "OK",
+    "fake_runs": 2,
+    "immutable_distinct_run_ids": true,
+    "stable_artifacts_byte_identical_after_run_id_normalization": true,
+    "safe_source_links": true,
+    "real_external_run": "NOT_ATTEMPTED",
+    "report_screenshots": [
+      "screenshots/report-375.png",
+      "screenshots/report-768.png",
+      "screenshots/report-1280.png"
+    ]
+  },
+  "browser": {
+    "engine": "installed Google Chrome headless",
+    "viewports": [
+      375,
+      768,
+      1280
+    ],
+    "no_right_edge_crop": true,
+    "no_horizontal_scroll": true,
+    "pixel_content_present": true,
+    "console_errors": false,
+    "external_network_requests": false,
+    "contrast_and_readability": true,
+    "xss_or_secret_oracle_leak": false
+  },
+  "secrets_or_corpus": "NOT_INCLUDED"
+}

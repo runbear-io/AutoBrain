@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import tomllib
 from pathlib import Path
 from typing import cast
 
@@ -32,6 +34,7 @@ PUBLISHED_PLATFORM_WHEELS = {
     "pydantic-core",
     "rpds-py",
 }
+TARGET_PLATFORM_WHEELS = PUBLISHED_PLATFORM_WHEELS - {"greenlet"}
 
 
 def test_valid_fixture_accepts_universal_wheels_and_sdists() -> None:
@@ -118,17 +121,118 @@ def test_malformed_formula_is_rejected(formula: str) -> None:
         parse_formula(formula)
 
 
-def test_generator_rejects_missing_unconditional_runtime_dependency(tmp_path: Path) -> None:
-    data = json.loads(MANIFEST.read_text())
-    data["resources"] = [
-        resource for resource in data["resources"] if resource["name"] != "textual"
-    ]
+def _write_manifest(tmp_path: Path, data: object) -> Path:
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(data))
+    return manifest_path
 
-    with pytest.raises(FormulaParseError, match=r"unconditional runtime resources.*textual"):
+
+def test_generator_rejects_missing_macos_marked_runtime_dependency(tmp_path: Path) -> None:
+    data = json.loads(MANIFEST.read_text())
+    data["resources"] = [
+        resource for resource in data["resources"] if resource["name"] != "uvicorn"
+    ]
+
+    with pytest.raises(FormulaParseError, match=r"missing target runtime resources.*uvicorn"):
         generate_formula(
-            load_formula_manifest(manifest_path),
+            load_formula_manifest(_write_manifest(tmp_path, data)),
+            uv_lock_path=ROOT / "uv.lock",
+            pyproject_path=ROOT / "pyproject.toml",
+        )
+
+
+def test_generator_rejects_omitted_synthetic_macos_marked_resource(tmp_path: Path) -> None:
+    lock_bytes = (
+        (ROOT / "uv.lock")
+        .read_bytes()
+        .replace(
+            b'{ name = "uvicorn", marker = "sys_platform != \'emscripten\'" },',
+            b'{ name = "uvicorn", marker = "sys_platform != \'emscripten\'" },\n'
+            b'    { name = "colorama", marker = "sys_platform == \'darwin\'" },',
+        )
+    )
+    assert lock_bytes != (ROOT / "uv.lock").read_bytes()
+    lock_path = tmp_path / "uv.lock"
+    lock_path.write_bytes(lock_bytes)
+    data = json.loads(MANIFEST.read_text())
+    data["uv_lock_sha256"] = hashlib.sha256(lock_bytes).hexdigest()
+
+    with pytest.raises(FormulaParseError, match=r"missing target runtime resources.*colorama"):
+        generate_formula(
+            load_formula_manifest(_write_manifest(tmp_path, data)),
+            uv_lock_path=lock_path,
+            pyproject_path=ROOT / "pyproject.toml",
+        )
+
+
+def test_generator_rejects_arbitrary_extra_runtime_resource(tmp_path: Path) -> None:
+    data = json.loads(MANIFEST.read_text())
+    package = next(
+        package
+        for package in tomllib.loads((ROOT / "uv.lock").read_text())["package"]
+        if package["name"] == "colorama"
+    )
+    wheel = package["wheels"][0]
+    data["resources"].append(
+        {
+            "name": "colorama",
+            "url": wheel["url"],
+            "sha256": wheel["hash"].removeprefix("sha256:"),
+            "role": "runtime",
+        }
+    )
+
+    with pytest.raises(FormulaParseError, match=r"extra target runtime resources.*colorama"):
+        generate_formula(
+            load_formula_manifest(_write_manifest(tmp_path, data)),
+            uv_lock_path=ROOT / "uv.lock",
+            pyproject_path=ROOT / "pyproject.toml",
+        )
+
+
+def test_generator_rejects_unknown_requested_extra(tmp_path: Path) -> None:
+    lock_bytes = (
+        (ROOT / "uv.lock")
+        .read_bytes()
+        .replace(
+            b'{ name = "markdown-it-py", extra = ["linkify"] }',
+            b'{ name = "markdown-it-py", extra = ["arbitrary"] }',
+        )
+    )
+    assert lock_bytes != (ROOT / "uv.lock").read_bytes()
+    lock_path = tmp_path / "uv.lock"
+    lock_path.write_bytes(lock_bytes)
+    data = json.loads(MANIFEST.read_text())
+    data["uv_lock_sha256"] = hashlib.sha256(lock_bytes).hexdigest()
+
+    with pytest.raises(FormulaParseError, match=r'unknown extra "markdown-it-py\[arbitrary\]"'):
+        generate_formula(
+            load_formula_manifest(_write_manifest(tmp_path, data)),
+            uv_lock_path=lock_path,
+            pyproject_path=ROOT / "pyproject.toml",
+        )
+
+
+def test_generator_rejects_linux_only_runtime_resource(tmp_path: Path) -> None:
+    data = json.loads(MANIFEST.read_text())
+    package = next(
+        package
+        for package in tomllib.loads((ROOT / "uv.lock").read_text())["package"]
+        if package["name"] == "secretstorage"
+    )
+    wheel = package["wheels"][0]
+    data["resources"].append(
+        {
+            "name": "secretstorage",
+            "url": wheel["url"],
+            "sha256": wheel["hash"].removeprefix("sha256:"),
+            "role": "runtime",
+        }
+    )
+
+    with pytest.raises(FormulaParseError, match=r"extra target runtime resources.*secretstorage"):
+        generate_formula(
+            load_formula_manifest(_write_manifest(tmp_path, data)),
             uv_lock_path=ROOT / "uv.lock",
             pyproject_path=ROOT / "pyproject.toml",
         )
@@ -157,7 +261,7 @@ def test_generated_formula_uses_one_explicit_audited_route_for_all_native_wheels
     verification = verify_formula(generated)
 
     assert verification.valid
-    assert verification.audited_platform_wheels == tuple(sorted(PUBLISHED_PLATFORM_WHEELS))
+    assert verification.audited_platform_wheels == tuple(sorted(TARGET_PLATFORM_WHEELS))
     assert verification.platform_wheel_violations == ()
     assert "virtualenv_install_with_resources" not in generated
     assert "resource(name).cached_download" in generated
@@ -374,9 +478,7 @@ def test_install_route_requires_project_build_isolation_disabled() -> None:
         "venv.pip_install_and_link buildpath",
     )
 
-    assert verify_formula(unsafe).platform_wheel_violations == tuple(
-        sorted(PUBLISHED_PLATFORM_WHEELS)
-    )
+    assert verify_formula(unsafe).platform_wheel_violations == tuple(sorted(TARGET_PLATFORM_WHEELS))
 
 
 def test_parenthesized_virtualenv_install_is_detected() -> None:

@@ -16,6 +16,8 @@ from typing import Any, cast
 from urllib.parse import unquote, urlsplit
 from urllib.request import urlopen
 
+from packaging.markers import Marker
+
 _RESOURCE_START = re.compile(r"^\s*resource\s+(?P<quote>['\"])(?P<name>[^'\"]+)(?P=quote)\s+do\s*$")
 _URL = re.compile(r"^\s*url\s+(?P<quote>['\"])(?P<url>[^'\"]+)(?P=quote)\s*$")
 _SHA256 = re.compile(r"^\s*sha256\s+(?P<quote>['\"])(?P<sha256>[^'\"]+)(?P=quote)\s*$")
@@ -470,7 +472,7 @@ def _validate_locked_resources(lock_bytes: bytes, manifest: FormulaManifest) -> 
         raise FormulaParseError(f"cannot parse uv.lock packages: {error}") from error
 
     locked_artifacts: dict[str, set[tuple[str, str]]] = {}
-    unconditional_dependencies: dict[str, set[str]] = {}
+    locked_packages: dict[str, dict[str, Any]] = {}
     for raw_package in packages:
         if not isinstance(raw_package, dict):
             raise FormulaParseError("uv.lock package entries must be tables")
@@ -491,40 +493,100 @@ def _validate_locked_resources(lock_bytes: bytes, manifest: FormulaManifest) -> 
             if isinstance(url, str) and isinstance(digest, str) and digest.startswith("sha256:"):
                 artifacts.add((url, digest.removeprefix("sha256:")))
         locked_artifacts[name] = artifacts
-        dependencies: set[str] = set()
+        locked_packages[name] = package
+
+    marker_environment = {
+        "implementation_name": "cpython",
+        "implementation_version": "3.13.0",
+        "os_name": "posix",
+        "platform_machine": "arm64",
+        "platform_python_implementation": "CPython",
+        "platform_release": "",
+        "platform_system": "Darwin",
+        "platform_version": "",
+        "python_full_version": "3.13.0",
+        "python_version": "3.13",
+        "sys_platform": "darwin",
+    }
+
+    def dependency_target(raw_dependency: object, owner: str) -> tuple[str, frozenset[str]] | None:
+        if not isinstance(raw_dependency, dict):
+            raise FormulaParseError(f'uv.lock dependency for "{owner}" must be a table')
+        dependency = cast(dict[str, Any], raw_dependency)
+        dependency_name = dependency.get("name")
+        if not isinstance(dependency_name, str):
+            raise FormulaParseError(f'uv.lock dependency name for "{owner}" must be a string')
+        marker = dependency.get("marker")
+        if marker is not None:
+            if not isinstance(marker, str):
+                raise FormulaParseError(f'uv.lock marker for "{owner}" must be a string')
+            try:
+                if not Marker(marker).evaluate(environment=marker_environment):
+                    return None
+            except Exception as error:
+                raise FormulaParseError(
+                    f'cannot evaluate uv.lock marker for "{owner}": {error}'
+                ) from error
+        raw_extras = dependency.get("extra", [])
+        if not isinstance(raw_extras, list) or not all(
+            isinstance(extra, str) for extra in cast(list[object], raw_extras)
+        ):
+            raise FormulaParseError(f'uv.lock extras for "{owner}" must be a string array')
+        return dependency_name, frozenset(cast(list[str], raw_extras))
+
+    required_runtime: set[str] = set()
+    visited: set[tuple[str, frozenset[str]]] = set()
+    pending: list[tuple[str, frozenset[str]]] = [("autobrain", frozenset())]
+    while pending:
+        name, extras = pending.pop()
+        state = (name, extras)
+        if state in visited:
+            continue
+        visited.add(state)
+        package = locked_packages.get(name)
+        if package is None:
+            raise FormulaParseError(f'uv.lock is missing reachable package "{name}"')
+        if name != "autobrain":
+            required_runtime.add(name)
         raw_dependencies = package.get("dependencies", [])
         if not isinstance(raw_dependencies, list):
             raise FormulaParseError(f'uv.lock dependencies for "{name}" must be an array')
-        for raw_dependency in cast(list[object], raw_dependencies):
-            if not isinstance(raw_dependency, dict):
-                raise FormulaParseError(f'uv.lock dependency for "{name}" must be a table')
-            dependency = cast(dict[str, Any], raw_dependency)
-            dependency_name = dependency.get("name")
-            if not isinstance(dependency_name, str):
-                raise FormulaParseError(f'uv.lock dependency name for "{name}" must be a string')
-            if "marker" not in dependency:
-                dependencies.add(dependency_name)
-        unconditional_dependencies[name] = dependencies
+        dependency_items = list(cast(list[object], raw_dependencies))
+        raw_optional = package.get("optional-dependencies", {})
+        if not isinstance(raw_optional, dict):
+            raise FormulaParseError(f'uv.lock optional dependencies for "{name}" must be a table')
+        optional = cast(dict[str, object], raw_optional)
+        for extra in extras:
+            if extra not in optional:
+                raise FormulaParseError(
+                    f'uv.lock dependency requests unknown extra "{name}[{extra}]"'
+                )
+            raw_extra_dependencies = optional[extra]
+            if not isinstance(raw_extra_dependencies, list):
+                raise FormulaParseError(
+                    f'uv.lock optional dependency group "{name}[{extra}]" must be an array'
+                )
+            dependency_items.extend(cast(list[object], raw_extra_dependencies))
+        for raw_dependency in dependency_items:
+            target = dependency_target(raw_dependency, name)
+            if target is not None:
+                pending.append(target)
 
-    required_runtime: set[str] = set()
-    pending = list(unconditional_dependencies.get("autobrain", set()))
-    while pending:
-        name = pending.pop()
-        if name in required_runtime:
-            continue
-        required_runtime.add(name)
-        pending.extend(unconditional_dependencies.get(name, set()) - required_runtime)
-    manifest_runtime = {
-        resource.name for resource in manifest.resources if resource.role == "runtime"
-    }
-    missing_runtime = sorted(required_runtime - manifest_runtime)
+    manifest_names = {resource.name for resource in manifest.resources}
+    required_names = required_runtime | set(_BUILD_RESOURCES)
+    missing_runtime = sorted(required_names - manifest_names)
+    extra_runtime = sorted(manifest_names - required_names)
     if missing_runtime:
         raise FormulaParseError(
-            "manifest is missing unconditional runtime resources: " + ", ".join(missing_runtime)
+            "manifest is missing target runtime resources: " + ", ".join(missing_runtime)
+        )
+    if extra_runtime:
+        raise FormulaParseError(
+            "manifest has extra target runtime resources: " + ", ".join(extra_runtime)
         )
 
     for resource in manifest.resources:
-        if resource.role != "runtime":
+        if resource.name not in required_runtime:
             continue
         if (resource.url, resource.sha256) not in locked_artifacts.get(resource.name, set()):
             raise FormulaParseError(
@@ -611,7 +673,6 @@ def generate_formula(
     imports = [
         "cffi",
         "cryptography",
-        "greenlet",
         "grpc",
         "jiter",
         "markupsafe",

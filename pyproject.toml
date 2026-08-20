@@ -17,6 +17,7 @@ dependencies = [
   "mcp>=1.12,<2",
   "mem0ai==2.0.18",
   "openai>=1.90,<2",
+  "packaging>=24,<27",
   "pydantic>=2.11,<3",
   "typer>=0.16,<1",
   "textual>=1,<8",
@@ -46,7 +47,6 @@ include = [
   "DESIGN.md",
   "pyproject.toml",
   "uv.lock",
-  ".senpi/task-10-final-qa/**",
 ]
 exclude = [
   ".senpi/task-10-final-qa-20260818/**",
@@ -54,6 +54,14 @@ exclude = [
   ".senpi/task9-qa-20260818/**",
   ".senpi/task10-browser-fixture/**",
 ]
+
+[tool.hatch.build.targets.sdist.force-include]
+".senpi/task-10-final-qa/comparison.json" = ".senpi/task-10-final-qa/comparison.json"
+".senpi/task-10-final-qa/manifest.json" = ".senpi/task-10-final-qa/manifest.json"
+".senpi/task-10-final-qa/screenshots/report-1280.png" = ".senpi/task-10-final-qa/screenshots/report-1280.png"
+".senpi/task-10-final-qa/screenshots/report-375.png" = ".senpi/task-10-final-qa/screenshots/report-375.png"
+".senpi/task-10-final-qa/screenshots/report-768.png" = ".senpi/task-10-final-qa/screenshots/report-768.png"
+".senpi/task-10-final-qa/task-10-final-qa.txt" = ".senpi/task-10-final-qa/task-10-final-qa.txt"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
