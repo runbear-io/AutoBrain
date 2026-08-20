@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from enum import StrEnum
@@ -23,12 +25,22 @@ _AUDITED_WHEELS = re.compile(
     r"^\s*PLATFORM_WHEEL_RESOURCES\s*=\s*%w\[\s*(?P<names>.*?)\s*\]\.freeze\s*$",
     re.MULTILINE | re.DOTALL,
 )
-_EXPLICIT_WHEEL_INSTALL = re.compile(
-    r"resource\(name\)\.cached_download.*?venv\.pip_install\s+wheel",
-    re.DOTALL,
-)
 _SDIST_SUFFIXES = (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".zip")
 _SHA256_LENGTH = 64
+_RESOURCE_NAME = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+_CLASS_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[a-z0-9.-]+)?$")
+_PYTHON_FORMULA = re.compile(r"^python@[0-9]+\.[0-9]+$")
+_BRANCH = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$")
+_LICENSE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-.+]*$")
+_SAFE_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,()&+:/_-]*$")
+_BUILD_RESOURCES = (
+    "hatchling",
+    "packaging",
+    "pathspec",
+    "pluggy",
+    "trove-classifiers",
+)
 
 
 class FormulaParseError(ValueError):
@@ -108,7 +120,57 @@ def _required_string(mapping: dict[str, Any], key: str) -> str:
     value = mapping.get(key)
     if not isinstance(value, str) or not value:
         raise FormulaParseError(f'manifest field "{key}" must be a non-empty string')
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise FormulaParseError(f'manifest field "{key}" contains control characters')
     return value
+
+
+def _matching_string(
+    mapping: dict[str, Any], key: str, pattern: re.Pattern[str], description: str
+) -> str:
+    value = _required_string(mapping, key)
+    if pattern.fullmatch(value) is None:
+        raise FormulaParseError(f'manifest field "{key}" must be {description}')
+    return value
+
+
+def _https_url(mapping: dict[str, Any], key: str) -> str:
+    value = _required_string(mapping, key)
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+        raise FormulaParseError(f'manifest field "{key}" must be an absolute HTTPS URL')
+    if any(character in value for character in ('"', "'", "\\")):
+        raise FormulaParseError(f'manifest field "{key}" contains unsafe URL characters')
+    return value
+
+
+def _branch_name(mapping: dict[str, Any]) -> str:
+    value = _matching_string(mapping, "branch", _BRANCH, "a Git branch name")
+    if any(segment in {".", ".."} for segment in value.split("/")):
+        raise FormulaParseError('manifest field "branch" contains a dot segment')
+    return value
+
+
+def _resource_name(mapping: dict[str, Any]) -> str:
+    try:
+        return _matching_string(
+            mapping,
+            "name",
+            _RESOURCE_NAME,
+            "a normalized lowercase Python package name",
+        )
+    except FormulaParseError as error:
+        raise FormulaParseError(f"unsafe resource name: {error}") from error
+
+
+def _normalized_resource_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name)
+
+
+def _ruby_string(value: str) -> str:
+    """Quote a validated manifest value as a Ruby double-quoted literal."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _required_sha256(mapping: dict[str, Any], key: str) -> str:
@@ -149,27 +211,45 @@ def load_formula_manifest(path: Path) -> FormulaManifest:
 
     resources: list[FormulaManifestResource] = []
     seen_names: set[str] = set()
+    seen_normalized_names: set[str] = set()
     for index, raw_resource in enumerate(resource_items):
         if not isinstance(raw_resource, dict):
             raise FormulaParseError(f"manifest resource {index} must be an object")
         resource = cast(dict[str, Any], raw_resource)
-        name = _required_string(resource, "name")
+        name = _resource_name(resource)
         if name in seen_names:
             raise FormulaParseError(f'duplicate manifest resource name: "{name}"')
+        normalized_name = _normalized_resource_name(name)
+        if normalized_name in seen_normalized_names:
+            raise FormulaParseError(f'normalized resource name collision: "{name}"')
         seen_names.add(name)
+        seen_normalized_names.add(normalized_name)
         role = _required_string(resource, "role")
         if role not in {"build", "runtime"}:
             raise FormulaParseError(f'unsupported role for resource "{name}": {role}')
         resources.append(
             FormulaManifestResource(
                 name=name,
-                url=_required_string(resource, "url"),
+                url=_https_url(resource, "url"),
                 sha256=_required_sha256(resource, "sha256"),
                 role=role,
             )
         )
 
+    build_names = tuple(resource.name for resource in resources if resource.role == "build")
+    if build_names != _BUILD_RESOURCES:
+        raise FormulaParseError(
+            "build resources must be locked in order: " + ", ".join(_BUILD_RESOURCES)
+        )
+    if any(resource.role == "build" for resource in resources[len(_BUILD_RESOURCES) :]):
+        raise FormulaParseError("build resources must precede runtime resources")
+
     platform_names = tuple(cast(list[str], platform_items))
+    for name in platform_names:
+        if _RESOURCE_NAME.fullmatch(name) is None:
+            raise FormulaParseError(
+                "platform_wheel_resources entries must use normalized package names"
+            )
     if len(platform_names) != len(set(platform_names)):
         raise FormulaParseError("manifest platform_wheel_resources contains duplicates")
     missing = sorted(set(platform_names) - seen_names)
@@ -180,20 +260,22 @@ def load_formula_manifest(path: Path) -> FormulaManifest:
     head = cast(dict[str, Any], head_raw)
     return FormulaManifest(
         schema_version=1,
-        class_name=_required_string(data, "class_name"),
-        description=_required_string(data, "description"),
-        homepage=_required_string(data, "homepage"),
-        license=_required_string(data, "license"),
+        class_name=_matching_string(data, "class_name", _CLASS_NAME, "a Ruby class identifier"),
+        description=_matching_string(data, "description", _SAFE_TEXT, "single-line release text"),
+        homepage=_https_url(data, "homepage"),
+        license=_matching_string(data, "license", _LICENSE, "an SPDX-style identifier"),
         source=FormulaSource(
-            version=_required_string(source, "version"),
-            url=_required_string(source, "url"),
+            version=_matching_string(source, "version", _VERSION, "a release version identifier"),
+            url=_https_url(source, "url"),
             sha256=_required_sha256(source, "sha256"),
         ),
         head=FormulaHead(
-            url=_required_string(head, "url"),
-            branch=_required_string(head, "branch"),
+            url=_https_url(head, "url"),
+            branch=_branch_name(head),
         ),
-        python=_required_string(data, "python"),
+        python=_matching_string(
+            data, "python", _PYTHON_FORMULA, "a versioned Homebrew Python formula"
+        ),
         uv_lock_sha256=_required_sha256(data, "uv_lock_sha256"),
         candidate_pins_sha256=_required_sha256(data, "candidate_pins_sha256"),
         platform_wheel_resources=platform_names,
@@ -256,6 +338,8 @@ def parse_formula(text: str) -> tuple[FormulaResource, ...]:
             continue
         if current_url is None:
             raise FormulaParseError(f'resource "{current_name}" has no URL')
+        if _RESOURCE_NAME.fullmatch(current_name) is None:
+            raise FormulaParseError(f'unsafe resource name: "{current_name}"')
         if current_name in seen_names:
             raise FormulaParseError(f'duplicate resource name: "{current_name}"')
         seen_names.add(current_name)
@@ -278,8 +362,37 @@ def parse_formula(text: str) -> tuple[FormulaResource, ...]:
     return tuple(resources)
 
 
+def _code_without_comments(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+def _extract_install_method(text: str) -> tuple[str, ...]:
+    lines = _code_without_comments(text).splitlines()
+    start = next(
+        (index for index, line in enumerate(lines) if line.strip() == "def install"),
+        None,
+    )
+    if start is None:
+        return ()
+    body: list[str] = []
+    depth = 1
+    block_starts = ("def ", "if ", "unless ", "case ", "begin", "while ", "until ", "for ")
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped == "end":
+            depth -= 1
+            if depth == 0:
+                return tuple(body)
+            body.append(stripped)
+            continue
+        body.append(stripped)
+        if stripped.startswith(block_starts) or stripped.endswith(" do") or " do |" in stripped:
+            depth += 1
+    raise FormulaParseError("unterminated install method")
+
+
 def _parse_audited_wheels(text: str) -> tuple[str, ...]:
-    match = _AUDITED_WHEELS.search(text)
+    match = _AUDITED_WHEELS.search(_code_without_comments(text))
     if match is None:
         return ()
     names = tuple(match.group("names").split())
@@ -298,11 +411,27 @@ def verify_formula(text: str) -> FormulaVerification:
         if resource.archive_kind is ArchiveKind.PLATFORM_WHEEL
     }
     audited_names = set(_parse_audited_wheels(text))
-    has_explicit_route = _EXPLICIT_WHEEL_INSTALL.search(text) is not None
+    install_lines = _extract_install_method(text)
+    has_explicit_route = (
+        len(install_lines) == 7
+        and install_lines[0].startswith("venv = virtualenv_create(libexec, ")
+        and install_lines[1:6]
+        == (
+            "resources.each do |res|",
+            "name = res.name",
+            "wheel = resource(name).cached_download",
+            "venv.pip_install wheel",
+            "end",
+        )
+    )
+    has_offline_project_build = (
+        len(install_lines) == 7
+        and install_lines[6] == "venv.pip_install_and_link buildpath, build_isolation: false"
+    )
     violations = (
         set(platform_names) if uses_virtualenv_resources else platform_names - audited_names
     )
-    if not has_explicit_route:
+    if not has_explicit_route or not has_offline_project_build:
         violations.update(platform_names)
     violations.update(audited_names - platform_names)
     return FormulaVerification(
@@ -412,14 +541,14 @@ def generate_formula(
         f"class {manifest.class_name} < Formula",
         "  include Language::Python::Virtualenv",
         "",
-        f'  desc "{manifest.description}"',
-        f'  homepage "{manifest.homepage}"',
-        f'  url "{manifest.source.url}"',
-        f'  sha256 "{manifest.source.sha256}"',
-        f'  license "{manifest.license}"',
-        f'  head "{manifest.head.url}", branch: "{manifest.head.branch}"',
+        f"  desc {_ruby_string(manifest.description)}",
+        f"  homepage {_ruby_string(manifest.homepage)}",
+        f"  url {_ruby_string(manifest.source.url)}",
+        f"  sha256 {_ruby_string(manifest.source.sha256)}",
+        f"  license {_ruby_string(manifest.license)}",
+        f"  head {_ruby_string(manifest.head.url)}, branch: {_ruby_string(manifest.head.branch)}",
         "",
-        f'  depends_on "{manifest.python}"',
+        f"  depends_on {_ruby_string(manifest.python)}",
         "  depends_on :macos",
         "  depends_on arch: :arm64",
         "",
@@ -434,9 +563,9 @@ def generate_formula(
             lines.append("")
         lines.extend(
             [
-                f'  resource "{resource.name}" do',
-                f'    url "{resource.url}"',
-                f'    sha256 "{resource.sha256}"',
+                f"  resource {_ruby_string(resource.name)} do",
+                f"    url {_ruby_string(resource.url)}",
+                f"    sha256 {_ruby_string(resource.sha256)}",
                 "  end",
             ]
         )
@@ -457,13 +586,14 @@ def generate_formula(
         [
             "",
             "  def install",
-            f'    venv = virtualenv_create(libexec, "{manifest.python.replace("@", "")}")',
+            "    venv = virtualenv_create("
+            f"libexec, {_ruby_string(manifest.python.replace('@', ''))})",
             "    resources.each do |res|",
             "      name = res.name",
             "      wheel = resource(name).cached_download",
             "      venv.pip_install wheel",
             "    end",
-            "    venv.pip_install_and_link buildpath",
+            "    venv.pip_install_and_link buildpath, build_isolation: false",
             "  end",
             "",
             "  test do",
@@ -548,6 +678,34 @@ def main() -> None:
     raise SystemExit(run_cli(arguments.formula))
 
 
+def write_formula_atomic(path: Path, content: bytes) -> None:
+    """Durably replace a formula without exposing a partially written target."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def generate_main() -> None:
     """Console entry point for deterministic formula generation and supply-chain checks."""
     parser = argparse.ArgumentParser(description="Generate the locked AutoBrain Homebrew formula.")
@@ -575,8 +733,7 @@ def generate_main() -> None:
             if arguments.output.read_bytes() != generated.encode():
                 raise FormulaParseError(f"generated formula is stale: {arguments.output}")
         else:
-            arguments.output.parent.mkdir(parents=True, exist_ok=True)
-            arguments.output.write_text(generated, encoding="utf-8")
+            write_formula_atomic(arguments.output, generated.encode())
     except (OSError, UnicodeError, FormulaParseError) as error:
         print(f"ERROR: {error}")
         raise SystemExit(1) from None

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from autobrain.release_formula import (
     parse_formula,
     run_cli,
     verify_formula,
+    write_formula_atomic,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -115,6 +117,18 @@ def test_malformed_formula_is_rejected(formula: str) -> None:
         parse_formula(formula)
 
 
+def test_generated_formula_installs_locked_build_backend_without_index_lookup() -> None:
+    generated = generate_formula(
+        load_formula_manifest(MANIFEST),
+        uv_lock_path=ROOT / "uv.lock",
+        pyproject_path=ROOT / "pyproject.toml",
+    )
+
+    assert generated.index('resource "hatchling"') < generated.index('resource "annotated-doc"')
+    assert "venv.pip_install_and_link buildpath, build_isolation: false" in generated
+    assert "venv.pip_install_and_link buildpath\n" not in generated
+
+
 def test_generated_formula_uses_one_explicit_audited_route_for_all_native_wheels() -> None:
     manifest = load_formula_manifest(MANIFEST)
     generated = generate_formula(
@@ -148,6 +162,76 @@ def test_generator_is_byte_idempotent_and_matches_tap_formula() -> None:
     assert generated_once.encode() == generated_twice.encode()
 
 
+@pytest.mark.parametrize(
+    ("field_path", "value"),
+    [
+        (("description",), 'Injected "quote"'),
+        (("description",), "Injected\nnewline"),
+        (("description",), "Injected\x00control"),
+        (("class_name",), "Autobrain; system('owned')"),
+        (("source", "version"), "v0.1.1\nend"),
+        (("python",), 'python@3.13"; system "owned"'),
+        (("head", "branch"), "main\nend"),
+        (("homepage",), "javascript:alert(1)"),
+    ],
+)
+def test_manifest_rejects_unsafe_strings_at_boundary(
+    tmp_path: Path, field_path: tuple[str, ...], value: str
+) -> None:
+    data = json.loads(MANIFEST.read_text())
+    target = data
+    for key in field_path[:-1]:
+        target = target[key]
+    target[field_path[-1]] = value
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(data))
+
+    with pytest.raises(FormulaParseError):
+        load_formula_manifest(manifest_path)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["../cffi", "a/b", ".", "..", "CFFI", "cffi;end", "cffi name", "cffi\nend"],
+)
+def test_manifest_rejects_unsafe_resource_names(tmp_path: Path, name: str) -> None:
+    data = json.loads(MANIFEST.read_text())
+    data["resources"][3]["name"] = name
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(data))
+
+    with pytest.raises(FormulaParseError, match="resource name"):
+        load_formula_manifest(manifest_path)
+
+
+def test_manifest_rejects_normalized_resource_name_collisions(tmp_path: Path) -> None:
+    data = json.loads(MANIFEST.read_text())
+    data["resources"][4]["name"] = "annotated_doc"
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(data))
+
+    with pytest.raises(FormulaParseError, match="collision"):
+        load_formula_manifest(manifest_path)
+
+
+def test_atomic_formula_write_preserves_previous_file_when_replace_is_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "autobrain.rb"
+    output.write_bytes(b"previous formula\n")
+
+    def interrupt_replace(_source: Path | str, _target: Path | str) -> None:
+        raise InterruptedError("simulated interruption")
+
+    monkeypatch.setattr("autobrain.release_formula.os.replace", interrupt_replace)
+
+    with pytest.raises(InterruptedError, match="simulated interruption"):
+        write_formula_atomic(output, b"replacement formula\n")
+
+    assert output.read_bytes() == b"previous formula\n"
+    assert list(tmp_path.iterdir()) == [output]
+
+
 def test_generator_rejects_stale_lock_metadata(tmp_path: Path) -> None:
     stale_lock = tmp_path / "uv.lock"
     stale_lock.write_bytes((ROOT / "uv.lock").read_bytes() + b"\n# stale\n")
@@ -158,6 +242,75 @@ def test_generator_rejects_stale_lock_metadata(tmp_path: Path) -> None:
             uv_lock_path=stale_lock,
             pyproject_path=ROOT / "pyproject.toml",
         )
+
+
+@pytest.mark.parametrize(
+    "spoof",
+    [
+        """
+PLATFORM_WHEEL_RESOURCES = %w[native].freeze
+resource "native" do
+  url "https://example.test/native-1.0-cp313-cp313-macosx_11_0_arm64.whl"
+  sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+end
+# def install
+#   wheel = resource(name).cached_download
+#   venv.pip_install wheel
+# end
+def install
+end
+""",
+        """
+PLATFORM_WHEEL_RESOURCES = %w[native].freeze
+resource "native" do
+  url "https://example.test/native-1.0-cp313-cp313-macosx_11_0_arm64.whl"
+  sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+end
+def audit_spoof
+  wheel = resource(name).cached_download
+  venv.pip_install wheel
+end
+def install
+  puts "not installing resources"
+end
+""",
+        """
+PLATFORM_WHEEL_RESOURCES = %w[native].freeze
+resource "native" do
+  url "https://example.test/native-1.0-cp313-cp313-macosx_11_0_arm64.whl"
+  sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+end
+def install
+  if false
+    resources.each do |res|
+      name = res.name
+      wheel = resource(name).cached_download
+      venv.pip_install wheel
+    end
+  end
+  venv.pip_install_and_link buildpath, build_isolation: false
+end
+""",
+    ],
+)
+def test_comments_and_dead_methods_cannot_spoof_audited_install_route(spoof: str) -> None:
+    assert verify_formula(spoof).platform_wheel_violations == ("native",)
+
+
+def test_install_route_requires_project_build_isolation_disabled() -> None:
+    generated = generate_formula(
+        load_formula_manifest(MANIFEST),
+        uv_lock_path=ROOT / "uv.lock",
+        pyproject_path=ROOT / "pyproject.toml",
+    )
+    unsafe = generated.replace(
+        "venv.pip_install_and_link buildpath, build_isolation: false",
+        "venv.pip_install_and_link buildpath",
+    )
+
+    assert verify_formula(unsafe).platform_wheel_violations == tuple(
+        sorted(PUBLISHED_PLATFORM_WHEELS)
+    )
 
 
 def test_parenthesized_virtualenv_install_is_detected() -> None:
