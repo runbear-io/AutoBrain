@@ -6,8 +6,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -281,6 +283,7 @@ class _BoundedRunner:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            shell=False,
             start_new_session=True,
         )
         timed_out = False
@@ -348,10 +351,11 @@ class LLMWikiAdapter:
         self.config = config
         self._runner = _BoundedRunner()
         self._commands: list[CommandRecord] = []
+        self._run_home: Path | None = None
 
     def prepare_tool_cache(self) -> Path:
         """Install or verify the exact approved package and return its SDK entry point."""
-        return self._ensure_tool_cache()
+        return self._ensure_tool_cache_with_confined_home()
 
     def verify_workspace(self) -> str:
         """Verify the completed workspace seal and return its root digest."""
@@ -400,9 +404,11 @@ class LLMWikiAdapter:
             )
 
         self._ensure_empty_workspace()
-        package_entry = self._ensure_tool_cache()
+        package_entry = self._ensure_tool_cache_with_confined_home()
         self._prepare_workspace()
-        environment, reported_environment = self._environment(api_key)
+        run_home = self._prepare_run_home()
+        self._run_home = run_home
+        environment, reported_environment = self._environment(api_key, run_home)
         known_secrets = self._secret_values(environment)
         warnings: list[AdapterWarning] = []
         observations: list[LLMWikiObservation] = []
@@ -557,6 +563,9 @@ class LLMWikiAdapter:
                 AdapterWarning("NATIVE_FAILURE", _redact_text(str(error), known_secrets))
             )
 
+        finally:
+            shutil.rmtree(run_home)
+            self._run_home = None
         events, measured_cost, metering_warnings = self._read_metering(known_secrets)
         warnings.extend(metering_warnings)
         self._redact_workspace(known_secrets)
@@ -669,6 +678,26 @@ class LLMWikiAdapter:
         self.config.workspace.mkdir(mode=0o700, parents=True, exist_ok=False)
         for name in ("artifacts", "process"):
             (self.config.workspace / name).mkdir(mode=0o700)
+
+    def _prepare_run_home(self) -> Path:
+        run_home = self.config.workspace / "home"
+        run_home.mkdir(mode=0o700)
+        return run_home
+
+    def _ensure_tool_cache_with_confined_home(self) -> Path:
+        self.config.tool_cache.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        run_home = Path(
+            tempfile.mkdtemp(
+                prefix=f".{self.config.tool_cache.name}-home-",
+                dir=self.config.tool_cache.parent,
+            )
+        )
+        self._run_home = run_home
+        try:
+            return self._ensure_tool_cache()
+        finally:
+            shutil.rmtree(run_home)
+            self._run_home = None
 
     def _ensure_tool_cache(self) -> Path:
         cache = _canonical_path(self.config.tool_cache)
@@ -859,9 +888,12 @@ class LLMWikiAdapter:
             },
         )
 
-    def _environment(self, api_key: str) -> tuple[dict[str, str], dict[str, str]]:
+    def _environment(
+        self, api_key: str, run_home: Path
+    ) -> tuple[dict[str, str], dict[str, str]]:
         environment = self._base_process_environment()
         settings = {
+            "HOME": str(run_home),
             "LLMWIKI_PROVIDER": "openai",
             "LLMWIKI_MODEL": "gpt-5-mini",
             "LLMWIKI_EMBEDDING_MODEL": "text-embedding-3-small",
@@ -900,6 +932,8 @@ class LLMWikiAdapter:
         )
         environment = {name: os.environ[name] for name in allowed if name in os.environ}
         environment.update(self.config.additional_env)
+        if self._run_home is not None:
+            environment["HOME"] = str(self._run_home)
         return environment
 
     def _map_document(self, document: NormalizedDocument, index: int) -> dict[str, str]:

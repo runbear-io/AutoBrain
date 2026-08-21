@@ -169,6 +169,12 @@ if "--input-type=module" in sys.argv:
 _, driver, package_entry, operation, request_path, response_path = sys.argv
 request = json.loads(pathlib.Path(request_path).read_text())
 workspace = pathlib.Path(request["root"])
+if env_path := os.environ.get("FAKE_ENV_PATH"):
+    pathlib.Path(env_path).write_text(json.dumps(dict(os.environ)))
+if os.environ.get("FAKE_WRITE_HOME_CACHE") == operation:
+    home = pathlib.Path(os.environ["HOME"])
+    home.joinpath(".cache", "llm-wiki").mkdir(parents=True, exist_ok=True)
+    home.joinpath(".cache", "llm-wiki", "state.json").write_text("{}")
 if os.environ.get("FAKE_STALE_CHILD") == "1" and operation == "compile":
     child = os.fork()
     if child == 0:
@@ -303,6 +309,70 @@ def _config(tmp_path: Path, **kwargs: object) -> LLMWikiConfig:
     }
     values.update(kwargs)
     return LLMWikiConfig(**values)
+
+
+def test_child_home_is_run_local_when_parent_home_is_absent_and_config_home_is_malicious(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "parent-credential-must-not-leak")
+    child_env_path = tmp_path / "child-env.json"
+    malicious_home = tmp_path.parent / "attacker-controlled-home"
+    config = _config(
+        tmp_path,
+        additional_env={
+            "HOME": str(malicious_home),
+            "FAKE_ENV_PATH": str(child_env_path),
+            "FAKE_WRITE_HOME_CACHE": "query",
+        },
+    )
+
+    result = LLMWikiAdapter(config).run([_document()], [_case()], api_key="fixture-key")
+
+    child_env = json.loads(child_env_path.read_text())
+    expected_home = config.workspace / "home"
+    assert result.status is Status.OK
+    assert result.environment["HOME"] == str(expected_home)
+    assert child_env["HOME"] == str(expected_home)
+    assert Path(child_env["HOME"]).is_relative_to(config.workspace)
+    assert (expected_home / ".cache" / "llm-wiki" / "state.json").is_file() is False
+    assert "AWS_SECRET_ACCESS_KEY" not in child_env
+    assert not malicious_home.exists()
+    assert not expected_home.exists()
+
+
+def test_prepare_tool_cache_uses_and_removes_confined_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    adapter = LLMWikiAdapter(config)
+    observed_home: Path | None = None
+
+    def ensure_tool_cache() -> Path:
+        nonlocal observed_home
+        observed_home = Path(adapter._base_process_environment()["HOME"])  # pyright: ignore[reportPrivateUsage]
+        assert observed_home.parent == config.tool_cache.parent
+        observed_home.joinpath(".npm").mkdir()
+        return config.tool_cache / "source" / "dist" / "index.js"
+
+    monkeypatch.setattr(adapter, "_ensure_tool_cache", ensure_tool_cache)  # pyright: ignore[reportPrivateUsage]
+    adapter.prepare_tool_cache()
+
+    assert observed_home is not None
+    assert not observed_home.exists()
+
+
+def test_run_local_home_is_removed_after_native_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_WRITE_HOME_CACHE", "compile")
+    monkeypatch.setenv("FAKE_FAIL", "compile")
+    config = _config(tmp_path)
+
+    result = LLMWikiAdapter(config).run([_document()], [_case()], api_key="fixture-key")
+
+    assert result.status is Status.FAILED
+    assert not (config.workspace / "home").exists()
 
 
 def test_happy_path_preserves_native_artifacts_provenance_and_environment(tmp_path: Path) -> None:
@@ -501,6 +571,7 @@ def test_cancellation_kills_process_group_and_orphan(
         path.read_text(errors="replace") for path in config.workspace.rglob("*") if path.is_file()
     )
     assert secret not in persisted
+    assert not (config.workspace / "home").exists()
     pid = int(child_pid_file.read_text())
     state = subprocess.run(
         ["ps", "-o", "state=", "-p", str(pid)],
