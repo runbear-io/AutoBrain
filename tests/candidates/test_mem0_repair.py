@@ -435,6 +435,7 @@ def test_interrupted_cleanup_after_qdrant_close_retries_without_native_reuse(
     [
         '{"answer":"Tuesday.","claim_ids":[],"source_ids":["slack:launch"]}',
         '{"answer":"Tuesday.","claim_ids":["claim-1"],"source_ids":[]}',
+        '{"answer":"Tuesday.","claim_ids":[],"source_ids":[]}',
         '{"answer":"Tuesday.","claim_ids":["  "],"source_ids":["slack:launch"]}',
     ],
 )
