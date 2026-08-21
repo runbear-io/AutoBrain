@@ -80,6 +80,34 @@ def _structured_answer_object(content: str) -> dict[str, Any]:
     return cast(dict[str, Any], payload)
 
 
+def _normalize_answer_payload(
+    payload: Mapping[str, Any],
+    memory_sources: Mapping[str, set[str]],
+    allowed_sources: set[str],
+) -> dict[str, Any]:
+    """Normalize native Mem0 memory citations to authorized source IDs only."""
+    normalized = dict(payload)
+    source_values = payload.get("source_ids")
+    if not isinstance(source_values, list):
+        return normalized
+    cited_sources: list[str] = []
+    for value in source_values:
+        if not isinstance(value, str):
+            return normalized
+        if value in allowed_sources:
+            source_id = value
+        else:
+            candidates = memory_sources.get(value, set())
+            if len(candidates) != 1:
+                return normalized
+            source_id = next(iter(candidates))
+        if source_id in cited_sources:
+            return normalized
+        cited_sources.append(source_id)
+    normalized["source_ids"] = cited_sources
+    return normalized
+
+
 class Mem0AdapterError(RuntimeError):
     """Base error for Mem0 adapter failures."""
 
@@ -592,11 +620,15 @@ class Mem0Adapter:
         validated_results = self.filter_native_results(native_results)
         self._assert_no_secrets(validated_results, boundary="answer provider evidence prompt")
         evidence = [self._answer_evidence(result) for result in validated_results]
-        allowed_sources = {
-            source_id
-            for result in validated_results
-            if (source_id := self._result_source_id(result)) is not None
-        }
+        memory_sources: dict[str, set[str]] = {}
+        allowed_sources: set[str] = set()
+        for result in validated_results:
+            memory_id = result.get("id")
+            source_id = self._result_source_id(result)
+            if source_id is not None:
+                allowed_sources.add(source_id)
+                if isinstance(memory_id, str):
+                    memory_sources.setdefault(memory_id, set()).add(source_id)
         if not allowed_sources:
             raise StructuredAnswerError("Mem0 answer requires at least one retrieved source")
         messages: list[ChatCompletionMessageParam] = [
@@ -631,7 +663,9 @@ class Mem0Adapter:
             content = response.choices[0].message.content
             if not isinstance(content, str):
                 raise StructuredAnswerError("answer model returned no text")
-            payload = _structured_answer_object(content)
+            payload = _normalize_answer_payload(
+                _structured_answer_object(content), memory_sources, allowed_sources
+            )
             parsed = Mem0Answer.model_validate(
                 {
                     **payload,

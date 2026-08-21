@@ -202,12 +202,32 @@ def test_answer_wrapper_parses_structured_output_and_captures_usage(adapter: Mem
     assert answer.usage.output_tokens == 7
 
 
-def test_answer_wrapper_accepts_a_complete_markdown_json_fence(
+def test_answer_wrapper_normalizes_native_memory_id_citations(
     adapter: Mem0Adapter,
 ) -> None:
     FakeOpenAI.instances[-1].chat.completions.response = FakeResponse(
         '```json\n{"answer":"Tuesday.","claim_ids":["claim-1"],'
-        '"source_ids":["slack:launch"]}\n```'
+        '"source_ids":["memory-result-1"]}\n```'
+    )
+    native = [
+        {
+            "id": "memory-result-1",
+            "memory": "The launch is on Tuesday.",
+            "score": 0.9,
+            "metadata": {"source_id": "slack:launch"},
+        }
+    ]
+
+    answer = adapter.answer("When is launch?", native)
+
+    assert answer.source_ids == ["slack:launch"]
+
+
+def test_answer_wrapper_accepts_a_complete_markdown_json_fence(
+    adapter: Mem0Adapter,
+) -> None:
+    FakeOpenAI.instances[-1].chat.completions.response = FakeResponse(
+        '```json\n{"answer":"Tuesday.","claim_ids":["claim-1"],"source_ids":["slack:launch"]}\n```'
     )
     native = [
         {
@@ -236,10 +256,8 @@ def test_answer_wrapper_accepts_a_complete_markdown_json_fence(
         '"source_ids":["slack:launch"]} Hope that helps.',
         '```json\n{"answer":"Tuesday.","claim_ids":["claim-1"],'
         '"source_ids":["slack:launch"]}\n```\nHope that helps.',
-        '```json\n{"answer":"Tuesday.","claim_ids":["claim-1"],'
-        '"source_ids":["slack:launch"]\n```',
-        '[{"answer":"Tuesday.","claim_ids":["claim-1"],'
-        '"source_ids":["slack:launch"]}]',
+        '```json\n{"answer":"Tuesday.","claim_ids":["claim-1"],"source_ids":["slack:launch"]\n```',
+        '[{"answer":"Tuesday.","claim_ids":["claim-1"],"source_ids":["slack:launch"]}]',
     ],
 )
 def test_malformed_structured_output_is_not_empty_success(
@@ -253,6 +271,66 @@ def test_malformed_structured_output_is_not_empty_success(
             "metadata": {"source_id": "slack:launch"},
         }
     ]
+
+    with pytest.raises(StructuredAnswerError):
+        adapter.answer("question", native)
+
+
+@pytest.mark.parametrize(
+    "payload,native",
+    [
+        (
+            '{"answer":"Tuesday.","claim_ids":["claim-1"],"source_ids":["unknown-memory"]}',
+            [
+                {
+                    "id": "memory-result-1",
+                    "memory": "Tuesday",
+                    "metadata": {"source_id": "slack:launch"},
+                }
+            ],
+        ),
+        (
+            '{"answer":"Tuesday.","claim_ids":["claim-1"],"source_ids":["shared-memory"]}',
+            [
+                {
+                    "id": "shared-memory",
+                    "memory": "Tuesday",
+                    "metadata": {"source_id": "slack:launch"},
+                },
+                {
+                    "id": "shared-memory",
+                    "memory": "Wednesday",
+                    "metadata": {"source_id": "slack:other"},
+                },
+            ],
+        ),
+        (
+            '{"answer":"Tuesday.","claim_ids":["claim-1"],"source_ids":[{"id":"memory-result-1"}]}',
+            [
+                {
+                    "id": "memory-result-1",
+                    "memory": "Tuesday",
+                    "metadata": {"source_id": "slack:launch"},
+                }
+            ],
+        ),
+        (
+            '{"answer":"Tuesday.","claim_ids":["claim-1"],'
+            '"source_ids":["memory-result-1"],"citations":["memory-result-1"]}',
+            [
+                {
+                    "id": "memory-result-1",
+                    "memory": "Tuesday",
+                    "metadata": {"source_id": "slack:launch"},
+                }
+            ],
+        ),
+    ],
+)
+def test_answer_wrapper_rejects_unsupported_or_ambiguous_citations(
+    adapter: Mem0Adapter, payload: str, native: list[dict[str, Any]]
+) -> None:
+    FakeOpenAI.instances[-1].chat.completions.response = FakeResponse(payload)
 
     with pytest.raises(StructuredAnswerError):
         adapter.answer("question", native)
