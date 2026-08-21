@@ -21,7 +21,10 @@ from autobrain.orchestration import (
     ConnectorSnapshot,
     RunConfig,
     RunOrchestrator,
+    locate_run,
 )
+from autobrain.report import load_manifest
+from autobrain.runs import compare_runs, list_runs
 
 
 def _documents(count: int = 24) -> list[dict[str, str]]:
@@ -366,3 +369,41 @@ def test_persistence_boundary_redacts_nested_candidate_details_and_report(
     assert all("[REDACTED]" in text for text in persisted)
     assert result.report_path is not None
     assert secret not in result.report_path.read_text(encoding="utf-8")
+
+
+def test_persisted_token_metrics_remain_strictly_loadable_at_inventory_boundaries(
+    tmp_path: Path,
+) -> None:
+    first = _orchestrator(
+        tmp_path,
+        [_EvaluatingCandidate(CandidateId.LLM_WIKI, _evaluation(CandidateId.LLM_WIKI, quality=90))],
+    ).run()
+    second = _orchestrator(
+        tmp_path,
+        [_EvaluatingCandidate(CandidateId.LLM_WIKI, _evaluation(CandidateId.LLM_WIKI, quality=90))],
+    ).run()
+    manifest = json.loads((first.run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    evaluation = manifest["evaluations"][0]
+    candidate = manifest["candidates"][0]["evaluation"]
+    assert evaluation["total_input_tokens"] == 0
+    assert evaluation["total_output_tokens"] == 0
+    assert candidate["total_input_tokens"] == 0
+    assert candidate["total_output_tokens"] == 0
+    assert isinstance(manifest["schema_version"], int)
+    assert isinstance(manifest["config"]["open_report"], bool)
+    assert manifest["timings"]["total_ms"] is None or isinstance(
+        manifest["timings"]["total_ms"], int | float
+    )
+
+    loaded = load_manifest(first.run_dir / "manifest.json")
+    inventory = list_runs(tmp_path / "runs")
+    comparison = compare_runs(tmp_path / "runs", first.run_id, second.run_id)
+    reopened = locate_run(first.run_id, roots=[tmp_path / "runs"])
+
+    assert loaded.run_id == first.run_id
+    assert {item.run_id for item in inventory.runs} == {first.run_id, second.run_id}
+    assert comparison.status == "EQUIVALENT"
+    assert reopened == first.run_dir
+    assert reopened is not None
+    assert (reopened / "report.html").is_file()

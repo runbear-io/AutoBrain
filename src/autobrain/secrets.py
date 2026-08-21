@@ -88,26 +88,52 @@ class RuntimeEnvironment(StrictModel):
 
 def redact(value: object, *, known_secrets: Sequence[str] = ()) -> object:
     """Return a recursively redacted copy suitable for logs and artifacts."""
+    return _redact_value(value, known_secrets=known_secrets)
+
+
+def _redact_value(
+    value: object,
+    *,
+    known_secrets: Sequence[str],
+    redact_strings: bool = False,
+) -> object:
     if isinstance(value, BaseModel):
-        return redact(value.model_dump(mode="python"), known_secrets=known_secrets)
+        return _redact_value(
+            value.model_dump(mode="python"),
+            known_secrets=known_secrets,
+            redact_strings=redact_strings,
+        )
     if is_dataclass(value) and not isinstance(value, type):
-        return redact(asdict(cast(Any, value)), known_secrets=known_secrets)
+        return _redact_value(
+            asdict(cast(Any, value)),
+            known_secrets=known_secrets,
+            redact_strings=redact_strings,
+        )
     if isinstance(value, Mapping):
         mapping = cast(Mapping[object, object], value)
         return {
-            str(key): "[REDACTED]"
-            if _SENSITIVE_KEY.search(str(key))
-            else redact(item, known_secrets=known_secrets)
+            str(key): _redact_value(
+                item,
+                known_secrets=known_secrets,
+                redact_strings=redact_strings or bool(_SENSITIVE_KEY.search(str(key))),
+            )
             for key, item in mapping.items()
         }
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         items = [
-            redact(item, known_secrets=known_secrets) for item in cast(Sequence[object], value)
+            _redact_value(
+                item,
+                known_secrets=known_secrets,
+                redact_strings=redact_strings,
+            )
+            for item in cast(Sequence[object], value)
         ]
         return tuple(items) if isinstance(value, tuple) else items
     if isinstance(value, SecretStr):
         return "[REDACTED]"
     if isinstance(value, str):
+        if redact_strings:
+            return "[REDACTED]"
         result = value
         for secret in sorted((item for item in known_secrets if item), key=len, reverse=True):
             if secret:
