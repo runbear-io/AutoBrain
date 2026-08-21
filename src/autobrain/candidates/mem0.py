@@ -80,34 +80,6 @@ def _structured_answer_object(content: str) -> dict[str, Any]:
     return cast(dict[str, Any], payload)
 
 
-def _normalize_answer_payload(
-    payload: Mapping[str, Any],
-    memory_sources: Mapping[str, set[str]],
-    allowed_sources: set[str],
-) -> dict[str, Any]:
-    """Normalize native Mem0 memory citations to authorized source IDs only."""
-    normalized = dict(payload)
-    source_values = payload.get("source_ids")
-    if not isinstance(source_values, list):
-        return normalized
-    cited_sources: list[str] = []
-    for value in source_values:
-        if not isinstance(value, str):
-            return normalized
-        if value in allowed_sources:
-            source_id = value
-        else:
-            candidates = memory_sources.get(value, set())
-            if len(candidates) != 1:
-                return normalized
-            source_id = next(iter(candidates))
-        if source_id in cited_sources:
-            return normalized
-        cited_sources.append(source_id)
-    normalized["source_ids"] = cited_sources
-    return normalized
-
-
 class Mem0AdapterError(RuntimeError):
     """Base error for Mem0 adapter failures."""
 
@@ -144,6 +116,10 @@ class Mem0OperationTimeout(Mem0AdapterError):
 
 class StructuredAnswerError(Mem0AdapterError):
     """The answer model did not return a valid, evidence-bound answer."""
+
+
+class _EvidenceRetryRequired(ValueError):
+    """The first answer is otherwise valid but omitted required evidence IDs."""
 
 
 class Mem0CleanupError(Mem0AdapterError):
@@ -650,29 +626,36 @@ class Mem0Adapter:
             },
         ]
         try:
-            response = self._bounded(
-                "answer",
-                lambda: self._answer_client.chat.completions.create(
-                    model=_CHAT_MODEL,
-                    messages=messages,
-                    response_format={"type": "json_object"},
-                    temperature=0,
-                ),
-                cancellation,
-            )
-            content = response.choices[0].message.content
-            if not isinstance(content, str):
-                raise StructuredAnswerError("answer model returned no text")
-            payload = _normalize_answer_payload(
-                _structured_answer_object(content), memory_sources, allowed_sources
-            )
-            parsed = Mem0Answer.model_validate(
-                {
-                    **payload,
-                    "usage": self._usage_cost(response),
-                    "usage_available": getattr(response, "usage", None) is not None,
+            response = self._answer_response("answer", messages, cancellation)
+            try:
+                return self._parse_answer_response(
+                    response,
+                    memory_sources=memory_sources,
+                    allowed_sources=allowed_sources,
+                )
+            except _EvidenceRetryRequired:
+                retry_instruction: ChatCompletionMessageParam = {
+                    "role": "system",
+                    "content": (
+                        "Retry once. Return evidence-backed claim_ids and source_ids from the "
+                        "same supplied native Mem0 evidence. Do not infer citations or use any "
+                        "source outside that evidence. If evidence is insufficient, honestly "
+                        "state that you cannot answer while still returning the required JSON "
+                        "object with evidence-backed claim_ids and source_ids."
+                    ),
                 }
-            )
+                retry_messages = [*messages, retry_instruction]
+                retry_response = self._answer_response("answer-retry", retry_messages, cancellation)
+                try:
+                    return self._parse_answer_response(
+                        retry_response,
+                        memory_sources=memory_sources,
+                        allowed_sources=allowed_sources,
+                    )
+                except _EvidenceRetryRequired:
+                    raise StructuredAnswerError(
+                        "invalid structured Mem0 answer (missing evidence IDs)"
+                    ) from None
         except (StructuredAnswerError, Mem0OperationTimeout):
             raise
         except (
@@ -690,10 +673,93 @@ class Mem0Adapter:
             raise StructuredAnswerError(
                 f"Mem0 answer provider failed ({_error_class(exc)})"
             ) from None
-        unknown_sources = set(parsed.source_ids) - allowed_sources
-        if unknown_sources:
+
+    def _answer_response(
+        self,
+        operation: str,
+        messages: list[ChatCompletionMessageParam],
+        cancellation: RunCancellation | None,
+    ) -> Any:
+        response = self._bounded(
+            operation,
+            lambda: self._answer_client.chat.completions.create(
+                model=_CHAT_MODEL,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0,
+            ),
+            cancellation,
+        )
+        self._record_usage_from_response(response, phase=operation, source="answer_callback")
+        return response
+
+    def _parse_answer_response(
+        self,
+        response: Any,
+        *,
+        memory_sources: Mapping[str, set[str]],
+        allowed_sources: set[str],
+    ) -> Mem0Answer:
+        content = response.choices[0].message.content
+        if not isinstance(content, str):
+            raise StructuredAnswerError("answer model returned no text")
+        payload = _structured_answer_object(content)
+        if set(payload) != {"answer", "claim_ids", "source_ids"}:
+            raise ValueError("structured answer has unsupported or missing fields")
+        answer: Any = payload["answer"]
+        claim_ids: Any = payload["claim_ids"]
+        source_ids: Any = payload["source_ids"]
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError("structured answer text must be nonblank")
+        if not isinstance(claim_ids, list):
+            raise TypeError("claim_ids must be a string array")
+        raw_claim_ids = cast(list[Any], claim_ids)
+        if any(not isinstance(value, str) for value in raw_claim_ids):
+            raise TypeError("claim_ids must be a string array")
+        typed_claim_ids = cast(list[str], raw_claim_ids)
+        if not isinstance(source_ids, list):
+            raise TypeError("source_ids must be a string array")
+        raw_source_ids = cast(list[Any], source_ids)
+        if any(not isinstance(value, str) for value in raw_source_ids):
+            raise TypeError("source_ids must be a string array")
+        typed_source_ids = cast(list[str], raw_source_ids)
+
+        blank_claims = not typed_claim_ids or all(not value.strip() for value in typed_claim_ids)
+        blank_sources = not typed_source_ids or all(not value.strip() for value in typed_source_ids)
+        if not blank_claims:
+            if any(not value.strip() for value in typed_claim_ids):
+                raise ValueError("claim IDs cannot mix blank and nonblank values")
+            if len(typed_claim_ids) != len(set(typed_claim_ids)):
+                raise ValueError("claim IDs must be unique")
+
+        normalized_sources: list[str] = []
+        if not blank_sources:
+            if any(not value.strip() for value in typed_source_ids):
+                raise ValueError("source IDs cannot mix blank and nonblank values")
+            for value in typed_source_ids:
+                if value in allowed_sources:
+                    source_id = value
+                else:
+                    candidates = memory_sources.get(value, set())
+                    if len(candidates) != 1:
+                        raise ValueError("answer cited unknown or ambiguous native evidence")
+                    source_id = next(iter(candidates))
+                if source_id in normalized_sources:
+                    raise ValueError("source IDs must be unique")
+                normalized_sources.append(source_id)
+        if blank_claims or blank_sources:
+            raise _EvidenceRetryRequired()
+
+        parsed = Mem0Answer.model_validate(
+            {
+                **payload,
+                "source_ids": normalized_sources,
+                "usage": self._usage_cost(response),
+                "usage_available": getattr(response, "usage", None) is not None,
+            }
+        )
+        if set(parsed.source_ids) - allowed_sources:
             raise StructuredAnswerError("answer cited source IDs absent from native retrieval")
-        self._record_usage_from_response(response, phase="answer", source="answer_callback")
         return parsed
 
     def get(self, memory_id: str) -> dict[str, Any] | None:
