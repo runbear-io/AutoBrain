@@ -7,11 +7,13 @@ from typing import cast
 import pytest
 
 import autobrain.production as production
+from autobrain.candidates.llm_wiki import LLMWikiObservation, LLMWikiRunResult
 from autobrain.metering import BudgetExceededError, LoopbackMeteringProxy
 from autobrain.models import (
     CandidateEvaluation,
     CandidateId,
     CandidateObservation,
+    CandidatePin,
     CostStatus,
     Status,
 )
@@ -369,6 +371,106 @@ def test_persistence_boundary_redacts_nested_candidate_details_and_report(
     assert all("[REDACTED]" in text for text in persisted)
     assert result.report_path is not None
     assert secret not in result.report_path.read_text(encoding="utf-8")
+
+
+def test_llm_wiki_candidate_pin_survives_full_run_persistence_and_reopen(
+    tmp_path: Path,
+) -> None:
+    pin = CandidatePin(
+        id=CandidateId.LLM_WIKI,
+        distribution="llm-wiki-compiler",
+        version="1.1.0",
+        commit="3e17bcfe8b50f24c14c6bcda0cb9224d94fd8206",
+        repository="https://github.com/atomicstrata/llm-wiki-compiler",
+        license="MIT",
+    )
+
+    class FakeLLMWikiAdapter:
+        def run(self, *_args: object, **_kwargs: object) -> LLMWikiRunResult:
+            observations = tuple(
+                LLMWikiObservation(
+                    case_id=f"case-{index}",
+                    question=f"How do we handle service {index} incidents?",
+                    answer=f"The on-call follows policy {index}.",
+                    citations=(f"slack:message:{index}",),
+                    source_ids=(f"slack:message:{index}",),
+                    page_ids=(),
+                    latency_ms=1,
+                    raw_result_path=f"results/{index}.json",
+                )
+                for index in range(20)
+            )
+            return LLMWikiRunResult(
+                status=Status.OK,
+                skipped=False,
+                pin=pin,
+                workspace=str(tmp_path / "workspace"),
+                environment={},
+                commands=(),
+                observations=observations,
+                artifacts=(),
+                warnings=(),
+                metering_events=(),
+                measured_cost_usd=None,
+                elapsed_ms=20,
+                workspace_bytes=1,
+                workspace_seal_sha256="a" * 64,
+            )
+
+        def cleanup(self) -> None:
+            return
+
+    candidate = production.LLMWikiCandidate(
+        FakeLLMWikiAdapter(),  # type: ignore[arg-type]
+        api_key="fixture-provider-key",
+        metering_proxy=LoopbackMeteringProxy(lambda _payload: {}),
+    )
+    result = _orchestrator(tmp_path, [candidate]).run()  # type: ignore[list-item]
+
+    assert result.status is Status.OK
+    candidate_path = result.run_dir / "candidates" / "llm-wiki.json"
+    manifest_path = result.run_dir / "manifest.json"
+    comparison_path = result.run_dir / "comparison.json"
+    assert candidate_path.is_file()
+    assert manifest_path.is_file()
+    assert comparison_path.is_file()
+    assert result.report_path is not None and result.report_path.is_file()
+
+    candidate_artifact = json.loads(candidate_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    expected_pin = pin.model_dump(mode="json")
+    assert candidate_artifact["artifact"]["pin"] == expected_pin
+    assert manifest["candidates"][0]["artifact"]["pin"] == expected_pin
+    assert manifest["schema_version"] == 2
+    assert comparison["schema_version"] == 2
+    assert manifest["hashes"] == {
+        "benchmark_sha256": comparison["benchmark_hash"],
+        "corpus_sha256": comparison["corpus_hash"],
+    }
+
+    before = {
+        path: path.read_bytes()
+        for path in result.run_dir.rglob("*")
+        if path.is_file()
+    }
+    loaded = load_manifest(manifest_path)
+    inventory = list_runs(tmp_path / "runs")
+    self_comparison = compare_runs(tmp_path / "runs", result.run_id, result.run_id)
+    reopened = locate_run(result.run_id, roots=[tmp_path / "runs"])
+
+    assert loaded.run_id == result.run_id
+    assert [item.run_id for item in inventory.runs] == [result.run_id]
+    assert self_comparison.status == "EQUIVALENT"
+    assert self_comparison.equivalent is True
+    assert reopened == result.run_dir
+    assert reopened is not None
+    assert (reopened / "report.html").read_text(encoding="utf-8").startswith("<!doctype html>")
+    assert {
+        path: path.read_bytes()
+        for path in result.run_dir.rglob("*")
+        if path.is_file()
+    } == before
 
 
 def test_persisted_token_metrics_remain_strictly_loadable_at_inventory_boundaries(

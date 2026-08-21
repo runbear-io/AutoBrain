@@ -428,7 +428,7 @@ class LLMWikiCandidate:
             latency_ms=result.elapsed_ms,
             detail="; ".join(warning.message for warning in result.warnings),
             artifact={
-                **asdict(result),
+                **result.to_dict(),
                 "metering": summary.model_dump(mode="json"),
             },
             observations=candidate_observations,
