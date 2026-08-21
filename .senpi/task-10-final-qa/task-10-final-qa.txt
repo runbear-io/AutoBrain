@@ -5,7 +5,7 @@ Release binding
 ---------------
 - Current release version: 0.1.1.
 - Reviewed release-source digest:
-  `sha256:e97eb21415e4476e8476856051e6d2d6b6e744c0bea8f11263569d43e8df2125`.
+  `sha256:50c28216cb98ea7ab76c080bb4d71b96c72986b4035530dcd68fb7b47585d21f`.
 - The digest uses the release-closure algorithm over exact bytes of
   `pyproject.toml`, `uv.lock`, `candidate-pins.json`, and every regular file
   recursively under `src/autobrain/`, excluding generated `__pycache__` and
