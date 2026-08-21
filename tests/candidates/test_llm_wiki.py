@@ -7,7 +7,7 @@ import signal
 import stat
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -585,6 +585,67 @@ def test_registry_only_cache_is_rejected_even_with_forged_marker(tmp_path: Path)
     )
     with pytest.raises(ToolCacheError, match=r"not a git|git command|checkout"):
         LLMWikiAdapter(config).prepare_tool_cache()
+
+
+def test_source_install_uses_supported_lockfile_optional_npm_semantics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = LLMWikiConfig(
+        workspace=tmp_path / "workspace",
+        tool_cache=tmp_path / "tool-cache",
+        git_executable="approved-git",
+        npm_executable="approved-npm",
+    )
+    adapter = LLMWikiAdapter(config)
+    commands: list[tuple[str, ...]] = []
+
+    def run(
+        argv: list[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout: float,
+        cleanup_grace: float,
+    ) -> llm_wiki_module._ProcessResult:  # pyright: ignore[reportPrivateUsage]
+        del cwd, env, timeout, cleanup_grace
+        command = tuple(argv)
+        commands.append(command)
+        if command[:2] == ("approved-git", "init"):
+            source = Path(command[2])
+            (source / "dist").mkdir(parents=True)
+            (source / "dist" / "index.js").write_text(
+                "export const fixture = true;\n", encoding="utf-8"
+            )
+            (source / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "llm-wiki-compiler",
+                        "version": APPROVED_VERSION,
+                        "license": "MIT",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (source / "LICENSE").write_text(_LICENSE_TEXT, encoding="utf-8")
+        stdout = f"{APPROVED_COMMIT}\n" if command[-2:] == ("rev-parse", "HEAD") else ""
+        return llm_wiki_module._ProcessResult(  # pyright: ignore[reportPrivateUsage]
+            0, stdout, "", 1, False, False
+        )
+
+    monkeypatch.setattr(adapter._runner, "run", run)  # pyright: ignore[reportPrivateUsage]
+    adapter._install_tool(config.tool_cache)  # pyright: ignore[reportPrivateUsage]
+
+    npm_commands = [command for command in commands if command[0] == "approved-npm"]
+    assert npm_commands[0] == (
+        "approved-npm",
+        "install",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--package-lock=false",
+    )
+    assert all(command[1] != "ci" for command in npm_commands)
+    assert not (config.tool_cache / "source" / "package-lock.json").exists()
 
 
 def test_holdout_markers_in_question_are_rejected_before_any_workspace(tmp_path: Path) -> None:

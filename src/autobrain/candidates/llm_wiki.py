@@ -795,7 +795,17 @@ class LLMWikiAdapter:
                 APPROVED_COMMIT,
             ],
             [self.config.git_executable, "-C", str(source), "checkout", "--detach", "FETCH_HEAD"],
-            [self.config.npm_executable, "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+            # The approved source pin does not require a committed npm lockfile.
+            # `npm ci` is invalid without package-lock.json/npm-shrinkwrap.json.
+            # Avoid generating a lockfile so the verified checkout stays clean.
+            [
+                self.config.npm_executable,
+                "install",
+                "--ignore-scripts",
+                "--no-audit",
+                "--no-fund",
+                "--package-lock=false",
+            ],
             [self.config.npm_executable, "run", "build"],
         )
         log_lines: list[str] = []
