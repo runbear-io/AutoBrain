@@ -36,7 +36,7 @@ from pydantic import Field, ValidationError, field_validator
 
 from autobrain.cancellation import RunCancellation
 from autobrain.models import NormalizedDocument, SourceId, Status, StrictModel
-from autobrain.secrets import RuntimeEnvironment, redact
+from autobrain.secrets import RuntimeEnvironment
 
 _CHAT_MODEL = "gpt-5-mini"
 _EMBEDDING_MODEL = "text-embedding-3-small"
@@ -46,6 +46,11 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(r"\bxox[a-z]-[A-Za-z0-9-]{8,}"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"),
+    re.compile(
+        r"(?i)\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|"
+        r"password|authorization|credential)\s*[=:]\s*[A-Za-z0-9._~+/=-]{8,}"
+    ),
+    re.compile(r"//[^/\s:@]+:[^@\s]+@"),
 )
 _T = TypeVar("_T")
 
@@ -439,8 +444,7 @@ class Mem0Adapter:
 
     def _assert_no_secrets(self, value: Any, *, boundary: str) -> None:
         serialized = json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
-        redacted = redact(serialized, known_secrets=tuple(self._known_secrets))
-        known_secret_found = redacted != serialized
+        known_secret_found = any(secret in serialized for secret in self._known_secrets)
         patterned_secret_found = any(pattern.search(serialized) for pattern in _SECRET_PATTERNS)
         if known_secret_found or patterned_secret_found:
             raise Mem0SecretBoundaryError(

@@ -100,6 +100,22 @@ def test_boundary_rejects_secret_or_oracle_artifacts_and_prompt_text_stays() -> 
         freeze_corpus([document("notion:page:a", "oracle: reference answer")], Path("/tmp/x"))
 
 
+def test_boundary_allows_conceptual_bearer_token_documentation() -> None:
+    normalized = normalize_raw_items(
+        [
+            {
+                "source_id": "notion:page:security",
+                "source_kind": "NOTION_PAGE",
+                "url": "https://notion.so/security",
+                "title": "OAuth security",
+                "text": "OAuth clients use bearer tokens; never paste credentials into docs.",
+            }
+        ]
+    )
+
+    assert normalized[0].text.startswith("OAuth clients use bearer tokens")
+
+
 def test_dirty_output_is_not_overwritten(tmp_path: Path) -> None:
     output = tmp_path / "corpus"
     output.mkdir()

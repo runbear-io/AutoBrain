@@ -24,7 +24,8 @@ class DirtyCorpusError(FileExistsError):
 
 
 _SECRET = re.compile(
-    r"(?:bearer\s+[A-Za-z0-9._~+/=-]+|(?:sk|xox[baprs])-[A-Za-z0-9._-]{8,})",
+    r"(?:bearer\s+(?!(?:tokens?|authentication|credentials?)\b)[A-Za-z0-9._~+/=-]+|"
+    r"(?:sk|xox[baprs])-[A-Za-z0-9._-]{8,})",
     re.IGNORECASE,
 )
 _PROTECTED_MARKER = re.compile(r"\b(?:oracle|holdout|reference[_ -]?answer)\b", re.IGNORECASE)

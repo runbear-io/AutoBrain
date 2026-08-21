@@ -12,6 +12,7 @@ from autobrain.connectors.notion_snapshot import (
     NotionSnapshotError,
     NotionSnapshotStore,
 )
+from autobrain.corpus import normalize_raw_items
 from autobrain.models import CoverageCompleteness
 from autobrain.paths import AutoBrainPaths
 from autobrain.production import NotionSnapshotConnector, build_production_connectors
@@ -60,15 +61,83 @@ def test_imports_strict_snapshot_atomically_and_reports_partial_coverage(tmp_pat
 
 def test_snapshot_rejects_unknown_fields_version_and_empty_corpus(tmp_path: Path) -> None:
     store = NotionSnapshotStore(AutoBrainPaths.from_home(tmp_path).sources)
-    for payload in (
+    payloads: tuple[dict[str, object], ...] = (
         {**_snapshot(), "token": "secret"},
         {**_snapshot(), "schema_version": 2},
-        {**_snapshot(), "documents": []},
-    ):
+        {**_snapshot(), "documents": list[dict[str, object]]()},
+    )
+    for payload in payloads:
         incoming = tmp_path / "bad.json"
         _write(incoming, payload)
         with pytest.raises(NotionSnapshotError):
             store.import_snapshot(incoming)
+
+
+def test_snapshot_allows_security_documentation_and_normalizes_placeholders(
+    tmp_path: Path,
+) -> None:
+    store = NotionSnapshotStore(AutoBrainPaths.from_home(tmp_path).sources)
+    incoming = tmp_path / "security-docs.json"
+    content = (
+        "OAuth clients use API keys and bearer tokens. Never paste secrets or passwords into "
+        "Notion. Example only: Authorization: Bearer <token>; api_key=YOUR_API_KEY."
+    )
+    _write(
+        incoming,
+        _snapshot(
+            documents=[
+                {
+                    **_snapshot()["documents"][0],  # type: ignore[index]
+                    "title": "OAuth and password security",
+                    "content": content,
+                    "metadata": {"topic": "API key rotation and secret storage"},
+                }
+            ]
+        ),
+    )
+
+    store.import_snapshot(incoming)
+    document = NotionSnapshotConnector(store.snapshot_path).crawl(include_dms=False).documents[0]
+
+    assert "OAuth clients use API keys and bearer tokens" in document["text"]
+    assert "secrets or passwords" in document["text"]
+    assert "Bearer <token>" not in document["text"]
+    assert "api_key=YOUR_API_KEY" not in document["text"]
+    assert "Bearer [REDACTED_PLACEHOLDER]" not in document["text"]
+    assert "api_key=[REDACTED_PLACEHOLDER]" not in document["text"]
+    assert document["text"].count("[REDACTED_PLACEHOLDER]") == 2
+    normalized = normalize_raw_items([dict(document)])
+    assert len(normalized) == 1
+    assert normalized[0].text == document["text"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Authorization: Bearer livecredentialvalue123",
+        "api_key=livecredentialvalue123",
+        "password: livecredentialvalue123",
+        "sk-livecredentialvalue123",
+        "xoxb-livecredentialvalue123",
+    ],
+)
+def test_snapshot_rejects_concrete_credentials(tmp_path: Path, content: str) -> None:
+    store = NotionSnapshotStore(AutoBrainPaths.from_home(tmp_path).sources)
+    incoming = tmp_path / "concrete-credential.json"
+    _write(
+        incoming,
+        _snapshot(
+            documents=[
+                {
+                    **_snapshot()["documents"][0],  # type: ignore[index]
+                    "content": content,
+                }
+            ]
+        ),
+    )
+
+    with pytest.raises(NotionSnapshotError):
+        store.import_snapshot(incoming)
 
 
 def test_snapshot_rejects_traversal_symlink_duplicates_oversize_and_mutation_metadata(
@@ -81,7 +150,7 @@ def test_snapshot_rejects_traversal_symlink_duplicates_oversize_and_mutation_met
             "duplicate.json",
             _snapshot(
                 documents=[
-                    _snapshot()["documents"][0],
+                    _snapshot()["documents"][0],  # type: ignore[index]
                     _snapshot()["documents"][0],  # type: ignore[index]
                 ]
             ),
@@ -119,9 +188,10 @@ def test_snapshot_rejects_traversal_symlink_duplicates_oversize_and_mutation_met
     )
     store.import_snapshot(prompt)
     connector = NotionSnapshotConnector(store.snapshot_path)
-    assert "prompt-like source instructions preserved as inert data" in connector.crawl(
-        include_dms=False
-    ).documents[0]["warnings"]
+    assert (
+        "prompt-like source instructions preserved as inert data"
+        in connector.crawl(include_dms=False).documents[0]["warnings"]
+    )
 
     oversized_document = tmp_path / "oversized-document.json"
     _write(

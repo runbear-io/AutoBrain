@@ -7,7 +7,9 @@ import json
 import os
 import re
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -32,16 +34,62 @@ _PROMPT_LIKE = re.compile(
     r"follow these instructions|call a (?:write|tool))\b",
     re.IGNORECASE,
 )
-_SENSITIVE = re.compile(
-    r"(?:bearer\s+\S+|(?:sk|xox[baprs])-[A-Za-z0-9._-]{8,}|"
-    r"api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|password)",
-    re.IGNORECASE,
+_CONCRETE_CREDENTIAL = re.compile(
+    r"(?i)(?<![a-z0-9])(?:"
+    r"bearer\s+[a-z0-9._~+/=-]{8,}|"
+    r"(?:sk|xox[baprs])-[a-z0-9._-]{8,}|"
+    r"(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|"
+    r"password|authorization|credential)\s*[=:]\s*[a-z0-9._~+/=-]{8,}|"
+    r"//[^/\s:@]+:[^@\s]+@)"
+)
+_PLACEHOLDER_VALUE = (
+    r"(?:<\s*[A-Z0-9_-]+\s*>|\[\s*[A-Z0-9_-]+\s*\]|"
+    r"\{\{?\s*[A-Z0-9_-]+\s*\}?\}|\$\{\s*[A-Z0-9_-]+\s*\}|"
+    r"(?:YOUR|EXAMPLE|SAMPLE|DUMMY|TEST)[_-][A-Z0-9_-]+|"
+    r"PLACEHOLDER(?:[_-]VALUE)?|CHANGEME|REDACTED)"
+)
+_CREDENTIAL_PLACEHOLDER = re.compile(
+    rf"(?i)(?P<prefix>\bbearer\s+|"
+    rf"\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|"
+    rf"password|authorization|credential)\s*[=:]\s*){_PLACEHOLDER_VALUE}"
 )
 _MUTATION = re.compile(
     r"(?:write|create|update|delete|insert|patch|mutat|remove|append)", re.IGNORECASE
 )
 
 PageId = Annotated[str, Field(min_length=1, max_length=256, pattern=r"^[^/\\]+$")]
+
+
+class SnapshotTextClassification(StrEnum):
+    SAFE = "SAFE"
+    PLACEHOLDER_NORMALIZED = "PLACEHOLDER_NORMALIZED"
+    CONCRETE_CREDENTIAL = "CONCRETE_CREDENTIAL"
+
+
+@dataclass(frozen=True)
+class ClassifiedSnapshotText:
+    text: str
+    classification: SnapshotTextClassification
+
+
+def _classify_snapshot_text(value: str) -> ClassifiedSnapshotText:
+    normalized, placeholder_count = _CREDENTIAL_PLACEHOLDER.subn(
+        lambda _match: "[REDACTED_PLACEHOLDER]",
+        value,
+    )
+    if _CONCRETE_CREDENTIAL.search(normalized):
+        return ClassifiedSnapshotText(
+            text=normalized,
+            classification=SnapshotTextClassification.CONCRETE_CREDENTIAL,
+        )
+    return ClassifiedSnapshotText(
+        text=normalized,
+        classification=(
+            SnapshotTextClassification.PLACEHOLDER_NORMALIZED
+            if placeholder_count
+            else SnapshotTextClassification.SAFE
+        ),
+    )
 
 
 class NotionSnapshotError(ValueError):
@@ -67,19 +115,31 @@ class NotionSnapshotDocument(StrictModel):
     @field_validator("content", "title")
     @classmethod
     def no_secrets(cls, value: str) -> str:
-        if _SENSITIVE.search(value):
-            raise ValueError("secret-like values are not permitted in snapshot data")
-        return value
+        classified = _classify_snapshot_text(value)
+        if classified.classification is SnapshotTextClassification.CONCRETE_CREDENTIAL:
+            raise ValueError("concrete credentials are not permitted in snapshot data")
+        return classified.text
 
     @field_validator("metadata")
     @classmethod
     def safe_metadata(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
         for key, item in value.items():
             if _PROMPT_LIKE.search(key) or _PROMPT_LIKE.search(item):
                 raise ValueError("prompt-like metadata is not permitted")
-            if _MUTATION.search(key) or _MUTATION.search(item) or _SENSITIVE.search(item):
-                raise ValueError("write/mutation or secret metadata is not permitted")
-        return value
+            classified_key = _classify_snapshot_text(key)
+            classified_item = _classify_snapshot_text(item)
+            if (
+                _MUTATION.search(key)
+                or _MUTATION.search(item)
+                or any(
+                    classified.classification is SnapshotTextClassification.CONCRETE_CREDENTIAL
+                    for classified in (classified_key, classified_item)
+                )
+            ):
+                raise ValueError("write/mutation or concrete credential metadata is not permitted")
+            normalized[classified_key.text] = classified_item.text
+        return normalized
 
 
 class NotionSnapshot(StrictModel):
@@ -142,8 +202,9 @@ def _read_snapshot(path: Path) -> tuple[NotionSnapshot, bytes]:
     for document in snapshot.documents:
         if len(document.content.encode("utf-8")) > MAX_DOCUMENT_BYTES:
             raise NotionSnapshotError("document is too large")
-    if _SENSITIVE.search(raw.decode("utf-8", errors="ignore")):
-        raise NotionSnapshotError("snapshot contains credential-shaped data")
+    classified = _classify_snapshot_text(encoded.decode("utf-8", errors="ignore"))
+    if classified.classification is SnapshotTextClassification.CONCRETE_CREDENTIAL:
+        raise NotionSnapshotError("snapshot contains concrete credential data")
     return snapshot, encoded
 
 
@@ -263,5 +324,7 @@ class NotionSnapshotConnector:
         return ConnectorSnapshot(
             provider=self.provider,
             documents=snapshot_documents(snapshot),
-            coverage=NotionSnapshotStore(self.snapshot_path.parent).status().coverage.model_dump(mode="json"),
+            coverage=NotionSnapshotStore(self.snapshot_path.parent)
+            .status()
+            .coverage.model_dump(mode="json"),
         )

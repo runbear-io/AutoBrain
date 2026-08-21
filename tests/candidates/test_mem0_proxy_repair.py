@@ -91,6 +91,9 @@ def test_known_secret_corpus_is_rejected_before_memory_add(
         "sk-openai-secret-123456",
         "xoxb-slack-secret-123456",
         "Bearer bearer-secret-123456",
+        "api_key=concretecredential123",
+        "password: concretecredential123",
+        "https://user:concretecredential123@example.test/",
     ],
 )
 def test_credential_patterns_are_rejected_before_memory_add(
@@ -101,6 +104,21 @@ def test_credential_patterns_are_rejected_before_memory_add(
         with pytest.raises(Mem0SecretBoundaryError):
             candidate.ingest([secret_document(secret, field="text")])
         assert FakeMemory.instances[0].added == []
+    finally:
+        candidate.cleanup()
+
+
+def test_conceptual_credential_documentation_is_allowed_before_add(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    candidate = adapter(monkeypatch, tmp_path)
+    text = (
+        "OAuth uses API keys, bearer tokens, secrets, and passwords. "
+        "Examples use placeholders, never live credentials."
+    )
+    try:
+        result = candidate.ingest([secret_document(text, field="text")])
+        assert result.memory_ids == ["m-1"]
     finally:
         candidate.cleanup()
 
