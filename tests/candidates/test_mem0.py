@@ -202,16 +202,60 @@ def test_answer_wrapper_parses_structured_output_and_captures_usage(adapter: Mem
     assert answer.usage.output_tokens == 7
 
 
-@pytest.mark.parametrize("payload", ["not json", "{}", '{"answer": 3}'])
-def test_malformed_structured_output_is_not_empty_success(
-    adapter: Mem0Adapter, monkeypatch: pytest.MonkeyPatch, payload: str
+def test_answer_wrapper_accepts_a_complete_markdown_json_fence(
+    adapter: Mem0Adapter,
 ) -> None:
-    FakeOpenAI.response = FakeResponse(payload)
-    with pytest.raises(StructuredAnswerError):
-        adapter.answer("question", [])
-    FakeOpenAI.response = FakeResponse(
-        '{"answer":"Tuesday.","claim_ids":["claim-1"],"source_ids":["slack:launch"]}'
+    FakeOpenAI.instances[-1].chat.completions.response = FakeResponse(
+        '```json\n{"answer":"Tuesday.","claim_ids":["claim-1"],'
+        '"source_ids":["slack:launch"]}\n```'
     )
+    native = [
+        {
+            "id": "m-1",
+            "memory": "The launch is on Tuesday.",
+            "score": 0.9,
+            "metadata": {"source_id": "slack:launch"},
+        }
+    ]
+
+    answer = adapter.answer("When is launch?", native)
+
+    assert answer.answer == "Tuesday."
+    assert answer.source_ids == ["slack:launch"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not json",
+        "{}",
+        '{"answer": 3}',
+        'Here is the answer: {"answer":"Tuesday.","claim_ids":["claim-1"],'
+        '"source_ids":["slack:launch"]}',
+        '{"answer":"Tuesday.","claim_ids":["claim-1"],'
+        '"source_ids":["slack:launch"]} Hope that helps.',
+        '```json\n{"answer":"Tuesday.","claim_ids":["claim-1"],'
+        '"source_ids":["slack:launch"]}\n```\nHope that helps.',
+        '```json\n{"answer":"Tuesday.","claim_ids":["claim-1"],'
+        '"source_ids":["slack:launch"]\n```',
+        '[{"answer":"Tuesday.","claim_ids":["claim-1"],'
+        '"source_ids":["slack:launch"]}]',
+    ],
+)
+def test_malformed_structured_output_is_not_empty_success(
+    adapter: Mem0Adapter, payload: str
+) -> None:
+    FakeOpenAI.instances[-1].chat.completions.response = FakeResponse(payload)
+    native = [
+        {
+            "id": "m-1",
+            "memory": "The launch is on Tuesday.",
+            "metadata": {"source_id": "slack:launch"},
+        }
+    ]
+
+    with pytest.raises(StructuredAnswerError):
+        adapter.answer("question", native)
 
 
 def test_heldout_documents_are_rejected_before_native_add(adapter: Mem0Adapter) -> None:

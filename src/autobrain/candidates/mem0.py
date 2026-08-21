@@ -42,6 +42,7 @@ _CHAT_MODEL = "gpt-5-mini"
 _EMBEDDING_MODEL = "text-embedding-3-small"
 _DEFAULT_TOP_K = 8
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_JSON_FENCE = re.compile(r"\A\s*```(?:json)?\s*\n(?P<payload>.*?)\n```\s*\Z", re.DOTALL)
 _SECRET_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(r"\bxox[a-z]-[A-Za-z0-9-]{8,}"),
@@ -67,6 +68,16 @@ def _redacted_url(value: str | None) -> str | None:
 
 def _error_class(error: BaseException) -> str:
     return type(error).__name__
+
+
+def _structured_answer_object(content: str) -> dict[str, Any]:
+    candidate = content
+    if fence := _JSON_FENCE.fullmatch(content):
+        candidate = fence.group("payload")
+    payload = json.loads(candidate)
+    if not isinstance(payload, dict):
+        raise TypeError("structured answer must be a JSON object")
+    return cast(dict[str, Any], payload)
 
 
 class Mem0AdapterError(RuntimeError):
@@ -620,7 +631,7 @@ class Mem0Adapter:
             content = response.choices[0].message.content
             if not isinstance(content, str):
                 raise StructuredAnswerError("answer model returned no text")
-            payload = json.loads(content)
+            payload = _structured_answer_object(content)
             parsed = Mem0Answer.model_validate(
                 {
                     **payload,
