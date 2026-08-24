@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import assert_never
 
 from autobrain.auth.models import Provider
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.embedding import EmbeddingReadiness, inspect_embedding_backend
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
@@ -16,6 +17,7 @@ from autobrain.tui_actions import (
     BeginSetup,
     CancelRun,
     ConnectionsLoaded,
+    GBrainValidated,
     GoBack,
     LoginSettled,
     Navigate,
@@ -27,6 +29,7 @@ from autobrain.tui_actions import (
     RunCompleted,
     RunFailed,
     RunStarted,
+    SelectGBrainMode,
     SelectProvider,
     SkipSource,
     StageObserved,
@@ -34,6 +37,7 @@ from autobrain.tui_actions import (
     ToggleCandidate,
     ToggleSource,
     UiAction,
+    ValidateGBrain,
 )
 from autobrain.tui_effects import (
     CancelActiveRun,
@@ -44,6 +48,7 @@ from autobrain.tui_effects import (
     OpenExactReport,
     RunExperiment,
     UiEffect,
+    ValidateGBrainProvider,
 )
 
 
@@ -53,6 +58,7 @@ class UiScreen(StrEnum):
     SLACK = "slack"
     NOTION = "notion"
     CANDIDATES = "candidates"
+    GBRAIN = "gbrain"
     REVIEW = "review"
     RUNNING = "running"
     RESULTS = "results"
@@ -64,6 +70,7 @@ _SETUP_SCREENS = (
     UiScreen.SLACK,
     UiScreen.NOTION,
     UiScreen.CANDIDATES,
+    UiScreen.GBRAIN,
     UiScreen.REVIEW,
 )
 
@@ -95,6 +102,8 @@ class UiState:
     quit_after_settlement: bool = False
     next_effect_sequence: int = 1
     return_home: bool = False
+    gbrain_config: GBrainExecutionConfig = field(default_factory=GBrainExecutionConfig.quick_start)
+    gbrain_error: str = ""
 
     @property
     def section(self) -> UiScreen:
@@ -224,6 +233,7 @@ def _resolved(state: UiState) -> UiState:
         selected_candidates=state.selected_candidates,
         connections=snapshot,
         subscription_provider=state.provider,
+        gbrain_config=state.gbrain_config,
     )
     return replace(state, plan=plan, setup_error=error)
 
@@ -251,7 +261,56 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
     if isinstance(action, Navigate):
         return Reduction(replace(state, screen=UiScreen(action.screen)))
     if isinstance(action, GoBack):
-        return Reduction(state.back())
+        backed = state.back()
+        if state.screen is UiScreen.GBRAIN:
+            backed = replace(
+                backed,
+                gbrain_config=GBrainExecutionConfig.quick_start(),
+                gbrain_error="",
+            )
+        return Reduction(backed)
+    if isinstance(action, SelectGBrainMode):
+        return Reduction(
+            replace(
+                state,
+                screen=UiScreen.GBRAIN if action.semantic else UiScreen.REVIEW,
+                gbrain_config=(
+                    state.gbrain_config if action.semantic else GBrainExecutionConfig.quick_start()
+                ),
+                gbrain_error="",
+            )
+        )
+    if isinstance(action, ValidateGBrain):
+        try:
+            config = GBrainExecutionConfig.semantic(
+                action.provider,
+                model=action.model or None,
+                dimensions=action.dimensions,
+                endpoint=action.endpoint or None,
+                credential=action.credential.get_secret_value() if action.credential else None,
+            )
+        except ValueError:
+            return Reduction(replace(state, gbrain_error="GBRAIN_PROVIDER_INVALID"))
+        return Reduction(state, (ValidateGBrainProvider(config),))
+    if isinstance(action, GBrainValidated):
+        if action.error or action.config is None:
+            return Reduction(
+                replace(
+                    state,
+                    gbrain_config=GBrainExecutionConfig.quick_start(),
+                    gbrain_error=action.error or "GBRAIN_PROVIDER_INVALID",
+                )
+            )
+        return Reduction(
+            _resolved(
+                replace(
+                    state,
+                    screen=UiScreen.REVIEW,
+                    gbrain_config=action.config,
+                    gbrain_error="",
+                )
+            )
+        )
     if isinstance(action, SelectProvider):
         selected = replace(
             state,
@@ -301,6 +360,7 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
         if state.plan is None:
             return Reduction(replace(state, setup_error=state.setup_error or "PLAN_UNAVAILABLE"))
         handle, sequenced = _next_handle(state, "run")
+        run_plan = state.plan
         started = replace(
             sequenced,
             screen=UiScreen.RUNNING,
@@ -314,8 +374,10 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
             active_run_handle=handle,
             run_started_at=None,
             quit_after_settlement=False,
+            gbrain_config=GBrainExecutionConfig.quick_start(),
+            plan=None,
         )
-        return Reduction(started, (RunExperiment(state.plan, state.provider, handle),))
+        return Reduction(started, (RunExperiment(run_plan, state.provider, handle),))
     if isinstance(action, RunStarted):
         if action.handle != state.active_run_handle:
             return Reduction(state)
@@ -347,7 +409,12 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
     if isinstance(action, RequestQuit):
         if state.running and state.active_run_handle is not None:
             return Reduction(
-                replace(state, cancelling=True, quit_after_settlement=True),
+                replace(
+                    state,
+                    cancelling=True,
+                    quit_after_settlement=True,
+                    gbrain_config=GBrainExecutionConfig.quick_start(),
+                ),
                 (CancelActiveRun(state.active_run_handle),),
             )
         return Reduction(state, (ExitApplication(),))
@@ -371,6 +438,7 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
                 candidate_statuses=tuple(statuses.items()),
                 active_run_handle=None,
                 run_started_at=None,
+                gbrain_config=GBrainExecutionConfig.quick_start(),
             )
         )
     if isinstance(action, RunFailed):
@@ -384,6 +452,7 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
                 setup_error=action.reason,
                 active_run_handle=None,
                 run_started_at=None,
+                gbrain_config=GBrainExecutionConfig.quick_start(),
             )
         )
     if isinstance(action, OpenReport):

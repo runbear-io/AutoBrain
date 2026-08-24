@@ -13,6 +13,7 @@ from typing import Protocol
 
 from autobrain.auth.models import Provider
 from autobrain.cancellation import RunCancellation
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.experiment import ExperimentPlan
 from autobrain.subscription_domain import ProviderId
 
@@ -32,6 +33,11 @@ class LoadConnections:
 class InteractiveLogin:
     provider: Provider | ProviderId
     handle: EffectHandle
+
+
+@dataclass(frozen=True)
+class ValidateGBrainProvider:
+    config: GBrainExecutionConfig
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,7 @@ class ExitApplication:
 type UiEffect = (
     LoadConnections
     | InteractiveLogin
+    | ValidateGBrainProvider
     | RunExperiment
     | CancelActiveRun
     | OpenExactReport

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic import SecretStr
+
 from autobrain.auth.models import Provider
+from autobrain.candidates.gbrain_config import (
+    GBrainEmbeddingProvider,
+    GBrainExecutionConfig,
+)
 from autobrain.models import CandidateId
 from autobrain.orchestration import RunResult, StageEvent
 from autobrain.subscription_domain import ProviderId
@@ -50,6 +56,26 @@ class ToggleCandidate:
 @dataclass(frozen=True)
 class RefreshConnections:
     pass
+
+
+@dataclass(frozen=True)
+class SelectGBrainMode:
+    semantic: bool
+
+
+@dataclass(frozen=True)
+class ValidateGBrain:
+    provider: GBrainEmbeddingProvider
+    model: str = ""
+    dimensions: int | None = None
+    endpoint: str = ""
+    credential: SecretStr | None = None
+
+
+@dataclass(frozen=True)
+class GBrainValidated:
+    config: GBrainExecutionConfig | None = None
+    error: str = ""
 
 
 @dataclass(frozen=True)
@@ -124,6 +150,9 @@ type UiAction = (
     | SkipSource
     | ToggleCandidate
     | RefreshConnections
+    | SelectGBrainMode
+    | ValidateGBrain
+    | GBrainValidated
     | RequestLogin
     | ConnectionsLoaded
     | LoginSettled

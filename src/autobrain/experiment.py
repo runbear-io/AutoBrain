@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from autobrain.auth.models import Provider
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.embedding import EmbeddingReadiness
 from autobrain.models import CandidateId
 from autobrain.subscription import ProviderId, SubscriptionStatus
@@ -24,6 +25,7 @@ class ExperimentPlan:
     candidates: tuple[CandidateId, ...]
     budget_usd: float
     max_questions: int
+    gbrain_config: GBrainExecutionConfig = field(default_factory=GBrainExecutionConfig.quick_start)
 
 
 _CANDIDATE_LABELS = {
@@ -53,6 +55,7 @@ def build_automatic_plan(
     subscription_status: SubscriptionStatus,
     embedding_readiness: EmbeddingReadiness,
     subscription_provider: ProviderId = ProviderId.CODEX,
+    gbrain_config: GBrainExecutionConfig | None = None,
 ) -> ExperimentPlan:
     """Own all experiment decisions except sources and candidate scope."""
     if not sources:
@@ -67,7 +70,12 @@ def build_automatic_plan(
         raise ExperimentSetupError(
             f"{subscription_status.value}: connect {provider_label} subscription"
         )
-    if not embedding_readiness.recommendation_ready or embedding_readiness.backend is None:
+    selected_gbrain = gbrain_config or GBrainExecutionConfig.quick_start()
+    if embedding_readiness.backend == "local-hash":
+        raise ExperimentSetupError(embedding_readiness.detail)
+    if not selected_gbrain.keyword_only and (
+        not embedding_readiness.recommendation_ready or embedding_readiness.backend is None
+    ):
         raise ExperimentSetupError(embedding_readiness.detail)
 
     title, description = automatic_experiment_copy(sources=sources, candidates=candidates)
@@ -75,9 +83,10 @@ def build_automatic_plan(
         title=title,
         description=description,
         provider_mode=f"{subscription_provider.value}-subscription",
-        embedding_backend=embedding_readiness.backend,
+        embedding_backend=embedding_readiness.backend or "unavailable",
         sources=sources,
         candidates=candidates,
         budget_usd=25.0,
         max_questions=20 if len(sources) == 1 else 30,
+        gbrain_config=selected_gbrain,
     )

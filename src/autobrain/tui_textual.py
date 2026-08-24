@@ -13,11 +13,15 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Label, Static
+from textual.widgets import Button, Footer, Header, Input, Label, Select, Static
 from textual.worker import Worker, WorkerState
 
 from autobrain.auth.models import Provider
 from autobrain.cancellation import RunCancellation
+from autobrain.candidates.gbrain_config import (
+    GBrainEmbeddingProvider,
+    GBrainExecutionConfig,
+)
 from autobrain.models import CandidateId
 from autobrain.orchestration import RunResult, StageEvent
 from autobrain.subscription_domain import ProviderId
@@ -26,6 +30,7 @@ from autobrain.tui_actions import (
     BeginSetup,
     CancelRun,
     ConnectionsLoaded,
+    GBrainValidated,
     GoBack,
     LoginSettled,
     Navigate,
@@ -37,12 +42,14 @@ from autobrain.tui_actions import (
     RunCompleted,
     RunFailed,
     RunStarted,
+    SelectGBrainMode,
     SelectProvider,
     StageObserved,
     StartRun,
     ToggleCandidate,
     ToggleSource,
     UiAction,
+    ValidateGBrain,
 )
 from autobrain.tui_effects import (
     CancelActiveRun,
@@ -52,6 +59,7 @@ from autobrain.tui_effects import (
     OpenExactReport,
     RunExperiment,
     UiEffect,
+    ValidateGBrainProvider,
     open_exact_report,
     run_login_process,
 )
@@ -60,6 +68,21 @@ from autobrain.tui_state import UiScreen, UiState, reduce_ui
 from autobrain.tui_viewmodels import build_view_model
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def validate_gbrain_connection(config: GBrainExecutionConfig) -> GBrainExecutionConfig:
+    """Run a bounded, secret-safe setup validation before Review."""
+    endpoint = config.embedding.endpoint
+    if endpoint is not None:
+        import urllib.request
+
+        request = urllib.request.Request(endpoint, method="HEAD")
+        try:
+            with urllib.request.urlopen(request, timeout=2):
+                pass
+        except OSError:
+            raise RuntimeError("provider endpoint unavailable") from None
+    return config
 
 
 def _safe_worker_error_name(operation: str, error: BaseException | None) -> str:
@@ -79,6 +102,7 @@ class ActionRequested(Message):
         super().__init__()
         self.action = action
 
+
 class ActionButton(Button):
     """Button carrying a semantic action rather than an I/O callback."""
 
@@ -89,6 +113,7 @@ class ActionButton(Button):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         self.post_message(ActionRequested(self.ui_action))
+
 
 class CockpitScreen(Screen[None]):
     BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
@@ -134,14 +159,24 @@ class CockpitScreen(Screen[None]):
             f"{'[x]' if item.selected else '[ ]'} {candidate.value}: {item.status}"
             for candidate, item in model.candidates.items()
         )
+        gbrain_mode = (
+            "keyword-only"
+            if self.app.state.gbrain_config.keyword_only
+            else self.app.state.gbrain_config.embedding.provider.value
+        )
+        similarity = "Not measured" if self.app.state.gbrain_config.keyword_only else "configured"
         self.query_one("#summary", Static).update(
             f"{sources}\n\n{candidates}\n\n"
             f"Embeddings: {model.embedding_status} - {model.embedding_detail}\n\n"
             f"Plan: {model.plan_title or '-'}\n{model.plan_description}\n"
             f"Stage: {model.stage} {model.stage_detail}\nElapsed: {model.elapsed}\n"
             f"Terminal: {model.terminal_reason or '-'}\n"
-            f"Report: {model.report_path or '-'}\n{model.setup_error}"
+            f"Report: {model.report_path or '-'}\n{model.setup_error}\n"
+            f"GBrain: {gbrain_mode}\n"
+            f"Semantic similarity: {similarity}\n"
+            f"{self.app.state.gbrain_error}"
         )
+
 
 class HomeScreen(CockpitScreen):
     screen_id = UiScreen.HOME
@@ -149,6 +184,7 @@ class HomeScreen(CockpitScreen):
     def screen_actions(self) -> ComposeResult:
         yield ActionButton("Setup", BeginSetup(), id="setup")
         yield ActionButton("Run", StartRun(), id="run")
+
 
 class ConnectionsScreen(CockpitScreen):
     screen_id = UiScreen.CONNECTIONS
@@ -168,6 +204,7 @@ class ConnectionsScreen(CockpitScreen):
             )
         yield ActionButton("Continue", Navigate(UiScreen.SLACK.value), id="continue")
 
+
 class SlackScreen(CockpitScreen):
     screen_id = UiScreen.SLACK
 
@@ -175,6 +212,7 @@ class SlackScreen(CockpitScreen):
         yield ActionButton("Toggle Slack", ToggleSource(Provider.SLACK), id="toggle-slack")
         yield ActionButton("Configure Slack", RequestLogin(Provider.SLACK), id="login-slack")
         yield ActionButton("Continue", Navigate(UiScreen.NOTION.value), id="continue")
+
 
 class NotionScreen(CockpitScreen):
     screen_id = UiScreen.NOTION
@@ -184,6 +222,7 @@ class NotionScreen(CockpitScreen):
         yield ActionButton("Connect Notion", RequestLogin(Provider.NOTION), id="login-notion")
         yield ActionButton("Continue", Navigate(UiScreen.CANDIDATES.value), id="continue")
 
+
 class CandidatesScreen(CockpitScreen):
     screen_id = UiScreen.CANDIDATES
 
@@ -192,13 +231,73 @@ class CandidatesScreen(CockpitScreen):
             yield ActionButton(
                 candidate.value, ToggleCandidate(candidate), id=f"candidate-{candidate.value}"
             )
-        yield ActionButton("Review", Navigate(UiScreen.REVIEW.value), id="review")
+        yield ActionButton("Quick Start", SelectGBrainMode(False), id="quick-start")
+        yield ActionButton("Semantic Setup", SelectGBrainMode(True), id="semantic-setup")
+
+
+class GBrainScreen(CockpitScreen):
+    screen_id = UiScreen.GBRAIN
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with VerticalScroll(id="body"):
+            yield Label("Semantic Setup (BYOK/local)", id="screen-title")
+            yield Static(
+                "Choose one provider explicitly. Hosted keys stay in run memory; "
+                "local daemons are never auto-selected.",
+                id="summary",
+            )
+            yield Select(
+                [
+                    (provider.value, provider.value)
+                    for provider in GBrainEmbeddingProvider
+                    if provider is not GBrainEmbeddingProvider.KEYWORD_ONLY
+                ],
+                value=GBrainEmbeddingProvider.OPENAI.value,
+                id="gbrain-provider",
+            )
+            yield Input(
+                placeholder="API key (hosted providers only)", password=True, id="gbrain-key"
+            )
+            yield Input(placeholder="Model (required for llama-server)", id="gbrain-model")
+            yield Input(
+                placeholder="Dimensions (positive integer for llama-server)", id="gbrain-dimensions"
+            )
+            yield Input(placeholder="Endpoint (local/custom providers)", id="gbrain-endpoint")
+            with Horizontal(id="actions"):
+                yield ActionButton("Back", GoBack(), id="back")
+                yield Button("Validate", id="validate-gbrain")
+        yield Footer()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "validate-gbrain":
+            return
+        event.stop()
+        provider = GBrainEmbeddingProvider(str(self.query_one("#gbrain-provider", Select).value))
+        raw_dimensions = self.query_one("#gbrain-dimensions", Input).value.strip()
+        key_input = self.query_one("#gbrain-key", Input)
+        from pydantic import SecretStr
+
+        self.post_message(
+            ActionRequested(
+                ValidateGBrain(
+                    provider,
+                    model=self.query_one("#gbrain-model", Input).value.strip(),
+                    dimensions=int(raw_dimensions) if raw_dimensions.isdigit() else None,
+                    endpoint=self.query_one("#gbrain-endpoint", Input).value.strip(),
+                    credential=SecretStr(key_input.value) if key_input.value else None,
+                )
+            )
+        )
+        key_input.value = ""
+
 
 class ReviewScreen(CockpitScreen):
     screen_id = UiScreen.REVIEW
 
     def screen_actions(self) -> ComposeResult:
         yield ActionButton("Run experiment", StartRun(), id="run")
+
 
 class RunningScreen(CockpitScreen):
     screen_id = UiScreen.RUNNING
@@ -216,6 +315,7 @@ class RunningScreen(CockpitScreen):
     def action_cancel_and_quit(self) -> None:
         self.post_message(ActionRequested(RequestQuit()))
 
+
 class ResultsScreen(CockpitScreen):
     screen_id = UiScreen.RESULTS
 
@@ -223,16 +323,19 @@ class ResultsScreen(CockpitScreen):
         yield ActionButton("Open exact report", OpenReport(), id="open-report")
         yield ActionButton("Home", ResetRun(), id="home")
 
+
 SCREEN_TYPES = {
     UiScreen.HOME: HomeScreen,
     UiScreen.CONNECTIONS: ConnectionsScreen,
     UiScreen.SLACK: SlackScreen,
     UiScreen.NOTION: NotionScreen,
     UiScreen.CANDIDATES: CandidatesScreen,
+    UiScreen.GBRAIN: GBrainScreen,
     UiScreen.REVIEW: ReviewScreen,
     UiScreen.RUNNING: RunningScreen,
     UiScreen.RESULTS: ResultsScreen,
 }
+
 
 class AutoBrainApp(App[None]):
     TITLE = "AutoBrain"
@@ -291,11 +394,11 @@ class AutoBrainApp(App[None]):
                 if registered is not None:
                     registered.__exit__(None, None, None)
                 raise
+        elif isinstance(effect, ValidateGBrainProvider):
+            self.validate_gbrain(effect)
         elif isinstance(effect, RunExperiment):
             started_at = time.monotonic()
-            cancellation = self.effect_registry.register_run(
-                effect.handle, started_at=started_at
-            )
+            cancellation = self.effect_registry.register_run(effect.handle, started_at=started_at)
             self.dispatch_ui(RunStarted(effect.handle, started_at))
             self.run_experiment(effect, cancellation)
         elif isinstance(effect, CancelActiveRun):
@@ -325,6 +428,10 @@ class AutoBrainApp(App[None]):
     @work(thread=True, exclusive=True, group="login", exit_on_error=False)
     def interactive_login(self, effect: InteractiveLogin) -> None:
         run_login_process(effect)
+
+    @work(thread=True, exclusive=True, group="gbrain", exit_on_error=False)
+    def validate_gbrain(self, effect: ValidateGBrainProvider) -> GBrainExecutionConfig:
+        return validate_gbrain_connection(effect.config)
 
     @work(thread=True, exclusive=True, group="run", exit_on_error=False)
     def run_experiment(
@@ -369,6 +476,15 @@ class AutoBrainApp(App[None]):
                 else ""
             )
             self.dispatch_ui(LoginSettled(handle, error))
+            return
+        if worker.group == "gbrain":
+            if event.state is WorkerState.SUCCESS:
+                self.dispatch_ui(GBrainValidated(cast(GBrainExecutionConfig, worker.result)))
+            else:
+                error_name = _safe_worker_error_name("GBRAIN_PROVIDER_UNAVAILABLE", worker.error)
+                self.dispatch_ui(
+                    GBrainValidated(error=f"GBRAIN_PROVIDER_UNAVAILABLE: {error_name}")
+                )
             return
         if worker.group != "run":
             return
