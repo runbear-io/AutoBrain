@@ -62,17 +62,22 @@ def test_reducer_quick_start_and_transient_semantic_handoff() -> None:
 def test_every_semantic_provider_has_deterministic_validation(
     provider: GBrainEmbeddingProvider,
 ) -> None:
-    kwargs: dict[str, object] = {}
+    credential = None
+    model = None
+    dimensions = None
     if provider in {
         GBrainEmbeddingProvider.OPENAI,
         GBrainEmbeddingProvider.VOYAGE,
         GBrainEmbeddingProvider.GEMINI,
         GBrainEmbeddingProvider.OPENROUTER,
     }:
-        kwargs["credential"] = "hosted-test-key"
+        credential = "hosted-test-key"
     if provider is GBrainEmbeddingProvider.LLAMA_SERVER:
-        kwargs.update(model="embed.gguf", dimensions=384)
-    config = GBrainExecutionConfig.semantic(provider, **kwargs)
+        model = "embed.gguf"
+        dimensions = 384
+    config = GBrainExecutionConfig.semantic(
+        provider, credential=credential, model=model, dimensions=dimensions
+    )
     assert config.embedding.provider is provider
     assert "hosted-test-key" not in repr(config)
 

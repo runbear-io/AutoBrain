@@ -1773,10 +1773,10 @@ class RunOrchestrator:
                 ),
             )
             execution_config = outcome.artifact.get("execution_config")
-            keyword_only = (
-                isinstance(execution_config, Mapping)
-                and execution_config.get("keyword_only") is True
-            )
+            keyword_only = False
+            if isinstance(execution_config, Mapping):
+                typed_execution_config = cast(Mapping[str, object], execution_config)
+                keyword_only = typed_execution_config.get("keyword_only") is True
             if outcome.status is not Status.OK:
                 evaluation = evaluation.model_copy(
                     update={"status": outcome.status, "eligible_override": False}
