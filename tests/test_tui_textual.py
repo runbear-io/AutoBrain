@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import re
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +17,7 @@ from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, Status
 from autobrain.orchestration import RunResult
 from autobrain.subscription import ProviderId
-from autobrain.tui_actions import RequestLogin, RunCompleted, StartRun
+from autobrain.tui_actions import Navigate, RequestLogin, RunCompleted, StartRun, ToggleCandidate
 from autobrain.tui_effects import LoadConnections, OpenExactReport
 from autobrain.tui_state import UiScreen, reduce_ui
 from autobrain.tui_textual import AutoBrainApp
@@ -24,6 +26,13 @@ _RAW_SECRET_ERROR = (
     "raw provider explosion Authorization: Bearer auth-secret-12345678 "
     "api_key=sk-test-secret-12345678 password=hunter-secret-12345678"
 )
+
+
+def _cell_text(app: AutoBrainApp) -> str:
+    svg = app.export_screenshot()
+    return html.unescape(re.sub(r"<[^>]+>", "", svg)).replace("\xa0", " ")
+
+
 _FORBIDDEN_ERROR_FRAGMENTS = (
     "raw provider explosion",
     "auth-secret-12345678",
@@ -85,6 +94,7 @@ def test_textual_pilot_navigates_every_setup_screen_by_keyboard() -> None:
                 ),
             )
             app._execute = lambda effect: None  # type: ignore[method-assign]
+            app.screen.refresh_view()  # type: ignore[attr-defined]
             await _activate_button(pilot, 3)
             assert app.state.screen is UiScreen.RUNNING
 
@@ -156,6 +166,78 @@ def test_run_exception_is_classified_without_rendering_raw_message(
             )
             await pilot.pause()
             _assert_error_is_safe(app, caplog, "RUN_FAILED: RuntimeError")
+
+    asyncio.run(exercise())
+
+
+def test_specialized_screen_copy_and_selected_labels_survive_refresh() -> None:
+    async def exercise() -> None:
+        app = AutoBrainApp(force_setup=True, provider=ProviderId.CODEX)
+        app._execute = lambda effect: None  # type: ignore[method-assign]
+        async with app.run_test(size=(60, 22)) as pilot:
+            app.dispatch_ui(Navigate(UiScreen.CANDIDATES.value))
+            await pilot.pause()
+            rendered = _cell_text(app)
+            assert "Choose candidates" in rendered
+            assert "Quick Start" in rendered
+            assert "[x] gbrain" in rendered
+            app.dispatch_ui(ToggleCandidate(CandidateId.GBRAIN))
+            await pilot.pause()
+            assert "[ ] gbrain" in _cell_text(app)
+
+    asyncio.run(exercise())
+
+
+def test_review_initial_viewport_is_complete_runnable_and_cjk_safe() -> None:
+    async def exercise() -> None:
+        app = AutoBrainApp(force_setup=True, provider=ProviderId.CODEX)
+        app._execute = lambda effect: None  # type: ignore[method-assign]
+        async with app.run_test(size=(60, 22)) as pilot:
+            app.dispatch_ui(Navigate(UiScreen.CANDIDATES.value))
+            await pilot.pause()
+            app.state = replace(
+                app.state,
+                plan=ExperimentPlan(
+                    title="서울 지식베이스 검토",
+                    description="한국어 질문으로 후보를 비교합니다.",
+                    provider_mode="codex-subscription",
+                    embedding_backend="local-hash",
+                    sources=(Provider.SLACK,),
+                    candidates=(CandidateId.LLM_WIKI, CandidateId.GBRAIN),
+                    budget_usd=25.0,
+                    max_questions=20,
+                ),
+            )
+            app.dispatch_ui(Navigate(UiScreen.REVIEW.value))
+            await pilot.pause()
+            rendered = _cell_text(app)
+            for copy in (
+                "Review",
+                "Quick Start",
+                "keyword-only",
+                "Not measured",
+                "Runnable",
+                "Run experiment",
+                "서울 지식베이스 검토",
+                "한국어 질문으로 후보를 비교합니다.",
+            ):
+                assert copy in rendered
+
+    asyncio.run(exercise())
+
+
+def test_review_blocks_run_visibly_when_plan_is_absent() -> None:
+    async def exercise() -> None:
+        app = AutoBrainApp(force_setup=True, provider=ProviderId.CODEX)
+        app._execute = lambda effect: None  # type: ignore[method-assign]
+        async with app.run_test(size=(60, 22)) as pilot:
+            app.dispatch_ui(Navigate(UiScreen.REVIEW.value))
+            await pilot.pause()
+            run = app.screen.query_one("#run")
+            assert run.disabled is True
+            assert "Blocked" in _cell_text(app)
+            app.dispatch_ui(StartRun())
+            assert app.state.setup_error.startswith("PLAN_UNAVAILABLE:")
 
     asyncio.run(exercise())
 

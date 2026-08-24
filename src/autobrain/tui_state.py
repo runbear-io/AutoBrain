@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import assert_never
 
 from autobrain.auth.models import Provider
-from autobrain.candidates.gbrain_config import GBrainExecutionConfig
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig, GBrainReadiness
 from autobrain.embedding import EmbeddingReadiness, inspect_embedding_backend
 from autobrain.experiment import ExperimentPlan
 from autobrain.models import CandidateId, ConnectionState
@@ -102,6 +102,7 @@ class UiState:
     next_effect_sequence: int = 1
     return_home: bool = False
     gbrain_config: GBrainExecutionConfig = field(default_factory=GBrainExecutionConfig.quick_start)
+    gbrain_readiness: GBrainReadiness = field(default_factory=GBrainReadiness.quick_start)
     gbrain_error: str = ""
 
     @property
@@ -233,6 +234,7 @@ def _resolved(state: UiState) -> UiState:
         connections=snapshot,
         subscription_provider=state.provider,
         gbrain_config=state.gbrain_config,
+        gbrain_readiness=state.gbrain_readiness,
     )
     return replace(state, plan=plan, setup_error=error)
 
@@ -266,20 +268,23 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
                 state,
                 screen=UiScreen.CANDIDATES,
                 gbrain_config=GBrainExecutionConfig.quick_start(),
+                gbrain_readiness=GBrainReadiness.quick_start(),
                 gbrain_error="",
             )
         return Reduction(backed)
     if isinstance(action, SelectGBrainMode):
-        return Reduction(
-            replace(
-                state,
-                screen=UiScreen.GBRAIN if action.semantic else UiScreen.REVIEW,
-                gbrain_config=(
-                    state.gbrain_config if action.semantic else GBrainExecutionConfig.quick_start()
-                ),
-                gbrain_error="",
-            )
+        selected = replace(
+            state,
+            screen=UiScreen.GBRAIN if action.semantic else UiScreen.REVIEW,
+            gbrain_config=(
+                state.gbrain_config if action.semantic else GBrainExecutionConfig.quick_start()
+            ),
+            gbrain_readiness=(
+                GBrainReadiness.unvalidated() if action.semantic else GBrainReadiness.quick_start()
+            ),
+            gbrain_error="",
         )
+        return Reduction(selected if action.semantic else _resolved(selected))
     if isinstance(action, ValidateGBrain):
         try:
             config = GBrainExecutionConfig.semantic(
@@ -289,8 +294,8 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
                 endpoint=action.endpoint or None,
                 credential=action.credential.get_secret_value() if action.credential else None,
             )
-        except ValueError:
-            return Reduction(replace(state, gbrain_error="GBRAIN_PROVIDER_INVALID"))
+        except ValueError as error:
+            return Reduction(replace(state, gbrain_error=str(error)))
         return Reduction(state, (ValidateGBrainProvider(config),))
     if isinstance(action, GBrainValidated):
         if action.error or action.config is None:
@@ -298,7 +303,8 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
                 replace(
                     state,
                     gbrain_config=GBrainExecutionConfig.quick_start(),
-                    gbrain_error=action.error or "GBRAIN_PROVIDER_INVALID",
+                    gbrain_readiness=GBrainReadiness.unvalidated(),
+                    gbrain_error=action.error or "GBRAIN_PROVIDER_INVALID: check provider settings",
                 )
             )
         return Reduction(
@@ -307,6 +313,7 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
                     state,
                     screen=UiScreen.REVIEW,
                     gbrain_config=action.config,
+                    gbrain_readiness=GBrainReadiness.validated_config(action.config),
                     gbrain_error="",
                 )
             )
@@ -358,7 +365,15 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
         return Reduction(_resolved(loaded))
     if isinstance(action, StartRun):
         if state.plan is None:
-            return Reduction(replace(state, setup_error=state.setup_error or "PLAN_UNAVAILABLE"))
+            return Reduction(
+                replace(
+                    state,
+                    setup_error=(
+                        state.setup_error
+                        or "PLAN_UNAVAILABLE: resolve the blocker shown above before running"
+                    ),
+                )
+            )
         handle, sequenced = _next_handle(state, "run")
         run_plan = state.plan
         started = replace(

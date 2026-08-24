@@ -1,27 +1,50 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import re
 from dataclasses import replace
 
 import pytest
 from pydantic import SecretStr
 from textual.widgets import Input, Select
 
+from autobrain.auth.models import Provider
 from autobrain.candidates.gbrain_config import (
     GBrainEmbeddingProvider,
     GBrainExecutionConfig,
 )
-from autobrain.subscription_domain import ProviderId
+from autobrain.embedding import inspect_embedding_backend
+from autobrain.models import ConnectionState
+from autobrain.subscription_domain import ProviderId, SubscriptionStatus
 from autobrain.tui_actions import (
     GBrainValidated,
     GoBack,
     Navigate,
     SelectGBrainMode,
+    StartRun,
     ValidateGBrain,
 )
 from autobrain.tui_effects import ValidateGBrainProvider
 from autobrain.tui_state import UiScreen, UiState, reduce_ui
-from autobrain.tui_textual import AutoBrainApp
+from autobrain.tui_textual import AutoBrainApp, validate_gbrain_connection
+
+
+def _cell_text(app: AutoBrainApp) -> str:
+    svg = app.export_screenshot()
+    return html.unescape(re.sub(r"<[^>]+>", "", svg)).replace("\xa0", " ")
+
+
+def _connected_state() -> UiState:
+    return UiState(
+        screen=UiScreen.CANDIDATES,
+        subscription_status=SubscriptionStatus.READY,
+        embedding_readiness=inspect_embedding_backend({}),
+        source_states=(
+            (Provider.SLACK, ConnectionState.CONNECTED),
+            (Provider.NOTION, ConnectionState.CONNECTED),
+        ),
+    )
 
 
 def test_reducer_quick_start_and_transient_semantic_handoff() -> None:
@@ -83,6 +106,86 @@ def test_every_semantic_provider_has_deterministic_validation(
     assert "hosted-test-key" not in repr(config)
 
 
+def test_validated_semantic_provider_resolves_plan_without_ambient_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    state = _connected_state()
+    state = reduce_ui(state, SelectGBrainMode(True)).state
+    requested = reduce_ui(
+        state,
+        ValidateGBrain(GBrainEmbeddingProvider.VOYAGE, credential=SecretStr("transient")),
+    )
+    effect = requested.effects[0]
+    assert isinstance(effect, ValidateGBrainProvider)
+    config = effect.config
+    settled = reduce_ui(requested.state, GBrainValidated(config))
+    assert settled.state.plan is not None
+    assert settled.state.plan.gbrain_config.embedding.provider is GBrainEmbeddingProvider.VOYAGE
+    assert settled.state.embedding_readiness.recommendation_ready is False
+    assert "OPENAI_API_KEY" not in settled.state.setup_error
+
+
+def test_quick_start_is_runnable_without_semantic_key_and_preserves_evaluator_gate() -> None:
+    state = _connected_state()
+    review = reduce_ui(state, SelectGBrainMode(False))
+    assert review.state.plan is not None
+    assert review.state.plan.embedding_backend == "local-hash"
+    assert review.state.embedding_readiness.recommendation_ready is False
+    assert "OPENAI_API_KEY" not in review.state.setup_error
+    started = reduce_ui(review.state, StartRun())
+    assert started.state.screen is UiScreen.RUNNING
+    assert started.effects
+
+
+@pytest.mark.parametrize(
+    ("action", "code"),
+    [
+        (ValidateGBrain(GBrainEmbeddingProvider.OPENAI), "GBRAIN_PROVIDER_KEY_REQUIRED"),
+        (
+            ValidateGBrain(GBrainEmbeddingProvider.OLLAMA, endpoint="ftp://localhost:11434"),
+            "GBRAIN_ENDPOINT_SCHEME_INVALID",
+        ),
+        (
+            ValidateGBrain(
+                GBrainEmbeddingProvider.OLLAMA,
+                endpoint="http://user:password@localhost:11434",
+            ),
+            "GBRAIN_ENDPOINT_USERINFO_FORBIDDEN",
+        ),
+        (ValidateGBrain(GBrainEmbeddingProvider.LLAMA_SERVER), "GBRAIN_MODEL_REQUIRED"),
+        (
+            ValidateGBrain(
+                GBrainEmbeddingProvider.LLAMA_SERVER,
+                model="embed.gguf",
+                dimensions=0,
+            ),
+            "GBRAIN_DIMENSIONS_INVALID",
+        ),
+    ],
+)
+def test_semantic_setup_errors_have_actionable_typed_codes(
+    action: ValidateGBrain,
+    code: str,
+) -> None:
+    result = reduce_ui(UiState(screen=UiScreen.GBRAIN), action)
+    assert result.effects == ()
+    assert result.state.gbrain_error.startswith(f"{code}:")
+
+
+def test_local_endpoint_unavailable_is_typed_and_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = GBrainExecutionConfig.semantic("ollama")
+
+    def unavailable(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise OSError("raw socket detail with secret=do-not-render")
+
+    monkeypatch.setattr("urllib.request.urlopen", unavailable)
+    with pytest.raises(RuntimeError, match="GBRAIN_LOCAL_ENDPOINT_UNAVAILABLE") as error:
+        validate_gbrain_connection(config)
+    assert "do-not-render" not in str(error.value)
+
+
 def test_quick_start_keyboard_surface_fits_minimum_terminal() -> None:
     async def exercise() -> None:
         app = AutoBrainApp(force_setup=True, provider=ProviderId.CODEX)
@@ -90,12 +193,39 @@ def test_quick_start_keyboard_surface_fits_minimum_terminal() -> None:
         async with app.run_test(size=(60, 22)) as pilot:
             app.dispatch_ui(Navigate(UiScreen.CANDIDATES.value))
             await pilot.pause()
+            screenshot = _cell_text(app)
+            assert "Quick Start" in screenshot
+            assert "Semantic Setup" in screenshot
             button = app.screen.query_one("#quick-start")
             button.focus()
             await pilot.press("enter")
             await pilot.pause()
             assert app.state.screen is UiScreen.REVIEW
             assert app.state.gbrain_config.keyword_only
+
+    asyncio.run(exercise())
+
+
+def test_semantic_setup_initial_viewport_shows_fields_validate_and_inline_error() -> None:
+    async def exercise() -> None:
+        app = AutoBrainApp(force_setup=True, provider=ProviderId.CODEX)
+        app._execute = lambda effect: None  # type: ignore[method-assign]
+        async with app.run_test(size=(60, 22)) as pilot:
+            app.dispatch_ui(Navigate(UiScreen.GBRAIN.value))
+            await pilot.pause()
+            initial = _cell_text(app)
+            for copy in (
+                "Semantic Setup",
+                "API key",
+                "Model",
+                "Dimensions",
+                "Endpoint",
+                "Validate",
+            ):
+                assert copy in initial
+            app.dispatch_ui(ValidateGBrain(GBrainEmbeddingProvider.OPENAI))
+            await pilot.pause()
+            assert "GBRAIN_PROVIDER_KEY_REQUIRED" in _cell_text(app)
 
     asyncio.run(exercise())
 

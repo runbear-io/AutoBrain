@@ -10,6 +10,15 @@ from urllib.parse import urlsplit
 from pydantic import SecretStr
 
 
+class GBrainValidationCode(StrEnum):
+    PROVIDER_KEY_REQUIRED = "GBRAIN_PROVIDER_KEY_REQUIRED"
+    ENDPOINT_SCHEME_INVALID = "GBRAIN_ENDPOINT_SCHEME_INVALID"
+    ENDPOINT_USERINFO_FORBIDDEN = "GBRAIN_ENDPOINT_USERINFO_FORBIDDEN"
+    ENDPOINT_HOST_INVALID = "GBRAIN_ENDPOINT_HOST_INVALID"
+    MODEL_REQUIRED = "GBRAIN_MODEL_REQUIRED"
+    DIMENSIONS_INVALID = "GBRAIN_DIMENSIONS_INVALID"
+
+
 class GBrainEmbeddingProvider(StrEnum):
     KEYWORD_ONLY = "keyword-only"
     OPENAI = "openai"
@@ -49,6 +58,47 @@ _DEFAULTS: dict[GBrainEmbeddingProvider, GBrainProviderSpec] = {
 
 
 @dataclass(frozen=True)
+class GBrainReadiness:
+    """Validated candidate capability, independent of evaluator embeddings."""
+
+    validated: bool
+    semantic_available: bool
+    recommendation_eligible: bool
+    detail: str
+
+    @classmethod
+    def unvalidated(cls) -> GBrainReadiness:
+        return cls(
+            validated=False,
+            semantic_available=False,
+            recommendation_eligible=False,
+            detail="Semantic provider validation required",
+        )
+
+    @classmethod
+    def quick_start(cls) -> GBrainReadiness:
+        return cls(
+            validated=True,
+            semantic_available=False,
+            recommendation_eligible=False,
+            detail="Keyword-only candidate search; semantic similarity is Not measured",
+        )
+
+    @classmethod
+    def validated_config(cls, config: GBrainExecutionConfig) -> GBrainReadiness:
+        return cls(
+            validated=True,
+            semantic_available=config.semantic_enabled,
+            recommendation_eligible=config.recommendation_eligible,
+            detail=(
+                f"Validated {config.embedding.provider.value} candidate embeddings"
+                if config.semantic_enabled
+                else "Keyword-only candidate search; semantic similarity is Not measured"
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class GBrainExecutionConfig:
     """Immutable run configuration; ``credential`` never participates in repr/artifacts."""
 
@@ -77,11 +127,17 @@ class GBrainExecutionConfig:
         selected = GBrainEmbeddingProvider(provider)
         if selected is GBrainEmbeddingProvider.KEYWORD_ONLY:
             raise ValueError("keyword-only is not a semantic provider")
+        if dimensions is not None and dimensions <= 0:
+            raise ValueError(
+                f"{GBrainValidationCode.DIMENSIONS_INVALID}: enter positive dimensions"
+            )
         if selected is GBrainEmbeddingProvider.LLAMA_SERVER:
             if not model:
-                raise ValueError("llama-server requires an explicit model")
-            if dimensions is None or dimensions <= 0:
-                raise ValueError("llama-server requires positive dimensions")
+                raise ValueError(f"{GBrainValidationCode.MODEL_REQUIRED}: enter a model name")
+            if dimensions is None:
+                raise ValueError(
+                    f"{GBrainValidationCode.DIMENSIONS_INVALID}: enter positive dimensions"
+                )
             spec = GBrainProviderSpec(selected, model, dimensions, False, endpoint)
         else:
             default = _DEFAULTS[selected]
@@ -93,7 +149,10 @@ class GBrainExecutionConfig:
                 endpoint or default.endpoint,
             )
         if spec.requires_key and not credential:
-            raise ValueError(f"{selected.value} requires a credential")
+            raise ValueError(
+                f"{GBrainValidationCode.PROVIDER_KEY_REQUIRED}: {selected.value} requires a "
+                "credential; enter the provider key"
+            )
         if spec.endpoint is not None:
             validate_endpoint(spec.endpoint)
         return cls(
@@ -153,16 +212,21 @@ class GBrainExecutionConfig:
 def validate_endpoint(endpoint: str) -> str:
     parsed = urlsplit(endpoint)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("endpoint must be an HTTP(S) URL")
+        raise ValueError(f"{GBrainValidationCode.ENDPOINT_SCHEME_INVALID}: use an HTTP(S) endpoint")
     if parsed.username is not None or parsed.password is not None:
-        raise ValueError("endpoint userinfo is not permitted")
+        raise ValueError(
+            f"{GBrainValidationCode.ENDPOINT_USERINFO_FORBIDDEN}: endpoint userinfo is not "
+            "permitted; remove username/password"
+        )
     try:
         port = parsed.port
         del port
         ip_address(parsed.hostname)
     except ValueError:
         if any(character.isspace() for character in parsed.hostname):
-            raise ValueError("endpoint host is invalid") from None
+            raise ValueError(
+                f"{GBrainValidationCode.ENDPOINT_HOST_INVALID}: use a valid endpoint host"
+            ) from None
     return endpoint
 
 

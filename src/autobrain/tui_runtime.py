@@ -13,7 +13,7 @@ from typing import Protocol
 
 from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
-from autobrain.candidates.gbrain_config import GBrainExecutionConfig
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig, GBrainReadiness
 from autobrain.embedding import EmbeddingReadiness, inspect_embedding_backend
 from autobrain.experiment import ExperimentPlan, ExperimentSetupError, build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState
@@ -117,6 +117,7 @@ def resolve_plan(
     connections: ConnectionSnapshot,
     subscription_provider: ProviderId = ProviderId.CODEX,
     gbrain_config: GBrainExecutionConfig | None = None,
+    gbrain_readiness: GBrainReadiness | None = None,
 ) -> tuple[ExperimentPlan | None, str]:
     if connections.subscription_provider is not subscription_provider:
         return None, "SUBSCRIPTION_PROVIDER_MISMATCH: refresh the selected provider"
@@ -136,6 +137,7 @@ def resolve_plan(
                 embedding_readiness=connections.embeddings,
                 subscription_provider=subscription_provider,
                 gbrain_config=gbrain_config,
+                gbrain_readiness=gbrain_readiness,
             ),
             "",
         )

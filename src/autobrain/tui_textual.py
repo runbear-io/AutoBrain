@@ -13,7 +13,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Label, Select, Static
+from textual.widgets import Button, Footer, Input, Label, Select, Static
 from textual.worker import Worker, WorkerState
 
 from autobrain.auth.models import Provider
@@ -74,14 +74,19 @@ def validate_gbrain_connection(config: GBrainExecutionConfig) -> GBrainExecution
     """Run a bounded, secret-safe setup validation before Review."""
     endpoint = config.embedding.endpoint
     if endpoint is not None:
+        import urllib.error
         import urllib.request
 
         request = urllib.request.Request(endpoint, method="HEAD")
         try:
             with urllib.request.urlopen(request, timeout=2):
                 pass
+        except urllib.error.HTTPError:
+            pass  # The daemon answered; endpoint-specific methods may reject HEAD.
         except OSError:
-            raise RuntimeError("provider endpoint unavailable") from None
+            raise RuntimeError(
+                "GBRAIN_LOCAL_ENDPOINT_UNAVAILABLE: start the local provider and retry"
+            ) from None
     return config
 
 
@@ -123,21 +128,22 @@ class CockpitScreen(Screen[None]):
     screen_id: UiScreen = UiScreen.HOME
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield Static("AutoBrain", id="app-header")
         with VerticalScroll(id="body"):
             yield Label(id="screen-title")
-            yield Static(id="summary")
+            yield Static(id="summary", markup=False)
             with Horizontal(id="actions"):
                 yield ActionButton("Back", GoBack(), id="back")
                 yield ActionButton("Refresh", RefreshConnections(), id="refresh")
                 yield from self.screen_actions()
+            yield Static(id="details", markup=False)
         yield Footer()
 
     def screen_actions(self) -> ComposeResult:
         yield from ()
 
     def on_mount(self) -> None:
-        self.refresh_view()
+        self.call_after_refresh(self.refresh_view)
 
     def action_request_quit(self) -> None:
         self.post_message(ActionRequested(RequestQuit()))
@@ -145,38 +151,31 @@ class CockpitScreen(Screen[None]):
     def action_go_back(self) -> None:
         self.post_message(ActionRequested(GoBack()))
 
+    def screen_title(self, model: object) -> str:
+        del model
+        return self.screen_id.value.title()
+
+    def compact_summary(self, model: object) -> str:
+        del model
+        return ""
+
+    def diagnostic_details(self, model: object) -> str:
+        del model
+        app = cast(AutoBrainApp, self.app)
+        current = build_view_model(app.state)
+        return (
+            f"Provider: {current.provider.value} ({current.provider_status.value})\n"
+            f"Evaluator embeddings: {current.embedding_status} - {current.embedding_detail}\n"
+            f"Stage: {current.stage} {current.stage_detail}  Elapsed: {current.elapsed}\n"
+            f"Terminal: {current.terminal_reason or '-'}  Report: {current.report_path or '-'}"
+        )
+
     def refresh_view(self) -> None:
         app = cast(AutoBrainApp, self.app)
         model = build_view_model(app.state)
-        self.query_one("#screen-title", Label).update(
-            f"{self.screen_id.value.title()}  |  provider: {model.provider.value} "
-            f"({model.provider_status.value})"
-        )
-        sources = "\n".join(
-            f"{'[x]' if selected else '[ ]'} {source.value}: {status.value} {detail}"
-            for source, status, selected, detail in model.sources
-        )
-        candidates = "\n".join(
-            f"{'[x]' if item.selected else '[ ]'} {candidate.value}: {item.status}"
-            for candidate, item in model.candidates.items()
-        )
-        gbrain_mode = (
-            "keyword-only"
-            if app.state.gbrain_config.keyword_only
-            else app.state.gbrain_config.embedding.provider.value
-        )
-        similarity = "Not measured" if app.state.gbrain_config.keyword_only else "configured"
-        self.query_one("#summary", Static).update(
-            f"{sources}\n\n{candidates}\n\n"
-            f"Embeddings: {model.embedding_status} - {model.embedding_detail}\n\n"
-            f"Plan: {model.plan_title or '-'}\n{model.plan_description}\n"
-            f"Stage: {model.stage} {model.stage_detail}\nElapsed: {model.elapsed}\n"
-            f"Terminal: {model.terminal_reason or '-'}\n"
-            f"Report: {model.report_path or '-'}\n{model.setup_error}\n"
-            f"GBrain: {gbrain_mode}\n"
-            f"Semantic similarity: {similarity}\n"
-            f"{app.state.gbrain_error}"
-        )
+        self.query_one("#screen-title", Label).update(self.screen_title(model))
+        self.query_one("#summary", Static).update(self.compact_summary(model))
+        self.query_one("#details", Static).update(self.diagnostic_details(model))
 
 
 class HomeScreen(CockpitScreen):
@@ -227,6 +226,25 @@ class NotionScreen(CockpitScreen):
 class CandidatesScreen(CockpitScreen):
     screen_id = UiScreen.CANDIDATES
 
+    def screen_title(self, model: object) -> str:
+        del model
+        return "Candidates"
+
+    def compact_summary(self, model: object) -> str:
+        del model
+        app = cast(AutoBrainApp, self.app)
+        return (
+            "Choose candidates\n"
+            + "\n".join(
+                (
+                    f"{'[x]' if candidate in app.state.selected_candidates else '[ ]'} "
+                    f"{candidate.value}"
+                )
+                for candidate in CandidateId
+            )
+            + "\n\nQuick Start: keyword-only / Not measured\nSemantic Setup: provider embeddings"
+        )
+
     def screen_actions(self) -> ComposeResult:
         for candidate in CandidateId:
             yield ActionButton(
@@ -239,8 +257,26 @@ class CandidatesScreen(CockpitScreen):
 class GBrainScreen(CockpitScreen):
     screen_id = UiScreen.GBRAIN
 
+    def screen_title(self, model: object) -> str:
+        del model
+        return "Semantic Setup (BYOK/local)"
+
+    def compact_summary(self, model: object) -> str:
+        del model
+        return (
+            "Choose one provider explicitly. Hosted keys stay in run memory; "
+            "local daemons are never auto-selected."
+        )
+
+    def diagnostic_details(self, model: object) -> str:
+        del model
+        app = cast(AutoBrainApp, self.app)
+        return app.state.gbrain_error or (
+            "Validation checks endpoint availability and required fields."
+        )
+
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield Static("AutoBrain", id="app-header")
         with VerticalScroll(id="body"):
             yield Label("Semantic Setup (BYOK/local)", id="screen-title")
             yield Static(
@@ -265,6 +301,7 @@ class GBrainScreen(CockpitScreen):
                 placeholder="Dimensions (positive integer for llama-server)", id="gbrain-dimensions"
             )
             yield Input(placeholder="Endpoint (local/custom providers)", id="gbrain-endpoint")
+            yield Static(id="details", markup=False)
             with Horizontal(id="actions"):
                 yield ActionButton("Back", GoBack(), id="back")
                 yield Button("Validate", id="validate-gbrain")
@@ -301,8 +338,49 @@ class GBrainScreen(CockpitScreen):
 class ReviewScreen(CockpitScreen):
     screen_id = UiScreen.REVIEW
 
+    def screen_title(self, model: object) -> str:
+        del model
+        return "Review"
+
+    def compact_summary(self, model: object) -> str:
+        del model
+        app = cast(AutoBrainApp, self.app)
+        config = app.state.gbrain_config
+        if config.keyword_only:
+            semantic = "Quick Start / keyword-only / Not measured"
+        else:
+            spec = config.embedding
+            endpoint = spec.endpoint or "default"
+            semantic = (
+                f"{spec.provider.value} / {spec.model or '-'} / "
+                f"{spec.dimensions or '-'} / {endpoint}"
+            )
+        status = (
+            "Runnable"
+            if app.state.plan is not None
+            else "Blocked: " + (app.state.setup_error or "PLAN_UNAVAILABLE")
+        )
+        return (
+            f"Setup: {semantic}\n{status}\n"
+            f"Plan: {app.state.plan.title if app.state.plan else '-'}\n"
+            f"{app.state.plan.description if app.state.plan else ''}"
+        )
+
     def screen_actions(self) -> ComposeResult:
         yield ActionButton("Run experiment", StartRun(), id="run")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.call_after_refresh(self._sync_run_button)
+
+    def refresh_view(self) -> None:
+        super().refresh_view()
+        self._sync_run_button()
+
+    def _sync_run_button(self) -> None:
+        self.query_one("#run", Button).disabled = not build_view_model(
+            cast(AutoBrainApp, self.app).state
+        ).can_run
 
 
 class RunningScreen(CockpitScreen):
@@ -347,11 +425,14 @@ class AutoBrainApp(App[None]):
     TITLE = "AutoBrain"
     CSS = """
     Screen { min-width: 60; }
-    #body { width: 100%; padding: 1 2; }
-    #screen-title { text-style: bold; color: $accent; margin-bottom: 1; }
-    #summary { width: 100%; min-height: 12; }
-    #actions { height: auto; }
-    Button { margin: 0 1 1 0; }
+    #app-header { height: 1; text-style: bold; background: $primary; color: $text; padding: 0 1; }
+    #body { width: 100%; padding: 0 1; }
+    #screen-title { text-style: bold; color: $accent; }
+    #summary { width: 100%; height: auto; }
+    #details { width: 100%; height: auto; color: $text-muted; }
+    #actions { height: auto; layout: grid; grid-size: 3; grid-gutter: 0 1; }
+    Button { margin: 0; min-width: 12; height: 1; border: none; padding: 0 1; }
+    GBrainScreen Input, GBrainScreen Select { height: 1; border: none; padding: 0 1; }
     """
 
     def __init__(self, *, force_setup: bool, provider: ProviderId) -> None:
@@ -487,10 +568,13 @@ class AutoBrainApp(App[None]):
             if event.state is WorkerState.SUCCESS:
                 self.dispatch_ui(GBrainValidated(cast(GBrainExecutionConfig, worker.result)))
             else:
-                error_name = _safe_worker_error_name("GBRAIN_PROVIDER_UNAVAILABLE", worker.error)
-                self.dispatch_ui(
-                    GBrainValidated(error=f"GBRAIN_PROVIDER_UNAVAILABLE: {error_name}")
-                )
+                safe_error = str(worker.error or "")
+                if not safe_error.startswith("GBRAIN_LOCAL_ENDPOINT_UNAVAILABLE:"):
+                    error_name = _safe_worker_error_name(
+                        "GBRAIN_PROVIDER_UNAVAILABLE", worker.error
+                    )
+                    safe_error = f"GBRAIN_PROVIDER_UNAVAILABLE: {error_name}"
+                self.dispatch_ui(GBrainValidated(error=safe_error))
             return
         if worker.group != "run":
             return

@@ -282,7 +282,7 @@ def test_automatic_plan_requires_source_and_two_candidates() -> None:
         )
 
 
-def test_tui_blocks_smoke_only_embeddings_before_run() -> None:
+def test_tui_allows_smoke_only_evaluator_for_runnable_non_recommendation_run() -> None:
     plan, error = resolve_plan(
         selected_sources=(Provider.SLACK,),
         selected_candidates=(CandidateId.LLM_WIKI, CandidateId.MEM0),
@@ -293,9 +293,9 @@ def test_tui_blocks_smoke_only_embeddings_before_run() -> None:
         ),
     )
 
-    assert plan is None
-    assert error.startswith("SMOKE_ONLY:")
-    assert "cannot produce a recommendation" in error
+    assert plan is not None
+    assert plan.embedding_backend == "local-hash"
+    assert error == ""
 
 
 def test_tui_never_falls_back_to_openai_api_key(
