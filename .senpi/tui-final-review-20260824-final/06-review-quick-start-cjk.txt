@@ -1,0 +1,32 @@
+AutoBrain
+
+
+
+
+
+
+
+
+
+    AutoBrain
+Review
+Setup: Quick Start / keyword-only / Not measured
+Runnable
+Plan: 서울 지식베이스 검토
+한국어 질문으로 후보를 비교합니다.
+ Back  Refresh  Run experiment
+Provider: codex (READY)
+Evaluator embeddings: MISSING_PROVIDER -
+SEMANTIC_EMBEDDING_UNAVAILABLE: OPENAI_API_KEY is required
+for openai:text-embedding-3-small
+Stage: waiting   Elapsed: 00:00
+Terminal: -  Report: -
+
+
+
+
+
+
+
+
+ q Quit  esc Back ▏^p palette

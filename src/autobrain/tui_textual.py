@@ -284,6 +284,7 @@ class GBrainScreen(CockpitScreen):
                 "local daemons are never auto-selected.",
                 id="summary",
             )
+            yield Static("Selected provider: OpenAI", id="gbrain-provider-label", markup=False)
             yield Select(
                 [
                     (provider.value, provider.value)
@@ -306,6 +307,20 @@ class GBrainScreen(CockpitScreen):
                 yield ActionButton("Back", GoBack(), id="back")
                 yield Button("Validate", id="validate-gbrain")
         yield Footer()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "gbrain-provider" or not isinstance(event.value, str):
+            return
+        provider = GBrainEmbeddingProvider(event.value)
+        labels = {
+            GBrainEmbeddingProvider.OPENAI: "OpenAI",
+            GBrainEmbeddingProvider.OPENROUTER: "OpenRouter",
+            GBrainEmbeddingProvider.LLAMA_SERVER: "llama-server",
+        }
+        selected_label = labels.get(provider, provider.value.title())
+        self.query_one("#gbrain-provider-label", Static).update(
+            f"Selected provider: {selected_label}"
+        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "validate-gbrain":

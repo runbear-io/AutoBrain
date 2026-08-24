@@ -1,0 +1,33 @@
+{
+  "effect": "RunExperiment",
+  "plan": {
+    "candidates": [
+      "llm-wiki",
+      "mem0",
+      "gbrain"
+    ],
+    "credential_present": false,
+    "gbrain_config": {
+      "capabilities": {
+        "chat": false,
+        "embedding": true,
+        "think": false
+      },
+      "dimensions": 384,
+      "endpoint": "http://127.0.0.1:49189",
+      "keyword_only": false,
+      "model": "nomic-evidence",
+      "provider": "ollama",
+      "recommendation_eligible": false,
+      "semantic_enabled": true,
+      "semantic_quality": "configured"
+    },
+    "provider_mode": "codex-subscription",
+    "sources": [
+      "slack",
+      "notion"
+    ],
+    "title": "Find the best knowledge system for Slack + Notion"
+  },
+  "provider": "codex"
+}

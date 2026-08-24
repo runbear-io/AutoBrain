@@ -1,0 +1,32 @@
+AutoBrain
+
+
+
+
+
+
+
+
+
+    AutoBrain
+Review
+Setup: Quick Start / keyword-only / Not measured
+Blocked: PLAN_UNAVAILABLE
+Plan: -
+
+ Back  Refresh  Run experiment
+Provider: codex (READY)
+Evaluator embeddings: MISSING_PROVIDER -
+SEMANTIC_EMBEDDING_UNAVAILABLE: OPENAI_API_KEY is required
+for openai:text-embedding-3-small
+Stage: waiting   Elapsed: 00:00
+Terminal: -  Report: -
+
+
+
+
+
+
+
+
+ q Quit  esc Back ▏^p palette

@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import html
 import re
+import threading
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import cast
 
 import pytest
 from pydantic import SecretStr
@@ -25,7 +28,7 @@ from autobrain.tui_actions import (
     StartRun,
     ValidateGBrain,
 )
-from autobrain.tui_effects import ValidateGBrainProvider
+from autobrain.tui_effects import RunExperiment, UiEffect, ValidateGBrainProvider
 from autobrain.tui_state import UiScreen, UiState, reduce_ui
 from autobrain.tui_textual import AutoBrainApp, validate_gbrain_connection
 
@@ -206,6 +209,23 @@ def test_quick_start_keyboard_surface_fits_minimum_terminal() -> None:
     asyncio.run(exercise())
 
 
+def test_semantic_setup_selected_provider_label_tracks_select_at_minimum_viewport() -> None:
+    async def exercise() -> None:
+        app = AutoBrainApp(force_setup=True, provider=ProviderId.CODEX)
+        app._execute = lambda effect: None  # type: ignore[method-assign]
+        async with app.run_test(size=(60, 22)) as pilot:
+            app.dispatch_ui(Navigate(UiScreen.GBRAIN.value))
+            await pilot.pause()
+            assert "Selected provider: OpenAI" in _cell_text(app)
+
+            provider = cast(Select[str], app.screen.query_one("#gbrain-provider", Select))
+            provider.value = GBrainEmbeddingProvider.OLLAMA.value
+            await pilot.pause()
+            assert "Selected provider: Ollama" in _cell_text(app)
+
+    asyncio.run(exercise())
+
+
 def test_semantic_setup_initial_viewport_shows_fields_validate_and_inline_error() -> None:
     async def exercise() -> None:
         app = AutoBrainApp(force_setup=True, provider=ProviderId.CODEX)
@@ -228,6 +248,87 @@ def test_semantic_setup_initial_viewport_shows_fields_validate_and_inline_error(
             assert "GBRAIN_PROVIDER_KEY_REQUIRED" in _cell_text(app)
 
     asyncio.run(exercise())
+
+
+def test_semantic_setup_keyboard_ollama_validation_emits_runnable_run_effect() -> None:
+    class LoopbackHandler(BaseHTTPRequestHandler):
+        def do_HEAD(self) -> None:
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LoopbackHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    endpoint = f"http://127.0.0.1:{server.server_port}"
+
+    async def exercise() -> None:
+        captured: list[UiEffect] = []
+        review_ready = asyncio.Event()
+        app = AutoBrainApp(force_setup=True, provider=ProviderId.CODEX)
+
+        def execute(effect: UiEffect) -> None:
+            captured.append(effect)
+            if isinstance(effect, ValidateGBrainProvider):
+                config = validate_gbrain_connection(effect.config)
+
+                def settle_validation() -> None:
+                    app.dispatch_ui(GBrainValidated(config))
+                    app.call_after_refresh(review_ready.set)
+
+                app.call_later(settle_validation)
+
+        app._execute = execute  # type: ignore[method-assign]
+        async with app.run_test(size=(60, 22)) as pilot:
+            app.state = _connected_state()
+            app.dispatch_ui(Navigate(UiScreen.GBRAIN.value))
+            await pilot.pause()
+
+            provider = cast(Select[str], app.screen.query_one("#gbrain-provider", Select))
+            provider.focus()
+            await pilot.press("enter", "home", "down", "down", "down", "down", "down", "enter")
+            await pilot.pause()
+            assert provider.value == GBrainEmbeddingProvider.OLLAMA.value
+            assert "Selected provider: Ollama" in _cell_text(app)
+
+            await pilot.press("tab", "tab")
+            await pilot.press(*"nomic-test")
+            await pilot.press("tab")
+            await pilot.press(*"384")
+            await pilot.press("tab")
+            await pilot.press(*endpoint)
+            await pilot.press("tab", "tab", "enter")
+            await asyncio.wait_for(review_ready.wait(), timeout=2)
+
+            assert app.state.screen is UiScreen.REVIEW
+            review = _cell_text(app)
+            for copy in ("Review", "Setup: ollama", "nomic-test", "384", endpoint, "Runnable"):
+                assert copy in review
+
+            app.screen.query_one("#run").focus()
+            await pilot.press("enter")
+            await pilot.pause()
+
+        run_effect = cast(RunExperiment, captured[-1])
+        assert isinstance(run_effect, RunExperiment)
+        config = run_effect.plan.gbrain_config
+        assert config.embedding.provider is GBrainEmbeddingProvider.OLLAMA
+        assert config.embedding.model == "nomic-test"
+        assert config.embedding.dimensions == 384
+        assert config.embedding.endpoint == endpoint
+        assert config.credential is None
+        assert run_effect.plan.sources
+        assert len(run_effect.plan.candidates) >= 2
+        assert run_effect.plan.provider_mode == "codex-subscription"
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2)
 
 
 def test_semantic_setup_validate_button_uses_runtime_select_type() -> None:

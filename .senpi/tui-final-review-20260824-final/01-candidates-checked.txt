@@ -1,0 +1,32 @@
+AutoBrain
+
+
+
+
+
+
+
+
+
+    AutoBrain
+Candidates
+Choose candidates
+[x] llm-wiki
+[x] mem0
+[x] gbrain
+
+Quick Start: keyword-only / Not measured
+Semantic Setup: provider embeddings
+ Back  Refresh  llm-wiki
+ mem0  gbrain  Quick Start
+ Semantic Setup
+Provider: codex (READY)
+Evaluator embeddings: MISSING_PROVIDER -
+SEMANTIC_EMBEDDING_UNAVAILABLE: OPENAI_API_KEY is required
+for openai:text-embedding-3-small
+Stage: waiting   Elapsed: 00:00
+Terminal: -  Report: -
+
+
+
+ q Quit  esc Back ▏^p palette

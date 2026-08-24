@@ -1,0 +1,32 @@
+AutoBrain
+
+
+
+
+
+
+
+
+
+    AutoBrain
+Semantic Setup (BYOK/local)
+Choose one provider explicitly. Hosted keys stay in run
+memory; local daemons are never auto-selected.
+Selected provider: Ollama
+▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎
+API key (hosted providers only)
+Model (required for llama-server)
+Dimensions (positive integer for llama-server)
+Endpoint (local/custom providers)
+GBRAIN_ENDPOINT_SCHEME_INVALID: use an HTTP(S) endpoint
+ Back  Validate
+
+
+
+
+
+
+
+
+
+ q Quit  esc Back ▏^p palette
