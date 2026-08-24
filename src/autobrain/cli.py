@@ -6,6 +6,10 @@ from typing import Annotated, NoReturn
 import typer
 
 from autobrain.auth.models import Provider
+from autobrain.candidates.gbrain_config import (
+    GBrainEmbeddingProvider,
+    GBrainExecutionConfig,
+)
 from autobrain.connectors.notion_snapshot import NotionSnapshotStore
 from autobrain.embedding import EmbeddingBackend, production_embedding_registry
 from autobrain.fixture import (
@@ -260,6 +264,28 @@ def run_comparison(
             ),
         ),
     ] = False,
+    gbrain_provider: Annotated[
+        GBrainEmbeddingProvider,
+        typer.Option(
+            "--gbrain-provider",
+            help=(
+                "GBrain mode/provider. keyword-only is keyless; hosted credentials are read "
+                "from AUTOBRAIN_GBRAIN_API_KEY."
+            ),
+        ),
+    ] = GBrainEmbeddingProvider.KEYWORD_ONLY,
+    gbrain_model: Annotated[
+        str | None,
+        typer.Option("--gbrain-model", help="Explicit GBrain embedding model override."),
+    ] = None,
+    gbrain_dimensions: Annotated[
+        int | None,
+        typer.Option("--gbrain-dimensions", min=1, help="Embedding dimensions override."),
+    ] = None,
+    gbrain_endpoint: Annotated[
+        str | None,
+        typer.Option("--gbrain-endpoint", help="HTTP(S) endpoint without URL userinfo."),
+    ] = None,
 ) -> None:
     """Run one immutable Slack/Notion comparison and report its run ID."""
     try:
@@ -273,6 +299,17 @@ def run_comparison(
             embedding_registry = embedding_registry.with_test_semantic_backend()
         if notion_only and not notion_snapshot_status.ready:
             raise ValueError("SOURCE_AUTH_UNAVAILABLE: --notion-only requires an imported snapshot")
+        gbrain_config = (
+            GBrainExecutionConfig.quick_start()
+            if gbrain_provider is GBrainEmbeddingProvider.KEYWORD_ONLY
+            else GBrainExecutionConfig.semantic(
+                gbrain_provider,
+                model=gbrain_model,
+                dimensions=gbrain_dimensions,
+                endpoint=gbrain_endpoint,
+                credential=os.environ.get("AUTOBRAIN_GBRAIN_API_KEY"),
+            )
+        )
         config = RunConfig(
             budget_usd=budget_usd,
             max_questions=max_questions,
@@ -300,10 +337,9 @@ def run_comparison(
             notion_snapshot_path=(
                 notion_snapshot_status.snapshot_path if notion_snapshot_status.ready else None
             ),
+            gbrain_config=gbrain_config,
             selected_sources=(
-                (Provider.NOTION,)
-                if notion_only
-                else (Provider.SLACK, Provider.NOTION)
+                (Provider.NOTION,) if notion_only else (Provider.SLACK, Provider.NOTION)
             ),
         )
         if fixture_path_raw and not fixture_allowed:
