@@ -238,8 +238,9 @@ def _grounded_retrieval_answer(
     for item in (*search_evidence, *query_evidence):
         if not isinstance(item, dict):
             continue
+        mapping = cast(dict[str, Any], item)
         for key in ("chunk_text", "text", "content", "snippet"):
-            value = item.get(key)
+            value = mapping.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return "No grounded retrieval evidence was returned."

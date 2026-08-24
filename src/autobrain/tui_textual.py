@@ -146,7 +146,8 @@ class CockpitScreen(Screen[None]):
         self.post_message(ActionRequested(GoBack()))
 
     def refresh_view(self) -> None:
-        model = build_view_model(self.app.state)  # type: ignore[attr-defined]
+        app = cast(AutoBrainApp, self.app)
+        model = build_view_model(app.state)
         self.query_one("#screen-title", Label).update(
             f"{self.screen_id.value.title()}  |  provider: {model.provider.value} "
             f"({model.provider_status.value})"
@@ -161,10 +162,10 @@ class CockpitScreen(Screen[None]):
         )
         gbrain_mode = (
             "keyword-only"
-            if self.app.state.gbrain_config.keyword_only
-            else self.app.state.gbrain_config.embedding.provider.value
+            if app.state.gbrain_config.keyword_only
+            else app.state.gbrain_config.embedding.provider.value
         )
-        similarity = "Not measured" if self.app.state.gbrain_config.keyword_only else "configured"
+        similarity = "Not measured" if app.state.gbrain_config.keyword_only else "configured"
         self.query_one("#summary", Static).update(
             f"{sources}\n\n{candidates}\n\n"
             f"Embeddings: {model.embedding_status} - {model.embedding_detail}\n\n"
@@ -174,7 +175,7 @@ class CockpitScreen(Screen[None]):
             f"Report: {model.report_path or '-'}\n{model.setup_error}\n"
             f"GBrain: {gbrain_mode}\n"
             f"Semantic similarity: {similarity}\n"
-            f"{self.app.state.gbrain_error}"
+            f"{app.state.gbrain_error}"
         )
 
 
@@ -273,7 +274,11 @@ class GBrainScreen(CockpitScreen):
         if event.button.id != "validate-gbrain":
             return
         event.stop()
-        provider = GBrainEmbeddingProvider(str(self.query_one("#gbrain-provider", Select).value))
+        provider_value = self.query_one("#gbrain-provider", Select[str]).value
+        if not isinstance(provider_value, str):
+            self.post_message(ActionRequested(GoBack()))
+            return
+        provider = GBrainEmbeddingProvider(provider_value)
         raw_dimensions = self.query_one("#gbrain-dimensions", Input).value.strip()
         key_input = self.query_one("#gbrain-key", Input)
         from pydantic import SecretStr
