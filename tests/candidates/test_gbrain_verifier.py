@@ -25,7 +25,6 @@ from autobrain.candidates.gbrain import (
 from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.models import NormalizedDocument, SourceKind
 
-
 _LEGACY_CONFIG = GBrainExecutionConfig.semantic(
     "openai", credential="test-key", chat_credential="test-key"
 )

@@ -10,6 +10,7 @@ from autobrain.candidates.gbrain_config import (
     GBrainEmbeddingProvider,
     GBrainExecutionConfig,
 )
+from autobrain.subscription_domain import ProviderId
 from autobrain.tui_actions import (
     GBrainValidated,
     GoBack,
@@ -18,7 +19,6 @@ from autobrain.tui_actions import (
     ValidateGBrain,
 )
 from autobrain.tui_effects import ValidateGBrainProvider
-from autobrain.subscription_domain import ProviderId
 from autobrain.tui_state import UiScreen, UiState, reduce_ui
 from autobrain.tui_textual import AutoBrainApp
 
