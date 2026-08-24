@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
@@ -13,10 +13,9 @@ import pytest
 from autobrain.candidates.gbrain import (
     GBRAIN_COMMIT,
     GBRAIN_VERSION,
-    CommandResult,
     GBrainAdapter,
-    GBrainMissingProviderError,
 )
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.models import NormalizedDocument, SourceKind
 
 
@@ -173,7 +172,14 @@ def test_real_pinned_runtime_reaches_status_search_query_and_think(
 ) -> None:
     base_url, events = local_provider
     monkeypatch.setenv("OPENAI_API_KEY", "fixture")
-    adapter = GBrainAdapter(tmp_path / "tools", tmp_path / "run", timeout_seconds=300)
+    adapter = GBrainAdapter(
+        tmp_path / "tools",
+        tmp_path / "run",
+        timeout_seconds=300,
+        config=GBrainExecutionConfig.semantic(
+            "openai", credential="fixture", chat_credential="fixture"
+        ),
+    )
     result = adapter.run(
         [_document()],
         ["What is the canonical answer?"],
@@ -197,45 +203,13 @@ def test_real_pinned_runtime_reaches_status_search_query_and_think(
     assert any("SYNC_UNAVAILABLE" in warning for warning in result.warnings)
 
 
-def test_real_pinned_runtime_missing_provider_is_typed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_semantic_hosted_provider_requires_run_memory_credential() -> None:
+    with pytest.raises(ValueError, match="requires a credential"):
+        GBrainExecutionConfig.semantic("openai")
+
+
+def test_keyless_default_has_no_openai_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    adapter = GBrainAdapter(tmp_path / "tools", tmp_path / "run", timeout_seconds=300)
-    with pytest.raises(GBrainMissingProviderError) as caught:
-        adapter.run([_document()], ["What is the canonical answer?"])
-    assert caught.value.status == "MISSING_PROVIDER"
-    assert "OPENAI_API_KEY" in f"{caught.value.stdout}\n{caught.value.stderr}"
-
-
-def test_missing_provider_preflight_does_not_create_checkout_or_run_tools(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    tools = tmp_path / "tools"
-    run_root = tmp_path / "run"
-    calls: list[tuple[str, ...]] = []
-
-    def unexpected_runner(
-        command: Sequence[str], cwd: Path, env: dict[str, str], timeout: float
-    ) -> CommandResult:
-        del cwd, env, timeout
-        calls.append(tuple(command))
-        raise AssertionError("missing-provider preflight invoked the runner")
-
-    adapter = GBrainAdapter(tools, run_root, runner=unexpected_runner)
-
-    with pytest.raises(GBrainMissingProviderError) as caught:
-        adapter.run([_document()], ["What is the canonical answer?"])
-
-    error = caught.value
-    assert error.status == "MISSING_PROVIDER"
-    assert "OPENAI_API_KEY" in str(error)
-    assert "OPENAI_API_KEY" in f"{error.stdout}\n{error.stderr}"
-    assert "should-never-appear" not in f"{error}\n{error.stdout}\n{error.stderr}"
-    assert calls == []
-    assert not tools.exists()
-    assert not run_root.exists()
-    assert not adapter.checkout.exists()
-    assert not adapter.home.exists()
-    assert not adapter.sources.exists()
+    config = GBrainExecutionConfig.quick_start()
+    assert config.keyword_only
+    assert config.child_environment() == {}

@@ -70,7 +70,6 @@ _SETUP_SCREENS = (
     UiScreen.SLACK,
     UiScreen.NOTION,
     UiScreen.CANDIDATES,
-    UiScreen.GBRAIN,
     UiScreen.REVIEW,
 )
 
@@ -264,7 +263,8 @@ def reduce_ui(state: UiState, action: UiAction) -> Reduction:
         backed = state.back()
         if state.screen is UiScreen.GBRAIN:
             backed = replace(
-                backed,
+                state,
+                screen=UiScreen.CANDIDATES,
                 gbrain_config=GBrainExecutionConfig.quick_start(),
                 gbrain_error="",
             )
