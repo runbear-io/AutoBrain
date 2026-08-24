@@ -274,7 +274,8 @@ class GBrainScreen(CockpitScreen):
         if event.button.id != "validate-gbrain":
             return
         event.stop()
-        provider_value = self.query_one("#gbrain-provider", Select[str]).value
+        provider_select = cast(Select[str], self.query_one("#gbrain-provider", Select))
+        provider_value = provider_select.value
         if not isinstance(provider_value, str):
             self.post_message(ActionRequested(GoBack()))
             return

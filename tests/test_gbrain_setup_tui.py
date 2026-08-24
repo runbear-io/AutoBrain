@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 from pydantic import SecretStr
+from textual.widgets import Input, Select
 
 from autobrain.candidates.gbrain_config import (
     GBrainEmbeddingProvider,
@@ -95,5 +96,28 @@ def test_quick_start_keyboard_surface_fits_minimum_terminal() -> None:
             await pilot.pause()
             assert app.state.screen is UiScreen.REVIEW
             assert app.state.gbrain_config.keyword_only
+
+    asyncio.run(exercise())
+
+
+def test_semantic_setup_validate_button_uses_runtime_select_type() -> None:
+    async def exercise() -> None:
+        app = AutoBrainApp(force_setup=True, provider=ProviderId.CODEX)
+        app._execute = lambda effect: None  # type: ignore[method-assign]
+        async with app.run_test(size=(60, 22)) as pilot:
+            app.dispatch_ui(Navigate(UiScreen.CANDIDATES.value))
+            await pilot.pause()
+            app.screen.query_one("#semantic-setup").focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            app.screen.query_one("#gbrain-provider", Select).value = "openai"
+            app.screen.query_one("#gbrain-key", Input).value = "synthetic-key"
+            app._execute = AutoBrainApp._execute.__get__(app, AutoBrainApp)  # type: ignore[method-assign]
+            app.screen.query_one("#validate-gbrain").focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.state.screen is UiScreen.REVIEW
+            assert app.state.gbrain_config.embedding.provider is GBrainEmbeddingProvider.OPENAI
+            assert "synthetic-key" not in app.export_screenshot()
 
     asyncio.run(exercise())

@@ -12,12 +12,12 @@
   ],
   "hash_basis": "SHA-256 of the exact UTF-8 manifest.json bytes after replacing the single hashes.manifest.json value with 64 ASCII zeroes",
   "hashes": {
-    "comparison.json": "71bdb462c0a2e3affdc1d1c048ed4360e7cb0714b376d04728d0ae72e60b1d53",
-    "manifest.json": "f519c7767d0c3d32d4d398b80f8d5906156cbacd11a8341e884afbfae549fb20",
+    "comparison.json": "d3b8dab3d7dd8fa7d4941be13039c40c2294054ed74c6b41ec90aa1d4097b9ec",
+    "manifest.json": "9dff5e288539ca5d9206e95dbbb6e7ffc696ec4cd78736ac202b42447b6e445f",
     "screenshots/report-1280.png": "b71d918f2f2a9cdaea11bc5e098a711433c5383214505d75450b7b09c416c2cc",
     "screenshots/report-375.png": "2d5a68ca1d222a6fabd9d44c6f67575ce70bb9cfd94ad79f6ef5b4c544ff1ef5",
     "screenshots/report-768.png": "6ea06dcc4347d4c15c117b804e2d6957560678a127278e244fdebb403a454bf2",
-    "task-10-final-qa.txt": "10dbea65f346e031022380ee1675282de14d4d31693ae84c1bc5ad61856ca9cb"
+    "task-10-final-qa.txt": "d3180c7ad9818e08fddc6b150fd188c9db0639afa3eb7f24193c841920229809"
   },
   "release": {
     "version": "0.1.1",
@@ -30,7 +30,7 @@
         "candidate-pins.json"
       ],
       "recursive_tree": "src/autobrain",
-      "sha256": "515947e1b838cb89998acb793596e99abbb3bcdd84946977e9d470acf450b2e3",
+      "sha256": "a71e84f3d4ae276d5794461305ac76b3a97e576d677ac3208ef5682dc8052834",
       "excludes": [
         "**/__pycache__/**",
         "**/*.pyc"

@@ -16,7 +16,7 @@
     "reason": "RUNTIME_SOURCE_DIGEST_AND_0.1.1_WHEEL_NOT_RECORDED",
     "observed_installed_wheel": "autobrain-0.1.0-py3-none-any.whl",
     "current_release_version": "0.1.1",
-    "reviewed_source_sha256": "515947e1b838cb89998acb793596e99abbb3bcdd84946977e9d470acf450b2e3",
+    "reviewed_source_sha256": "a71e84f3d4ae276d5794461305ac76b3a97e576d677ac3208ef5682dc8052834",
     "release_claim": "NOT_ESTABLISHED"
   },
   "historical_observations": {
