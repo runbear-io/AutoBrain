@@ -22,7 +22,13 @@ from autobrain.candidates.gbrain import (
     document_markdown,
     run_process,
 )
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.models import NormalizedDocument, SourceKind
+
+
+_LEGACY_CONFIG = GBrainExecutionConfig.semantic(
+    "openai", credential="test-key", chat_credential="test-key"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -101,7 +107,7 @@ def _checkout(tools: Path, *, base_url: bool = True) -> Path:
 def test_sync_uses_confined_repo_and_query_is_not_called_gather(tmp_path: Path) -> None:
     tools = tmp_path / "tools"
     runner = LifecycleRunner(_checkout(tools))
-    adapter = GBrainAdapter(tools, tmp_path / "run", runner=runner)
+    adapter = GBrainAdapter(tools, tmp_path / "run", runner=runner, config=_LEGACY_CONFIG)
     result = adapter.run([_document()], ["What color?"])[0]
 
     sync = next(argv for argv, _env in runner.calls if argv[:3] == ("bun", "src/cli.ts", "sync"))
@@ -164,7 +170,9 @@ def test_checkout_symlink_is_rejected_before_outside_mutation(tmp_path: Path) ->
         return CommandResult(tuple(command), 0, "", "", 1)
 
     with pytest.raises(GBrainIsolationError, match="checkout"):
-        GBrainAdapter(tools, tmp_path / "run", runner=runner).ensure_checkout()
+        GBrainAdapter(
+            tools, tmp_path / "run", runner=runner, config=_LEGACY_CONFIG
+        ).ensure_checkout()
     assert calls == []
     assert marker.read_text() == "safe"
 
@@ -190,7 +198,7 @@ def test_proxy_events_reconcile_without_estimating_and_detect_bad_evidence(tmp_p
             "usd": 0.001,
         },
     ]
-    result = GBrainAdapter(tools, tmp_path / "run", runner=runner).run(
+    result = GBrainAdapter(tools, tmp_path / "run", runner=runner, config=_LEGACY_CONFIG).run(
         [_document()], ["What color?"], base_url="http://meter.test", proxy_events=events
     )[0]
     assert result.cost_status == "COST_COMPLETE"
@@ -201,25 +209,25 @@ def test_proxy_events_reconcile_without_estimating_and_detect_bad_evidence(tmp_p
 
     duplicate = [*events, dict(events[-1])]
     runner = LifecycleRunner(_checkout(tmp_path / "tools-duplicate"))
-    bad = GBrainAdapter(tmp_path / "tools-duplicate", tmp_path / "duplicate", runner=runner).run(
-        [_document()], ["What color?"], base_url="http://meter.test", proxy_events=duplicate
-    )[0]
+    bad = GBrainAdapter(
+        tmp_path / "tools-duplicate", tmp_path / "duplicate", runner=runner, config=_LEGACY_CONFIG
+    ).run([_document()], ["What color?"], base_url="http://meter.test", proxy_events=duplicate)[0]
     assert bad.cost_status == "COST_INCOMPLETE"
     assert len(bad.proxy_events) == 3
     assert any("METERING_DUPLICATE" in warning for warning in bad.warnings)
 
     runner = LifecycleRunner(_checkout(tmp_path / "tools-missing"))
-    missing = GBrainAdapter(tmp_path / "tools-missing", tmp_path / "missing", runner=runner).run(
-        [_document()], ["What color?"], base_url="http://meter.test", proxy_events=[events[1]]
-    )[0]
+    missing = GBrainAdapter(
+        tmp_path / "tools-missing", tmp_path / "missing", runner=runner, config=_LEGACY_CONFIG
+    ).run([_document()], ["What color?"], base_url="http://meter.test", proxy_events=[events[1]])[0]
     assert missing.cost_status == "COST_INCOMPLETE"
     assert any("METERING_MISSING_PHASE" in warning for warning in missing.warnings)
 
     mismatch = [events[0], {**events[1], "input_tokens": 999}]
     runner = LifecycleRunner(_checkout(tmp_path / "tools-mismatch"))
-    bad = GBrainAdapter(tmp_path / "tools-mismatch", tmp_path / "mismatch", runner=runner).run(
-        [_document()], ["What color?"], base_url="http://meter.test", proxy_events=mismatch
-    )[0]
+    bad = GBrainAdapter(
+        tmp_path / "tools-mismatch", tmp_path / "mismatch", runner=runner, config=_LEGACY_CONFIG
+    ).run([_document()], ["What color?"], base_url="http://meter.test", proxy_events=mismatch)[0]
     assert bad.cost_status == "COST_INCOMPLETE"
     assert any("METERING_USAGE_MISMATCH" in warning for warning in bad.warnings)
 
@@ -228,7 +236,9 @@ def test_missing_provider_is_typed_and_preserves_native_stderr(tmp_path: Path) -
     tools = tmp_path / "tools"
     runner = LifecycleRunner(_checkout(tools), failure="provider")
     with pytest.raises(GBrainMissingProviderError) as caught:
-        GBrainAdapter(tools, tmp_path / "run", runner=runner).run([_document()], ["What color?"])
+        GBrainAdapter(tools, tmp_path / "run", runner=runner, config=_LEGACY_CONFIG).run(
+            [_document()], ["What color?"]
+        )
     assert caught.value.status == "MISSING_PROVIDER"
     assert "OPENAI_API_KEY" in caught.value.stderr
 
@@ -284,6 +294,6 @@ def test_corrupt_think_json_and_model_rejection_remain_failures(tmp_path: Path) 
 
     tools = tmp_path / "tools"
     with pytest.raises(GBrainProcessError, match="corrupt JSON"):
-        GBrainAdapter(tools, tmp_path / "run", runner=BadRunner(_checkout(tools))).run(
-            [_document()], ["question"]
-        )
+        GBrainAdapter(
+            tools, tmp_path / "run", runner=BadRunner(_checkout(tools)), config=_LEGACY_CONFIG
+        ).run([_document()], ["question"])

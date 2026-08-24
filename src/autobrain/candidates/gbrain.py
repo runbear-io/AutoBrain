@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from autobrain.cancellation import RunCancellation
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.models import NormalizedDocument
 from autobrain.retrieval_ids import provenance_map, resolve_retrieved_source_ids
 
@@ -102,6 +103,11 @@ class GBrainResult:
     base_url_supported: bool | None = None
     proxy_events: list[dict[str, Any]] = field(default_factory=list)
     proxy_usage: dict[str, int] | None = None
+    keyword_only: bool = False
+    semantic_enabled: bool = True
+    semantic_quality: str = "configured"
+    recommendation_eligible: bool = False
+    execution_config: dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         result = dict(self.__dict__)
@@ -224,6 +230,19 @@ def document_markdown(document: NormalizedDocument) -> str:
 
 def _directory_size(root: Path) -> int:
     return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+
+
+def _grounded_retrieval_answer(
+    search_evidence: Sequence[Any], query_evidence: Sequence[Any]
+) -> str:
+    for item in (*search_evidence, *query_evidence):
+        if not isinstance(item, dict):
+            continue
+        for key in ("chunk_text", "text", "content", "snippet"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return "No grounded retrieval evidence was returned."
 
 
 @dataclass(frozen=True)
@@ -361,6 +380,7 @@ class GBrainAdapter:
         git: str = "git",
         timeout_seconds: float = 180.0,
         runner: Runner | None = None,
+        config: GBrainExecutionConfig | None = None,
     ) -> None:
         self.tools_root = tools_root.resolve()
         self.run_root = run_root.resolve()
@@ -368,6 +388,7 @@ class GBrainAdapter:
         self.git = git
         self.timeout_seconds = timeout_seconds
         self.runner = runner or _default_runner
+        self.config = config or GBrainExecutionConfig.quick_start()
         self.checkout = self.tools_root / f"gbrain-{GBRAIN_COMMIT}"
         self.home = self.run_root / "gbrain-home"
         self.sources = self.run_root / "sources"
@@ -441,7 +462,7 @@ class GBrainAdapter:
             )
         self._commands.append(result)
         if result.returncode != 0:
-            detail = result.stderr.strip()[-1000:] or result.stdout.strip()[-1000:]
+            detail = self._sanitize(result.stderr.strip()[-1000:] or result.stdout.strip()[-1000:])
             diagnostic = f"{result.stdout}\n{result.stderr}".lower()
             if "openai_api_key" in diagnostic and any(
                 marker in diagnostic
@@ -455,11 +476,23 @@ class GBrainAdapter:
             raise GBrainProcessError(f"GBrain command failed ({result.returncode}): {detail}")
         return result
 
+    def _sanitize(self, value: str) -> str:
+        secrets = [
+            secret.get_secret_value()
+            for secret in (self.config.credential, self.config.chat_credential)
+            if secret is not None
+        ]
+        sanitized = value
+        for secret in secrets:
+            sanitized = sanitized.replace(secret, "[REDACTED]")
+        return sanitized
+
     def _environment(self, base_url: str | None = None) -> dict[str, str]:
+        provider_keys = {"OPENAI_API_KEY", "VOYAGE_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY"}
         env = {
             key: value
             for key, value in os.environ.items()
-            if key not in {"GBRAIN_HOME", "GBRAIN_DATABASE_URL"}
+            if key not in {"GBRAIN_HOME", "GBRAIN_DATABASE_URL", *provider_keys}
             and "HOLDOUT" not in key.upper()
             and "ORACLE" not in key.upper()
             and not any(marker and marker in value for marker in self._holdout_markers)
@@ -467,8 +500,14 @@ class GBrainAdapter:
         env["GBRAIN_HOME"] = str(self.home)
         env["GBRAIN_SKIP_STARTUP_HOOKS"] = "1"
         env["NODE_ENV"] = env.get("NODE_ENV", "production")
-        if base_url:
+        env.update(self.config.child_environment())
+        endpoint = self.config.embedding.endpoint
+        if endpoint:
+            env["GBRAIN_EMBEDDING_BASE_URL"] = endpoint
+        if base_url and self.config.chat_provider == "openai":
             env["OPENAI_BASE_URL"] = base_url
+        if self.config.chat_credential is not None:
+            env["OPENAI_API_KEY"] = self.config.chat_credential.get_secret_value()
         return env
 
     def _cli(self, *args: str) -> tuple[str, ...]:
@@ -516,12 +555,6 @@ class GBrainAdapter:
         self._cancellation = cancellation
         if cancellation is not None:
             cancellation.raise_if_cancelled()
-        if not os.environ.get("OPENAI_API_KEY", "").strip():
-            raise GBrainMissingProviderError(
-                "GBrain requires OPENAI_API_KEY for OpenAI embeddings",
-                stdout="",
-                stderr="OPENAI_API_KEY is required for openai embeddings",
-            )
         if self.run_root.exists() and any(self.run_root.iterdir()):
             raise GBrainIsolationError(f"GBrain run directory is not empty: {self.run_root}")
         self._holdout_markers = tuple(holdout_markers)
@@ -542,17 +575,27 @@ class GBrainAdapter:
         self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.prepare_sources(documents, holdout_markers)
         gold_sources = provenance_map(documents)
-        self._run_cli(
-            "init",
-            "--pglite",
-            "--non-interactive",
-            "--embedding-model",
-            EMBEDDING_MODEL,
-            "--chat-model",
-            THINK_MODEL,
-            "--json",
-            base_url=base_url,
-        )
+        init_args = ["init", "--pglite", "--non-interactive"]
+        if self.config.keyword_only:
+            init_args.append("--quickstart")
+        else:
+            embedding = self.config.embedding
+            assert embedding.model is not None
+            assert embedding.dimensions is not None
+            init_args.extend(
+                [
+                    "--embedding-provider",
+                    embedding.provider.value,
+                    "--embedding-model",
+                    embedding.model,
+                    "--embedding-dimensions",
+                    str(embedding.dimensions),
+                ]
+            )
+        if self.config.chat_provider == "openai" and self.config.chat_model:
+            init_args.extend(["--chat-model", self.config.chat_model])
+        init_args.append("--json")
+        self._run_cli(*init_args, base_url=base_url)
         self._run_cli("import", str(self.sources), "--json", base_url=base_url)
         try:
             self._run_cli(
@@ -571,29 +614,29 @@ class GBrainAdapter:
                 "SYNC_UNAVAILABLE: native sync requires a pre-existing git HEAD; "
                 "import remains authoritative"
             )
-        self._run_cli(
-            "dream",
-            "--json",
-            "--dir",
-            str(self.sources),
-            base_url=base_url,
-        )
         status = self._run_cli("status", "--json", base_url=base_url)
         status_json = parse_json_output(status.stdout)
         results: list[GBrainResult] = []
         for question_index, question in enumerate(questions):
             started = time.monotonic()
             search = self._run_cli("search", question, "--json", base_url=base_url)
-            query = self._run_cli("query", question, "--json", base_url=base_url)
-            think = self._run_cli(
-                "think", question, "--model", THINK_MODEL, "--json", base_url=base_url
-            )
-            native_value = parse_json_output(think.stdout)
-            if not isinstance(native_value, dict):
-                raise GBrainProcessError("GBrain think JSON is not an object")
-            native = cast(dict[str, Any], native_value)
             search_json = parse_json_output(search.stdout)
-            query_json = parse_json_output(query.stdout)
+            query: CommandResult | None = None
+            query_json: Any = []
+            if self.config.semantic_enabled:
+                query = self._run_cli("query", question, "--json", base_url=base_url)
+                query_json = parse_json_output(query.stdout)
+            think: CommandResult | None = None
+            native: dict[str, Any] = {}
+            if self.config.chat_provider == "openai" and self.config.chat_credential is not None:
+                think_model = self.config.chat_model or THINK_MODEL
+                think = self._run_cli(
+                    "think", question, "--model", think_model, "--json", base_url=base_url
+                )
+                native_value = parse_json_output(think.stdout)
+                if not isinstance(native_value, dict):
+                    raise GBrainProcessError("GBrain think JSON is not an object")
+                native = cast(dict[str, Any], native_value)
             usage_value = native.get("usage")
             if isinstance(usage_value, dict):
                 usage_object = cast(dict[str, Any], usage_value)
@@ -648,9 +691,12 @@ class GBrainAdapter:
                 )
             if base_url is not None and not base_url_supported:
                 metering_status = "COST_INCOMPLETE"
+            grounded_answer = str(native.get("answer", "")) or _grounded_retrieval_answer(
+                search_evidence, query_evidence
+            )
             result = GBrainResult(
                 status="OK",
-                answer=str(native.get("answer", "")),
+                answer=grounded_answer,
                 evidence=citations,
                 search_evidence=search_evidence,
                 query_evidence=query_evidence,
@@ -663,8 +709,8 @@ class GBrainAdapter:
                 cost_usd=metering.cost_usd if metering.cost_usd is not None else native_cost,
                 timings_ms={
                     "search": search.elapsed_ms,
-                    "query": query.elapsed_ms,
-                    "think": think.elapsed_ms,
+                    "query": query.elapsed_ms if query is not None else 0,
+                    "think": think.elapsed_ms if think is not None else 0,
                     "total_query": round((time.monotonic() - started) * 1000),
                 },
                 warnings=self._lifecycle_warnings
@@ -694,12 +740,18 @@ class GBrainAdapter:
                     "query": query_json,
                     "think": native,
                     "status": status_json,
+                    "execution_config": self.config.safe_metadata(),
                 },
                 commands=list(self._commands),
                 cost_status=metering_status,
                 base_url_supported=base_url_supported,
                 proxy_events=metering.events,
                 proxy_usage=metering.usage,
+                keyword_only=self.config.keyword_only,
+                semantic_enabled=self.config.semantic_enabled,
+                semantic_quality=("not_measured" if self.config.keyword_only else "configured"),
+                recommendation_eligible=self.config.recommendation_eligible,
+                execution_config=self.config.safe_metadata(),
             )
             results.append(result)
         return results

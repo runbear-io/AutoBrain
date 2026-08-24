@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from autobrain.candidates.gbrain import (
-    EMBEDDING_MODEL,
     GBRAIN_COMMIT,
     GBRAIN_VERSION,
     THINK_MODEL,
@@ -19,6 +18,7 @@ from autobrain.candidates.gbrain import (
     document_markdown,
     parse_json_output,
 )
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.models import NormalizedDocument, SourceKind
 from autobrain.retrieval_ids import document_slug
 
@@ -104,7 +104,14 @@ def test_adapter_uses_exact_pin_frozen_bun_and_native_surfaces(tmp_path: Path) -
     tools = tmp_path / "tools"
     checkout = fake_checkout(tools)
     runner = FakeRunner(checkout)
-    adapter = GBrainAdapter(tools, tmp_path / "run", runner=runner)
+    adapter = GBrainAdapter(
+        tools,
+        tmp_path / "run",
+        runner=runner,
+        config=GBrainExecutionConfig.semantic(
+            "openai", credential="test-key", chat_credential="test-key"
+        ),
+    )
 
     results = adapter.run([document()], ["When is launch?"], base_url="http://127.0.0.1:9999")
 
@@ -116,13 +123,12 @@ def test_adapter_uses_exact_pin_frozen_bun_and_native_surfaces(tmp_path: Path) -
         "init",
         "import",
         "sync",
-        "dream",
         "status",
         "search",
         "query",
         "think",
     ]
-    assert EMBEDDING_MODEL in cli[0]
+    assert "text-embedding-3-small" in cli[0]
     assert THINK_MODEL in cli[0]
     assert cli[-1][-3:] == ("--model", THINK_MODEL, "--json")
     assert all(call[2]["GBRAIN_HOME"] == str(adapter.home) for call in runner.calls)
@@ -155,9 +161,14 @@ def test_missing_usage_and_cost_are_explicitly_incomplete(tmp_path: Path) -> Non
             "warnings": ["USAGE_UNAVAILABLE"],
         },
     )
-    result = GBrainAdapter(tools, tmp_path / "run", runner=runner).run([document()], ["question"])[
-        0
-    ]
+    result = GBrainAdapter(
+        tools,
+        tmp_path / "run",
+        runner=runner,
+        config=GBrainExecutionConfig.semantic(
+            "openai", credential="test-key", chat_credential="test-key"
+        ),
+    ).run([document()], ["question"])[0]
     assert result.usage is None
     assert result.cost_usd is None
     assert result.cost_status == "COST_INCOMPLETE"
@@ -223,7 +234,14 @@ def test_model_rejection_is_contained_and_no_personal_surfaces_exist(tmp_path: P
             output = '{"version":"0.46.19.0"}'
         return CommandResult(tuple(command), 0, output, "", 1)
 
-    adapter = GBrainAdapter(tools, tmp_path / "run", runner=reject)
+    adapter = GBrainAdapter(
+        tools,
+        tmp_path / "run",
+        runner=reject,
+        config=GBrainExecutionConfig.semantic(
+            "openai", credential="test-key", chat_credential="test-key"
+        ),
+    )
     with pytest.raises(GBrainProcessError, match="model not usable"):
         adapter.run([document()], ["question"])
     commands = " ".join(part for command in seen for part in command)

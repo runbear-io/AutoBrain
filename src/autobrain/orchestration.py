@@ -26,6 +26,7 @@ from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
 from autobrain.benchmark import LeakageScanResult, scan_benchmark_leakage
 from autobrain.cancellation import RunCancellation, RunCancelled
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.corpus import normalize_raw_items
 from autobrain.decision import eligibility_reasons, select_winner
 from autobrain.embedding import (
@@ -252,6 +253,9 @@ class RunConfig:
     notion_snapshot_path: Path | None = None
     experiment_title: str = ""
     experiment_description: str = ""
+    gbrain_config: GBrainExecutionConfig = field(
+        default_factory=GBrainExecutionConfig.quick_start, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.budget_usd <= 0:
@@ -351,6 +355,7 @@ def _default_candidate_builder(
     budget_usd: float,
     provider_upstream: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     candidate_ids: tuple[CandidateId, ...] = tuple(CandidateId),
+    gbrain_config: GBrainExecutionConfig | None = None,
 ) -> Sequence[Candidate]:
     from autobrain.production import build_production_candidates
 
@@ -360,6 +365,7 @@ def _default_candidate_builder(
         budget_usd=budget_usd,
         provider_upstream=provider_upstream,
         candidate_ids=candidate_ids,
+        gbrain_config=gbrain_config,
     )
 
 
@@ -589,6 +595,7 @@ class RunOrchestrator:
                     budget_usd,
                     provider_upstream=subscription_upstream,
                     candidate_ids=config.selected_candidates,
+                    gbrain_config=config.gbrain_config,
                 )
 
         else:
@@ -794,6 +801,7 @@ class RunOrchestrator:
                 ],
                 "experiment_title": self.config.experiment_title,
                 "experiment_description": self.config.experiment_description,
+                "gbrain": self.config.gbrain_config.safe_metadata(),
             },
             "stages": self._stages,
             "commands": self._ledger,
@@ -1019,9 +1027,7 @@ class RunOrchestrator:
                         "eligibility_reasons": [
                             *eligibility_reasons(
                                 evaluation.model_copy(
-                                    update={"eligible_override": False}
-                                    if coverage_reasons
-                                    else {}
+                                    update={"eligible_override": False} if coverage_reasons else {}
                                 ),
                                 embedding=self._embedding_descriptor,
                                 embedding_registry=self.config.embedding_registry,
@@ -1766,9 +1772,23 @@ class RunOrchestrator:
                     observation.latency_ms for observation in outcome.observations
                 ),
             )
+            execution_config = outcome.artifact.get("execution_config")
+            keyword_only = (
+                isinstance(execution_config, Mapping)
+                and execution_config.get("keyword_only") is True
+            )
             if outcome.status is not Status.OK:
                 evaluation = evaluation.model_copy(
                     update={"status": outcome.status, "eligible_override": False}
+                )
+            elif keyword_only:
+                evaluation = evaluation.model_copy(
+                    update={
+                        "eligible_override": False,
+                        "eligibility_reasons": [
+                            "GBrain keyword-only retrieval has no measured semantic quality"
+                        ],
+                    }
                 )
             elif missing_identity:
                 evaluation = evaluation.model_copy(

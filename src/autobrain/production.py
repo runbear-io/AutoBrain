@@ -28,6 +28,7 @@ from autobrain.candidates.gbrain import (
     GBrainMissingProviderError,
     GBrainProcessError,
 )
+from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.candidates.llm_wiki import LLMWikiAdapter, LLMWikiConfig, LLMWikiRunResult
 from autobrain.candidates.mem0 import (
     Mem0Adapter,
@@ -663,6 +664,7 @@ class GBrainCandidate:
             scored_cases=len(queries),
             cost_usd=total_cost,
             artifact={
+                "execution_config": self.adapter.config.safe_metadata(),
                 "pin": {
                     "version": "0.46.19.0",
                     "commit": "f49ca569232dbc0d8e0783d84606115e3bfe5ab1",
@@ -702,6 +704,7 @@ def build_production_candidates(
     budget_usd: float = 25.0,
     provider_upstream: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     candidate_ids: Sequence[CandidateId] = tuple(CandidateId),
+    gbrain_config: GBrainExecutionConfig | None = None,
 ) -> tuple[Candidate, ...]:
     if not api_key:
         raise ValueError("MISSING_PROVIDER: OPENAI_API_KEY is unavailable")
@@ -751,6 +754,7 @@ def build_production_candidates(
             GBrainAdapter(
                 tools_root=state.tools,
                 run_root=native_root / "gbrain",
+                config=gbrain_config or GBrainExecutionConfig.quick_start(),
             ),
             base_url=proxies[CandidateId.GBRAIN].base_url,
             metering_proxy=proxies[CandidateId.GBRAIN],
