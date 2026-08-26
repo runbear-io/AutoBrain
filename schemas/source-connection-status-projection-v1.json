@@ -1,0 +1,90 @@
+{
+  "$defs": {
+    "SourceConnectionState": {
+      "enum": [
+        "REQUESTED",
+        "CLAIMED",
+        "AWAITING_LOCAL_INPUT",
+        "AUTHORIZING",
+        "VALIDATING",
+        "READY",
+        "FAILED",
+        "EXPIRED",
+        "CANCELLED"
+      ],
+      "title": "SourceConnectionState",
+      "type": "string"
+    },
+    "SourceProvider": {
+      "enum": [
+        "slack",
+        "notion",
+        "confluence",
+        "google_drive",
+        "sharepoint"
+      ],
+      "title": "SourceProvider",
+      "type": "string"
+    },
+    "SourceTransportMode": {
+      "enum": [
+        "export_archive",
+        "live_mcp_oauth",
+        "oauth_3lo_rest",
+        "oauth_rest",
+        "graph_oauth_preview"
+      ],
+      "title": "SourceTransportMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "credential_present": {
+      "title": "Credential Present",
+      "type": "boolean"
+    },
+    "diagnostics": {
+      "items": {
+        "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$",
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    },
+    "mode": {
+      "$ref": "#/$defs/SourceTransportMode"
+    },
+    "provider": {
+      "$ref": "#/$defs/SourceProvider"
+    },
+    "ready": {
+      "title": "Ready",
+      "type": "boolean"
+    },
+    "request_id": {
+      "format": "uuid",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "state": {
+      "$ref": "#/$defs/SourceConnectionState"
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "provider",
+    "mode",
+    "state",
+    "ready",
+    "credential_present"
+  ],
+  "title": "SourceConnectionStatusProjectionV1",
+  "type": "object"
+}

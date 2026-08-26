@@ -202,6 +202,20 @@ def _redact_value(value: object, *, key: str | None = None) -> object:
     return value
 
 
+def redact_text(value: str) -> str:
+    """Redact secrets and oracle references in free text.
+
+    Exposed so other surfaces (notably the local HTTP boundary) redact through
+    exactly this pipeline instead of maintaining a second set of patterns.
+    """
+    return _redact_string(value)
+
+
+def redact_payload(payload: object) -> object:
+    """Recursively redact an already-serialized JSON-compatible payload."""
+    return _redact_value(payload)
+
+
 def _redact_artifact(artifact: ComparisonArtifact) -> ComparisonArtifact:
     payload = cast(dict[str, object], _redact_value(artifact.model_dump(mode="json")))
     return ComparisonArtifact.model_validate_json(json.dumps(payload), strict=True)
@@ -228,6 +242,9 @@ def _candidate_card(candidate: CandidateEvaluation) -> str:
     )
     workspace = candidate.workspace_bytes if candidate.workspace_bytes is not None else "unknown"
     burden = candidate.operating_burden if candidate.operating_burden is not None else "unknown"
+    native = candidate.native_result
+    backend = native.backend.name if native is not None else "unavailable"
+    capability = native.capability.value if native is not None else "unavailable"
     return f"""
       <article class="candidate-card">
         <h3>{_escape(candidate.candidate.value)}</h3>
@@ -242,6 +259,8 @@ def _candidate_card(candidate: CandidateEvaluation) -> str:
           <div><dt>Source support</dt><dd>{candidate.source_support_rate * 100:.1f}%</dd></div>
           <div><dt>Cost</dt><dd>{_escape(cost)}</dd></div>
           <div><dt>Query latency</dt><dd>{_escape(latency)}</dd></div>
+          <div><dt>Backend</dt><dd>{_escape(backend)}</dd></div>
+          <div><dt>Capability</dt><dd>{_escape(capability)}</dd></div>
           <div><dt>Workspace</dt><dd>
             {workspace} bytes
           </dd></div>
@@ -291,6 +310,15 @@ def render_report(artifact: ComparisonArtifact) -> str:
         f"<li><code>{_escape(source.source)}</code>: "
         f"<code>{_escape(source.mutability.value)}</code></li>"
         for source in artifact.provenance.sources
+    )
+    integration_provenance = "".join(
+        f"<li><code>{_escape(item.id)}</code>: "
+        f"<code>{_escape(item.status.value)}</code>, "
+        f"<code>{_escape(item.reuse.value)}</code>, "
+        f"backend <code>{_escape(item.backend)}</code>, "
+        f"auth <code>{_escape(item.auth_kind)}</code>, "
+        f"capabilities <code>{_escape(', '.join(item.capabilities) or 'none')}</code></li>"
+        for item in artifact.provenance.integrations
     )
     latency_spans = "".join(
         f"<li><code>{_escape(span.name.value)}</code>"
@@ -397,6 +425,8 @@ def render_report(artifact: ComparisonArtifact) -> str:
         </dl></div>
         <div><p class="muted">Source mutability</p>
           <ul>{source_provenance or "<li>unavailable</li>"}</ul>
+        <p class="muted">Integration provenance</p>
+          <ul>{integration_provenance or "<li>unavailable</li>"}</ul>
         <p class="muted">Named latency spans</p>
           <ul>{latency_spans or "<li>unavailable</li>"}</ul></div>
       </div></section>

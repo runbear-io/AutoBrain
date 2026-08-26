@@ -84,6 +84,7 @@ class Status(StrEnum):
     OK = "OK"
     ENV_UNAVAILABLE = "ENV_UNAVAILABLE"
     MISSING_PROVIDER = "MISSING_PROVIDER"
+    UNSUPPORTED = "UNSUPPORTED"
     MCP_AUTH_UNAVAILABLE = "MCP_AUTH_UNAVAILABLE"
     CAPABILITY_UNAVAILABLE = "CAPABILITY_UNAVAILABLE"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
@@ -106,6 +107,8 @@ class SourceKind(StrEnum):
     SLACK_FILE = "SLACK_FILE"
     NOTION_PAGE = "NOTION_PAGE"
     NOTION_DATA_SOURCE = "NOTION_DATA_SOURCE"
+    CONFLUENCE_PAGE = "CONFLUENCE_PAGE"
+    GOOGLE_DRIVE_FILE = "GOOGLE_DRIVE_FILE"
 
 
 class McpCapability(StrEnum):
@@ -218,6 +221,25 @@ class EmbeddingQuality(StrEnum):
     SMOKE_ONLY = "smoke_only"
 
 
+class NativeMode(StrEnum):
+    KEYWORD_ONLY = "keyword_only"
+    SEMANTIC = "semantic"
+    SMOKE = "smoke"
+
+
+class CapabilityClass(StrEnum):
+    RETRIEVAL_ONLY = "retrieval_only"
+    RETRIEVAL_AND_ANSWER = "retrieval_and_answer"
+
+
+class EvidenceStatus(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    SMOKE = "smoke"
+    UNAVAILABLE = "unavailable"
+    INVALID = "invalid"
+
+
 class UsageSource(StrEnum):
     MEASURED = "measured"
     ESTIMATED = "estimated"
@@ -255,6 +277,58 @@ class SourceProvenance(StrictModel):
     mutability: SourceMutability
 
 
+class BackendIdentity(StrictModel):
+    name: str = Field(min_length=1)
+    version: str | None = Field(default=None, min_length=1)
+    commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+
+
+class CorpusIdentity(StrictModel):
+    sha256: Sha256
+    document_count: int = Field(ge=0)
+
+
+class NativeCandidateResult(StrictModel):
+    """Typed, diagnostic contract for a candidate's native execution result."""
+
+    candidate: CandidateId
+    mode: NativeMode
+    backend: BackendIdentity
+    capability: CapabilityClass
+    evidence_status: EvidenceStatus
+    corpus: CorpusIdentity | None = None
+    recommendation_eligible: bool = False
+    eligibility_reasons: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> "NativeCandidateResult":
+        expected_backend = {
+            CandidateId.GBRAIN: "gbrain",
+            CandidateId.LLM_WIKI: "llm-wiki-compiler",
+            CandidateId.MEM0: "mem0ai",
+        }[self.candidate]
+        if self.backend.name != expected_backend:
+            raise ValueError(
+                f"backend {self.backend.name!r} is not allowed for {self.candidate.value}"
+            )
+        if self.candidate is not CandidateId.GBRAIN and self.mode is not NativeMode.SEMANTIC:
+            raise ValueError(f"{self.candidate.value} only supports semantic mode")
+        if self.mode is NativeMode.KEYWORD_ONLY:
+            if self.capability is not CapabilityClass.RETRIEVAL_ONLY:
+                raise ValueError("keyword_only mode must use retrieval_only capability")
+            if self.recommendation_eligible:
+                raise ValueError("keyword_only mode cannot be recommendation eligible")
+        if self.evidence_status is not EvidenceStatus.COMPLETE and self.recommendation_eligible:
+            raise ValueError("incomplete native evidence cannot be recommendation eligible")
+        if self.capability is CapabilityClass.RETRIEVAL_ONLY and self.recommendation_eligible:
+            raise ValueError("retrieval_only capability cannot be recommendation eligible")
+        if self.recommendation_eligible and self.eligibility_reasons:
+            raise ValueError("eligible native result must not have eligibility_reasons")
+        if not self.recommendation_eligible and not self.eligibility_reasons:
+            raise ValueError("ineligible native result requires eligibility_reasons")
+        return self
+
+
 class LatencySpan(StrictModel):
     name: LatencySpanKind
     duration_ms: float | None = Field(default=None, ge=0)
@@ -267,12 +341,79 @@ class LatencySpan(StrictModel):
         return self
 
 
+class IntegrationReuse(StrEnum):
+    DIRECT_REUSE = "direct_reuse"
+    PROTOCOL_REUSE = "protocol_reuse"
+    THIN_ADAPTER = "thin_adapter"
+    GATED = "gated"
+
+
+class IntegrationStatus(StrEnum):
+    CURRENT = "current"
+    GATED = "gated"
+
+
+class IntegrationProvenance(StrictModel):
+    id: str = Field(min_length=1)
+    provider: str | None = Field(default=None, min_length=1)
+    source: str | None = Field(default=None, min_length=1)
+    backend: str = Field(min_length=1)
+    version: str | None = Field(default=None, min_length=1)
+    license: str | None = Field(default=None, min_length=1)
+    auth_kind: str = Field(min_length=1)
+    capabilities: tuple[str, ...]
+    usage_provenance: str = Field(min_length=1)
+    reuse: IntegrationReuse
+    status: IntegrationStatus
+    evidence: str = Field(min_length=1)
+
+
+class DesignPartnerGateEvidence(StrictModel):
+    """Machine-readable typed refusal for a design-partner integration gate.
+
+    Every boolean field defaults to ``False`` because the gate is fail-closed:
+    absent evidence is recorded as ``False``, never inferred or guessed.  The
+    model validator enforces that a closed gate cannot be recommendation
+    eligible.
+    """
+
+    integration_id: str = Field(min_length=1)
+    design_partner_evidence: bool = False
+    verified_license: bool = False
+    public_api: bool = False
+    runtime_proof: bool = False
+    acl_proof: bool = False
+    resource_proof: bool = False
+    network_proof: bool = False
+    teardown_proof: bool = False
+    recommendation_eligible: bool = False
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def closed_gate_is_not_eligible(self) -> "DesignPartnerGateEvidence":
+        if not self.recommendation_eligible:
+            return self
+        if not (
+            self.design_partner_evidence
+            and self.verified_license
+            and self.public_api
+            and self.runtime_proof
+            and self.acl_proof
+            and self.resource_proof
+            and self.network_proof
+            and self.teardown_proof
+        ):
+            raise ValueError("recommendation_eligible requires all evidence fields to be true")
+        return self
+
+
 class BenchmarkProvenance(StrictModel):
     chat: ChatProvenance = Field(default_factory=ChatProvenance)
     embedding: EmbeddingProvenance = Field(default_factory=EmbeddingProvenance)
     usage_source: UsageSource = UsageSource.UNAVAILABLE
     sources: list[SourceProvenance] = Field(default_factory=list)
     latency_spans: list[LatencySpan] = Field(default_factory=list)
+    integrations: list["IntegrationProvenance"] = Field(default_factory=list)
 
 
 class RunHashes(StrictModel):
@@ -392,6 +533,7 @@ class CandidateEvaluation(StrictModel):
     partial_failures: int = Field(ge=0, default=0)
     eligibility_reasons: list[str] = Field(default_factory=list)
     eligible_override: bool | None = None
+    native_result: NativeCandidateResult | None = None
 
     @model_validator(mode="after")
     def complete_cost_has_a_value(self) -> "CandidateEvaluation":
@@ -399,6 +541,15 @@ class CandidateEvaluation(StrictModel):
             raise ValueError("COST_COMPLETE requires total_cost_usd")
         if self.cost_status is not CostStatus.COMPLETE and self.total_cost_usd is not None:
             raise ValueError("incomplete or unavailable cost must not expose a total")
+        if self.native_result is not None:
+            if self.native_result.candidate is not self.candidate:
+                raise ValueError("native_result candidate must match evaluation candidate")
+            if (
+                self.corpus_hash is not None
+                and self.native_result.corpus is not None
+                and self.native_result.corpus.sha256 != self.corpus_hash
+            ):
+                raise ValueError("native_result corpus must match evaluation corpus")
         return self
 
 

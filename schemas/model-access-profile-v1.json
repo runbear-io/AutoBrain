@@ -1,0 +1,86 @@
+{
+  "$defs": {
+    "ModelAccessMode": {
+      "enum": [
+        "provider_api_byok",
+        "subscription_cli",
+        "local_openai_compatible"
+      ],
+      "title": "ModelAccessMode",
+      "type": "string"
+    },
+    "ModelCapabilityStatus": {
+      "enum": [
+        "READY",
+        "UNAVAILABLE",
+        "METERING_INCOMPLETE",
+        "NOT_CONFIGURED"
+      ],
+      "title": "ModelCapabilityStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Truthful, secret-free capability status for one model access mode.",
+  "properties": {
+    "chat": {
+      "$ref": "#/$defs/ModelCapabilityStatus"
+    },
+    "diagnostics": {
+      "items": {
+        "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$",
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    },
+    "embeddings": {
+      "$ref": "#/$defs/ModelCapabilityStatus"
+    },
+    "keyword_only": {
+      "default": false,
+      "title": "Keyword Only",
+      "type": "boolean"
+    },
+    "metering": {
+      "enum": [
+        "COST_COMPLETE",
+        "COST_INCOMPLETE",
+        "COST_UNAVAILABLE"
+      ],
+      "title": "Metering",
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/ModelAccessMode"
+    },
+    "recommendation_eligible": {
+      "default": false,
+      "title": "Recommendation Eligible",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "smoke_only_hash": {
+      "default": false,
+      "title": "Smoke Only Hash",
+      "type": "boolean"
+    },
+    "verifier": {
+      "$ref": "#/$defs/ModelCapabilityStatus"
+    }
+  },
+  "required": [
+    "schema_version",
+    "mode",
+    "chat",
+    "embeddings",
+    "verifier",
+    "metering"
+  ],
+  "title": "ModelAccessProfileV1",
+  "type": "object"
+}

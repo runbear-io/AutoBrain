@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "SourceOAuthAppV1": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "minLength": 1,
+          "title": "Client Id",
+          "type": "string"
+        },
+        "client_secret_ref": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Secret Ref"
+        },
+        "mode": {
+          "$ref": "#/$defs/SourceTransportMode"
+        },
+        "provider": {
+          "$ref": "#/$defs/SourceProvider"
+        },
+        "redirect_uri": {
+          "title": "Redirect Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "mode",
+        "client_id",
+        "redirect_uri"
+      ],
+      "title": "SourceOAuthAppV1",
+      "type": "object"
+    },
+    "SourceProvider": {
+      "enum": [
+        "slack",
+        "notion",
+        "confluence",
+        "google_drive",
+        "sharepoint"
+      ],
+      "title": "SourceProvider",
+      "type": "string"
+    },
+    "SourceTransportMode": {
+      "enum": [
+        "export_archive",
+        "live_mcp_oauth",
+        "oauth_3lo_rest",
+        "oauth_rest",
+        "graph_oauth_preview"
+      ],
+      "title": "SourceTransportMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "apps": {
+      "items": {
+        "$ref": "#/$defs/SourceOAuthAppV1"
+      },
+      "title": "Apps",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "apps"
+  ],
+  "title": "SourceOAuthAppConfigV1",
+  "type": "object"
+}

@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "ModelAccessMode": {
+      "enum": [
+        "provider_api_byok",
+        "subscription_cli",
+        "local_openai_compatible"
+      ],
+      "title": "ModelAccessMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "chat_ready": {
+      "title": "Chat Ready",
+      "type": "boolean"
+    },
+    "diagnostics": {
+      "items": {
+        "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$",
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    },
+    "embeddings_ready": {
+      "title": "Embeddings Ready",
+      "type": "boolean"
+    },
+    "metering_status": {
+      "enum": [
+        "COST_COMPLETE",
+        "COST_INCOMPLETE",
+        "COST_UNAVAILABLE"
+      ],
+      "title": "Metering Status",
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/ModelAccessMode"
+    },
+    "recommendation_eligible": {
+      "title": "Recommendation Eligible",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "verifier_ready": {
+      "title": "Verifier Ready",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "mode",
+    "chat_ready",
+    "embeddings_ready",
+    "verifier_ready",
+    "metering_status",
+    "recommendation_eligible"
+  ],
+  "title": "ModelAccessStatusProjectionV1",
+  "type": "object"
+}
