@@ -8,8 +8,10 @@ from typer.testing import CliRunner
 
 import autobrain.source_cli as source_cli
 from autobrain.auth.models import Provider, TokenRecord
+from autobrain.auth.service import ConnectionManager
 from autobrain.auth.storage import TokenStore
 from autobrain.cli import app
+from tests.auth.fakes import MemoryKeyring
 
 
 def test_auth_cli_exposes_exact_provider_status_and_logout_commands() -> None:
@@ -24,9 +26,49 @@ def test_auth_status_json_reports_both_sources_without_tokens(tmp_path: Path) ->
     result = CliRunner().invoke(app, ["auth", "status", "--json"], env={"HOME": str(tmp_path)})
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert [item["provider"] for item in payload["connections"]] == ["slack", "notion"]
+    assert [item["provider"] for item in payload["connections"]] == [
+        "slack",
+        "notion",
+        "confluence",
+        "google_drive",
+        "sharepoint",
+    ]
     assert all(item["state"] == "DISCONNECTED" for item in payload["connections"])
+    assert {item["provider"] for item in payload["projections"]} == {
+        "slack",
+        "notion",
+        "confluence",
+        "google_drive",
+        "sharepoint",
+    }
+    assert all(item["ready"] is False for item in payload["projections"])
+    assert [item["status"] for item in payload["connections"][-3:]] == [
+        "CAPABILITY_UNAVAILABLE"
+    ] * 3
     assert "token" not in result.stdout.lower()
+
+
+def test_auth_status_projection_marks_valid_token_ready_without_token_values(
+    tmp_path: Path,
+) -> None:
+    store = TokenStore(tmp_path / "auth", backend=MemoryKeyring())
+    store.save(
+        TokenRecord(
+            provider=Provider.SLACK,
+            workspace_id="workspace",
+            user_id="user",
+            audience="https://mcp.slack.com/mcp",
+            access_token=SecretStr("access-secret"),
+        )
+    )
+
+    report = ConnectionManager(tmp_path, store=store).status()
+
+    projection = next(item for item in report.projections if item.provider.value == "slack")
+    assert projection.state.value == "READY"
+    assert projection.ready is True
+    assert projection.credential_present is True
+    assert "access-secret" not in report.model_dump_json()
 
 
 def test_initial_authorization_emits_degraded_storage_warning(

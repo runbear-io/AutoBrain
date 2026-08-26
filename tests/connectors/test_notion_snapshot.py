@@ -97,7 +97,7 @@ def test_snapshot_allows_security_documentation_and_normalizes_placeholders(
     )
 
     store.import_snapshot(incoming)
-    document = NotionSnapshotConnector(store.snapshot_path).crawl(include_dms=False).documents[0]
+    document = NotionSnapshotConnector(store.snapshot_path).crawl().documents[0]
 
     assert "OAuth clients use API keys and bearer tokens" in document["text"]
     assert "secrets or passwords" in document["text"]
@@ -190,7 +190,7 @@ def test_snapshot_rejects_traversal_symlink_duplicates_oversize_and_mutation_met
     connector = NotionSnapshotConnector(store.snapshot_path)
     assert (
         "prompt-like source instructions preserved as inert data"
-        in connector.crawl(include_dms=False).documents[0]["warnings"]
+        in connector.crawl().documents[0]["warnings"]
     )
 
     oversized_document = tmp_path / "oversized-document.json"
@@ -229,4 +229,4 @@ def test_production_prefers_snapshot_without_notions_oauth(tmp_path: Path) -> No
 
     assert isinstance(connectors[0], NotionSnapshotConnector)
     assert connectors[0].probe()["capability_available"] is True
-    assert connectors[0].crawl(include_dms=False).coverage["completeness"] == "UNKNOWN"
+    assert connectors[0].crawl().coverage["completeness"] == "UNKNOWN"

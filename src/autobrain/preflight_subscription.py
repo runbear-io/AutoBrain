@@ -24,7 +24,7 @@ def check_subscription_provider(
         report = provider_registry().probe(provider, refresh=True)
         return CheckResult(
             name=check_name,
-            status=Status.MISSING_PROVIDER,
+            status=Status.UNSUPPORTED,
             detail=f"{report.status.value}: {report.detail}",
         )
     executable_name = provider.value

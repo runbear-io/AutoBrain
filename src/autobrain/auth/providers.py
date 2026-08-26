@@ -52,19 +52,84 @@ SLACK_SCOPES = (
 @dataclass(frozen=True)
 class ProviderConfig:
     provider: Provider
-    resource: str
+    resource: str | None
     scopes: tuple[str, ...]
     allowlist: frozenset[str]
     dynamic_registration: bool
     fixed_client: bool
+    required_tool_groups: tuple[frozenset[str], ...] = ()
+    supported: bool = True
+    detail: str = ""
+    remediation: str = ""
 
 
+_UNSUPPORTED_DETAIL = "live OAuth connector is not implemented"
+_UNSUPPORTED_REMEDIATION = (
+    "No verified official MCP connector exists for this source. "
+    "AutoBrain will not implement custom OAuth or accept API-key/proxy auth. "
+    "Wait for a verified connector or import a local fixture/snapshot instead."
+)
+
+
+# This is the authoritative provider table. Unsupported entries are deliberate:
+# they make configuration and readiness truthful without adding live integrations.
 CONFIGS = {
-    Provider.NOTION: ProviderConfig(
-        Provider.NOTION, NOTION_RESOURCE, ("read_content",), NOTION_READ_TOOLS, True, False
-    ),
     Provider.SLACK: ProviderConfig(
-        Provider.SLACK, SLACK_RESOURCE, SLACK_SCOPES, SLACK_READ_TOOLS, False, True
+        Provider.SLACK,
+        SLACK_RESOURCE,
+        SLACK_SCOPES,
+        SLACK_READ_TOOLS,
+        False,
+        True,
+        (
+            frozenset({"slack-channel-list", "slack_channels_list"}),
+            frozenset({"slack-channel-history", "slack_channel_history"}),
+        ),
+    ),
+    Provider.NOTION: ProviderConfig(
+        Provider.NOTION,
+        NOTION_RESOURCE,
+        ("read_content",),
+        NOTION_READ_TOOLS,
+        True,
+        False,
+        (
+            frozenset({"notion-search", "notion_search"}),
+            frozenset({"notion-fetch", "notion_fetch"}),
+        ),
+    ),
+    Provider.CONFLUENCE: ProviderConfig(
+        Provider.CONFLUENCE,
+        None,
+        (),
+        frozenset(),
+        False,
+        False,
+        supported=False,
+        detail=_UNSUPPORTED_DETAIL,
+        remediation=_UNSUPPORTED_REMEDIATION,
+    ),
+    Provider.GOOGLE_DRIVE: ProviderConfig(
+        Provider.GOOGLE_DRIVE,
+        None,
+        (),
+        frozenset(),
+        False,
+        False,
+        supported=False,
+        detail=_UNSUPPORTED_DETAIL,
+        remediation=_UNSUPPORTED_REMEDIATION,
+    ),
+    Provider.SHAREPOINT: ProviderConfig(
+        Provider.SHAREPOINT,
+        None,
+        (),
+        frozenset(),
+        False,
+        False,
+        supported=False,
+        detail=_UNSUPPORTED_DETAIL,
+        remediation=_UNSUPPORTED_REMEDIATION,
     ),
 }
 

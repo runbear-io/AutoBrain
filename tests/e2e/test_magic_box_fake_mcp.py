@@ -9,6 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from autobrain.auth.models import Provider
+from autobrain.cancellation import RunCancellation
 from autobrain.cli import app
 from autobrain.models import CandidateId, CandidateObservation, SourceKind, Status
 from autobrain.orchestration import (
@@ -47,13 +48,12 @@ class FakeConnector:
         self.probe_calls = 0
         self.crawl_calls = 0
 
-    def probe(self) -> dict[str, Any]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, Any]:
         self.probe_calls += 1
         return {"advertised": ["search", "fetch"], "allowed": ["search", "fetch"]}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         self.crawl_calls += 1
-        del include_dms
         return ConnectorSnapshot(
             provider=self.provider,
             documents=self.records,
@@ -329,12 +329,12 @@ def test_insufficient_benchmark_is_typed_and_candidates_do_not_start(tmp_path: P
 def test_unknown_notion_and_partial_rate_limit_coverage_survive_report(tmp_path: Path) -> None:
     records = _documents()
     connectors = [FakeConnector("slack", records), FakeConnector("notion", records)]
-    connectors[0].crawl = lambda *, include_dms: ConnectorSnapshot(  # type: ignore[method-assign]
+    connectors[0].crawl = lambda *, cancellation=None: ConnectorSnapshot(  # type: ignore[method-assign]
         provider="slack",
         documents=[record for record in records if record["provider"] == "slack"],
         coverage={"completeness": "PARTIAL_RATE_LIMIT", "discovered": 12},
     )
-    connectors[1].crawl = lambda *, include_dms: ConnectorSnapshot(  # type: ignore[method-assign]
+    connectors[1].crawl = lambda *, cancellation=None: ConnectorSnapshot(  # type: ignore[method-assign]
         provider="notion",
         documents=[record for record in records if record["provider"] == "notion"],
         coverage={"completeness": "UNKNOWN", "discovered": 12},
@@ -356,7 +356,7 @@ def test_unknown_notion_and_partial_rate_limit_coverage_survive_report(tmp_path:
 
 def test_missing_read_capability_stops_before_crawl(tmp_path: Path) -> None:
     class NoReadConnector(FakeConnector):
-        def probe(self) -> dict[str, Any]:
+        def probe(self, cancellation: RunCancellation | None = None) -> dict[str, Any]:
             self.probe_calls += 1
             return {"advertised": ["write"], "allowed": []}
 

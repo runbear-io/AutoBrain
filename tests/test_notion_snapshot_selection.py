@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from autobrain.auth.models import AuthStatusReport, ConnectionStatus, Provider
+from autobrain.cancellation import RunCancellation
 from autobrain.models import CandidateId, ConnectionState, Status
 from autobrain.orchestration import ConnectorSnapshot, RunConfig, RunOrchestrator
 
@@ -28,11 +29,10 @@ class _Manager:
 class _NotionConnector:
     provider = "notion"
 
-    def probe(self) -> dict[str, object]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, object]:
         return {"allowed": ["snapshot-read"], "capability_available": True}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         return ConnectorSnapshot(
             provider="notion",
             documents=(),
@@ -54,14 +54,14 @@ def test_snapshot_bypasses_only_notion_auth_not_slack_auth(tmp_path: Path) -> No
     notion_only = RunOrchestrator.local(
         _config(tmp_path, sources=(Provider.NOTION,)),
         connection_manager=_Manager(),  # type: ignore[arg-type]
-        connector_builder=lambda *_args: (_NotionConnector(),),
+        connector_builder=lambda _manager, _snapshot: (_NotionConnector(),),
         candidate_builder=lambda *_args, **_kwargs: (),
         api_key="provider-key",
     )
     with_slack = RunOrchestrator.local(
         _config(tmp_path, sources=(Provider.SLACK, Provider.NOTION)),
         connection_manager=_Manager(),  # type: ignore[arg-type]
-        connector_builder=lambda *_args: (_NotionConnector(),),
+        connector_builder=lambda _manager, _snapshot: (_NotionConnector(),),
         candidate_builder=lambda *_args, **_kwargs: (),
         api_key="provider-key",
     )
@@ -75,7 +75,7 @@ def test_notion_only_snapshot_marks_recommendation_ineligible(tmp_path: Path) ->
     orchestrator = RunOrchestrator.local(
         _config(tmp_path, sources=(Provider.NOTION,)),
         connection_manager=_Manager(),  # type: ignore[arg-type]
-        connector_builder=lambda *_args: (_NotionConnector(),),
+        connector_builder=lambda _manager, _snapshot: (_NotionConnector(),),
         candidate_builder=lambda *_args, **_kwargs: (),
         api_key="provider-key",
     )

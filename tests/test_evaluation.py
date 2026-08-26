@@ -87,7 +87,6 @@ def test_candidate_aggregation_averages_recall_and_keeps_failures() -> None:
     assert aggregate.source_support_rate == 0.5
 
 
-
 def test_retrieved_slugs_map_back_to_gold_source_ids() -> None:
     document = NormalizedDocument(
         source_id="notion:page-1",

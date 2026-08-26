@@ -61,8 +61,11 @@ class OAuthManager:
         slack_client_secret: str | None = None,
     ) -> TokenRecord:
         config = config_for(provider)
+        if not config.supported or config.resource is None:
+            raise OAuthError(f"{provider.value} is not a supported OAuth provider")
+        resource: str = config.resource
         metadata = discover(
-            config.resource,
+            resource,
             self.http,
             timeout=self.timeout,
             allow_localhost_http=self.allow_localhost_http,
@@ -85,7 +88,7 @@ class OAuthManager:
                 "state": pkce.state,
                 "code_challenge": pkce.challenge,
                 "code_challenge_method": "S256",
-                "resource": config.resource,
+                "resource": resource,
             }
             authorization_url = f"{metadata.authorization_endpoint}?{urlencode(params)}"
             if not self.browser_open(authorization_url):
@@ -101,12 +104,12 @@ class OAuthManager:
                 "redirect_uri": callback.redirect_uri,
                 "client_id": oauth_client.client_id,
                 "code_verifier": pkce.verifier,
-                "resource": config.resource,
+                "resource": resource,
             }
             if oauth_client.client_secret:
                 body["client_secret"] = oauth_client.client_secret.get_secret_value()
             response = self._post(metadata.token_endpoint, data=body, operation="token exchange")
-            token = parse_token(provider, config.resource, response, oauth_client=oauth_client)
+            token = parse_token(provider, resource, response, oauth_client=oauth_client)
             self.store.save(token)
             return token
         finally:

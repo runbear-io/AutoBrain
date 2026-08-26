@@ -7,6 +7,7 @@ from typing import Any, cast
 from pydantic import SecretStr
 
 from autobrain.auth.models import AuthStatusReport, ConnectionStatus, Provider, TokenRecord
+from autobrain.cancellation import RunCancellation
 from autobrain.models import CandidateId, CandidateObservation, ConnectionState, CostStatus, Status
 from autobrain.orchestration import (
     CandidateContext,
@@ -40,12 +41,11 @@ class _Connector:
         self.probe_calls = 0
         self.crawl_calls = 0
 
-    def probe(self) -> dict[str, Any]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, Any]:
         self.probe_calls += 1
         return {"advertised": ["search", "fetch"], "allowed": ["search", "fetch"]}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         self.crawl_calls += 1
         return ConnectorSnapshot(
             provider=self.provider,

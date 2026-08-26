@@ -40,6 +40,45 @@ def test_doctor_json_is_machine_readable(monkeypatch: MonkeyPatch) -> None:
     assert "MISSING_PROVIDER" in result.stdout
 
 
+def test_run_uses_provider_native_gemini_key_when_gbrain_key_is_absent(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AUTOBRAIN_GBRAIN_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "fixture-gemini-key")
+
+    captured: dict[str, object] = {}
+
+    class _Config:
+        pass
+
+    def fake_semantic(
+        provider: object,
+        *,
+        model: str | None,
+        dimensions: int | None,
+        endpoint: str | None,
+        credential: str | None,
+    ) -> _Config:
+        captured["provider"] = provider
+        captured["credential"] = credential
+        return _Config()
+
+    monkeypatch.setattr("autobrain.cli.GBrainExecutionConfig.semantic", fake_semantic)
+
+    def fake_orchestrator(**_: object) -> None:
+        return None
+
+    monkeypatch.setattr("autobrain.cli.RunOrchestrator", fake_orchestrator)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "--gbrain-provider", "gemini", "--no-open"],
+    )
+
+    assert result.exit_code != 0
+    assert captured["credential"] == "fixture-gemini-key"
+
+
 def test_malformed_callback_port_is_a_typed_independent_check(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("AUTOBRAIN_CALLBACK_PORT", "not-a-port")
     result = CliRunner().invoke(app, ["doctor", "--json"])
@@ -72,6 +111,21 @@ def test_source_slack_export_configures_local_archive(tmp_path: Path) -> None:
     assert report["state"] == SlackSourceState.READY.value
     assert report["ready"] is True
     assert report["config"]["summary"]["message_count"] == 1
+
+
+def test_source_status_reports_unsupported_provider_readiness(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        ["source", "status", "--json"],
+        env={"HOME": str(tmp_path)},
+    )
+
+    assert result.exit_code == 0
+    connectors = json.loads(result.stdout)["connectors"]
+    for provider in ("confluence", "google_drive", "sharepoint"):
+        assert connectors[provider]["state"] == "UNSUPPORTED"
+        assert connectors[provider]["ready"] is False
+        assert connectors[provider]["mode"] == "UNSUPPORTED"
 
 
 def test_source_notion_snapshot_import_and_status(tmp_path: Path) -> None:

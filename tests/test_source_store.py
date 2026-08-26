@@ -5,6 +5,7 @@ import stat
 from pathlib import Path
 from zipfile import ZipFile
 
+from autobrain.contracts import SourceConnectionState, SourceConnectionStatusProjectionV1
 from autobrain.paths import AutoBrainPaths
 from autobrain.source_store import SlackSourceState, SlackSourceStore
 
@@ -41,6 +42,8 @@ def test_slack_source_store_saves_confined_0600_reference(tmp_path: Path) -> Non
     assert status.ready is True
     assert status.archive_path == archive_path.resolve()
     assert status.config == configured
+    assert isinstance(status.projection, SourceConnectionStatusProjectionV1)
+    assert status.projection.state is SourceConnectionState.READY
 
 
 def test_slack_source_store_detects_changed_archive(tmp_path: Path) -> None:
@@ -56,6 +59,8 @@ def test_slack_source_store_detects_changed_archive(tmp_path: Path) -> None:
 
     assert status.state is SlackSourceState.ARCHIVE_CHANGED
     assert status.ready is False
+    assert status.projection.state is SourceConnectionState.FAILED
+    assert status.projection.diagnostics == ["archive_changed"]
 
 
 def test_slack_source_store_detects_deleted_archive(tmp_path: Path) -> None:
@@ -69,6 +74,8 @@ def test_slack_source_store_detects_deleted_archive(tmp_path: Path) -> None:
 
     assert status.state is SlackSourceState.ARCHIVE_MISSING
     assert status.ready is False
+    assert status.projection.state is SourceConnectionState.FAILED
+    assert status.projection.diagnostics == ["archive_missing"]
 
 
 def test_slack_source_store_remove_returns_to_not_configured(tmp_path: Path) -> None:
@@ -79,5 +86,8 @@ def test_slack_source_store_remove_returns_to_not_configured(tmp_path: Path) -> 
 
     store.remove()
 
-    assert store.status().state is SlackSourceState.NOT_CONFIGURED
+    status = store.status()
+    assert status.state is SlackSourceState.NOT_CONFIGURED
+    assert status.projection.state is SourceConnectionState.AWAITING_LOCAL_INPUT
+    assert status.projection.diagnostics == ["archive_not_configured"]
     assert not store.config_path.exists()

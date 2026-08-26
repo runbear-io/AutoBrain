@@ -15,6 +15,7 @@ from typing import Annotated
 
 from pydantic import Field, field_validator
 
+from autobrain.cancellation import RunCancellation
 from autobrain.models import (
     CoverageCompleteness,
     CoverageRecord,
@@ -315,11 +316,14 @@ class NotionSnapshotConnector:
     def __init__(self, snapshot_path: Path) -> None:
         self.snapshot_path = snapshot_path
 
-    def probe(self) -> dict[str, object]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, object]:
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         return {"allowed": ["snapshot-read"], "capability_available": self.snapshot_path.is_file()}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         snapshot, _ = _read_snapshot(self.snapshot_path)
         return ConnectorSnapshot(
             provider=self.provider,

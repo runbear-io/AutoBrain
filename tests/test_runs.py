@@ -11,10 +11,16 @@ from autobrain.cli import app
 from autobrain.decision import select_winner
 from autobrain.embedding import EmbeddingBackendConfig
 from autobrain.models import (
+    BackendIdentity,
     BenchmarkProvenance,
     CandidateEvaluation,
     CandidateId,
+    CapabilityClass,
+    CorpusIdentity,
     CostStatus,
+    EvidenceStatus,
+    NativeCandidateResult,
+    NativeMode,
     Status,
     UsageSource,
 )
@@ -191,6 +197,15 @@ _CANDIDATE_FIELD_MUTATIONS: dict[str, object] = {
     "partial_failures": 1,
     "eligibility_reasons": ["changed"],
     "eligible_override": False,
+    "native_result": NativeCandidateResult(
+        candidate=CandidateId.GBRAIN,
+        mode=NativeMode.SEMANTIC,
+        backend=BackendIdentity(name="gbrain", version="1.0"),
+        capability=CapabilityClass.RETRIEVAL_AND_ANSWER,
+        evidence_status=EvidenceStatus.COMPLETE,
+        corpus=CorpusIdentity(sha256="a" * 64, document_count=20),
+        recommendation_eligible=True,
+    ),
 }
 
 

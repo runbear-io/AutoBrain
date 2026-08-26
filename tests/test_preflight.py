@@ -17,7 +17,11 @@ def _runner(command: tuple[str, ...], timeout: float) -> CommandResult:
     if name == "codex":
         return CommandResult(returncode=0, stdout="Logged in using ChatGPT", stderr="")
     versions = {"python": "Python 3.12.7", "node": "v25.9.0", "bun": "1.3.14"}
-    return CommandResult(returncode=0, stdout=versions[name], stderr="")
+    return CommandResult(
+        returncode=0,
+        stdout=versions.get("python" if name.startswith("python") else name, "provider output"),
+        stderr="",
+    )
 
 
 def test_preflight_reports_independent_missing_requirements(tmp_path: Path) -> None:
@@ -33,6 +37,15 @@ def test_preflight_reports_independent_missing_requirements(tmp_path: Path) -> N
     checks = {check.name: check for check in report.checks}
     assert checks["chatgpt_subscription"].status is Status.MISSING_PROVIDER
     assert checks["chatgpt_subscription"].detail.startswith("SUBSCRIPTION_CLI_UNAVAILABLE")
+    assert {name for name in checks if name.endswith("_subscription")} == {
+        "chatgpt_subscription",
+        "claude_subscription",
+        "kimi_subscription",
+        "grok_subscription",
+    }
+    assert checks["kimi_subscription"].status is Status.UNSUPPORTED
+    assert checks["grok_subscription"].status is Status.UNSUPPORTED
+    assert "unsupported" in checks["kimi_subscription"].detail.lower()
     assert "openai_api_key" not in report.environment.model_dump()
     assert checks["slack_source"].status is Status.MCP_AUTH_UNAVAILABLE
     assert checks["keyring"].status is Status.ENV_UNAVAILABLE
@@ -95,7 +108,7 @@ def test_python_check_uses_the_running_interpreter(tmp_path: Path) -> None:
             "node": "v25.9.0",
             "bun": "1.3.14",
             "codex": "Logged in using ChatGPT",
-        }[name]
+        }.get("python" if name.startswith("python") else name, "provider output")
         return CommandResult(returncode=0, stdout=version, stderr="")
 
     Preflight(

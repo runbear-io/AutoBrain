@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from autobrain.cancellation import RunCancellation
 from autobrain.models import (
     CandidateEvaluation,
     CandidateId,
@@ -44,11 +45,10 @@ class _Connector:
         self.provider = "slack"
         self.records = records
 
-    def probe(self) -> dict[str, list[str]]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, list[str]]:
         return {"advertised": ["search"], "allowed": ["search"]}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         return ConnectorSnapshot(
             provider=self.provider,
             documents=tuple(self.records),

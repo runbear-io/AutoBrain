@@ -9,6 +9,7 @@ from autobrain.auth.models import (
     Provider,
     TokenRecord,
 )
+from autobrain.auth.providers import config_for
 from autobrain.auth.storage import TokenStore
 from autobrain.models import ConnectionState, Status
 
@@ -29,12 +30,16 @@ class ConnectionManager:
             or ConnectionStatus(
                 provider=provider,
                 state=ConnectionState.DISCONNECTED,
-                status=Status.MCP_AUTH_UNAVAILABLE,
-                warning=storage_warning,
+                status=(
+                    Status.MCP_AUTH_UNAVAILABLE
+                    if config_for(provider).supported
+                    else Status.CAPABILITY_UNAVAILABLE
+                ),
+                warning=storage_warning or (config_for(provider).detail or None),
             )
             for provider in Provider
         )
-        return AuthStatusReport(connections=rows)
+        return AuthStatusReport(connections=rows).with_projections()
 
     def token_for(self, provider: Provider) -> TokenRecord | None:
         """Return one valid stored token without initiating OAuth or network access."""

@@ -8,12 +8,19 @@ import tempfile
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from uuid import uuid4
 
 from autobrain.connectors.slack_export import inspect_slack_export
 from autobrain.connectors.slack_export_archive import archive_sha256
 from autobrain.connectors.slack_export_types import (
     SlackExportError,
     SlackExportSummary,
+)
+from autobrain.contracts import (
+    SourceConnectionState,
+    SourceConnectionStatusProjectionV1,
+    SourceProvider,
+    SourceTransportMode,
 )
 from autobrain.models import StrictModel
 
@@ -37,6 +44,7 @@ class SlackSourceStatus(StrictModel):
     state: SlackSourceState
     ready: bool
     detail: str
+    projection: SourceConnectionStatusProjectionV1
     archive_path: Path | None = None
     config: SlackSourceConfig | None = None
 
@@ -74,22 +82,25 @@ class SlackSourceStore:
         try:
             config = self.load()
         except SlackExportError as error:
-            return SlackSourceStatus(
+            return self._status(
                 state=SlackSourceState.INVALID_CONFIG,
-                ready=False,
+                projection_state=SourceConnectionState.FAILED,
+                diagnostic="archive_config_invalid",
                 detail=str(error),
             )
         if config is None:
-            return SlackSourceStatus(
+            return self._status(
                 state=SlackSourceState.NOT_CONFIGURED,
-                ready=False,
+                projection_state=SourceConnectionState.AWAITING_LOCAL_INPUT,
+                diagnostic="archive_not_configured",
                 detail="No Slack export is configured",
             )
         archive_path = Path(config.archive_path)
         if not archive_path.is_file():
-            return SlackSourceStatus(
+            return self._status(
                 state=SlackSourceState.ARCHIVE_MISSING,
-                ready=False,
+                projection_state=SourceConnectionState.FAILED,
+                diagnostic="archive_missing",
                 detail="Configured Slack export no longer exists",
                 archive_path=archive_path,
                 config=config,
@@ -97,27 +108,58 @@ class SlackSourceStore:
         try:
             actual_sha256 = archive_sha256(archive_path)
         except OSError as error:
-            return SlackSourceStatus(
+            return self._status(
                 state=SlackSourceState.ARCHIVE_MISSING,
-                ready=False,
+                projection_state=SourceConnectionState.FAILED,
+                diagnostic="archive_missing",
                 detail=f"Configured Slack export cannot be read: {error}",
                 archive_path=archive_path,
                 config=config,
             )
         if actual_sha256 != config.archive_sha256:
-            return SlackSourceStatus(
+            return self._status(
                 state=SlackSourceState.ARCHIVE_CHANGED,
-                ready=False,
+                projection_state=SourceConnectionState.FAILED,
+                diagnostic="archive_changed",
                 detail="Configured Slack export changed; configure it again",
                 archive_path=archive_path,
                 config=config,
             )
-        return SlackSourceStatus(
+        return self._status(
             state=SlackSourceState.READY,
-            ready=True,
+            projection_state=SourceConnectionState.READY,
+            diagnostic="archive_valid",
             detail=(
                 f"{config.summary.message_count} messages from "
                 f"{config.summary.channel_count} channels"
+            ),
+            archive_path=archive_path,
+            config=config,
+        )
+
+    @staticmethod
+    def _status(
+        *,
+        state: SlackSourceState,
+        projection_state: SourceConnectionState,
+        diagnostic: str,
+        detail: str,
+        archive_path: Path | None = None,
+        config: SlackSourceConfig | None = None,
+    ) -> SlackSourceStatus:
+        return SlackSourceStatus(
+            state=state,
+            ready=projection_state is SourceConnectionState.READY,
+            detail=detail,
+            projection=SourceConnectionStatusProjectionV1(
+                schema_version=1,
+                request_id=uuid4(),
+                provider=SourceProvider.SLACK,
+                mode=SourceTransportMode.EXPORT_ARCHIVE,
+                state=projection_state,
+                ready=projection_state is SourceConnectionState.READY,
+                credential_present=False,
+                diagnostics=[diagnostic],
             ),
             archive_path=archive_path,
             config=config,

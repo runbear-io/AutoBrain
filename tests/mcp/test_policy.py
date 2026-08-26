@@ -2,6 +2,7 @@ import pytest
 from pydantic import SecretStr
 
 from autobrain.auth.models import Provider, TokenRecord
+from autobrain.auth.providers import CONFIGS
 from autobrain.mcp.policy import ReadOnlyToolPolicy, ToolPolicyError
 from autobrain.mcp.transport import AudienceError, StreamableHttpConnection
 
@@ -19,6 +20,23 @@ def test_advertised_tools_are_snapshotted_and_writes_refused() -> None:
         policy.require("notion-create-page")
     with pytest.raises(ToolPolicyError, match="not advertised"):
         policy.require("notion-delete-page")
+
+
+@pytest.mark.parametrize("provider", tuple(CONFIGS))
+def test_advertised_write_tools_are_always_refused(provider: Provider) -> None:
+    advertised = [
+        *sorted(CONFIGS[provider].allowlist),
+        f"{provider.value}-create",
+        f"{provider.value}-update",
+        f"{provider.value}-delete",
+        f"{provider.value}-write",
+    ]
+    snapshot = ReadOnlyToolPolicy(provider, advertised).snapshot()
+
+    assert all(name not in snapshot.allowed for name in advertised[-4:])
+    for name in advertised[-4:]:
+        with pytest.raises(ToolPolicyError, match="read allowlist"):
+            ReadOnlyToolPolicy(provider, advertised).require(name)
 
 
 def test_slack_allowlist_has_no_write_or_dm_surface() -> None:

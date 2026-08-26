@@ -13,6 +13,7 @@ from autobrain.candidates.gbrain import (
     THINK_MODEL,
     CommandResult,
     GBrainAdapter,
+    GBrainCapabilityError,
     GBrainIsolationError,
     GBrainProcessError,
     document_markdown,
@@ -64,6 +65,9 @@ class FakeRunner:
         args = tuple(command)
         if args[-2:] == ("rev-parse", "HEAD"):
             output = GBRAIN_COMMIT
+        elif args[-2:] == ("init", "--help"):
+            output = """--pglite --non-interactive --no-embedding --embedding-model
+--embedding-dimensions --chat-model --json"""
         elif "think" in args:
             output = json.dumps(self.think)
         elif "search" in args or "query" in args:
@@ -100,6 +104,107 @@ def test_json_parser_rejects_corruption_and_accepts_native_prefix() -> None:
         parse_json_output("{definitely broken")
 
 
+def test_keyword_only_preserves_native_search_output_without_local_ranking(
+    tmp_path: Path,
+) -> None:
+    tools = tmp_path / "tools"
+    checkout = fake_checkout(tools)
+    delegate = FakeRunner(checkout)
+    native_search = [{"native_result": "gbrain-ranking", "score": 0.125}]
+
+    def runner(
+        command: Sequence[str], cwd: Path, env: dict[str, str], timeout: float
+    ) -> CommandResult:
+        result = delegate(command, cwd, env, timeout)
+        if tuple(command)[2:3] == ("search",):
+            return CommandResult(
+                result.command,
+                result.returncode,
+                json.dumps(native_search),
+                result.stderr,
+                result.elapsed_ms,
+            )
+        return result
+
+    result = GBrainAdapter(
+        tools,
+        tmp_path / "run",
+        runner=runner,
+        config=GBrainExecutionConfig.quick_start(),
+    ).run([document()], ["When is launch?"])[0]
+
+    assert result.search_evidence == native_search
+    assert result.native["search"] == native_search
+
+
+def test_pinned_runtime_rejects_legacy_embedding_provider_flag_but_adapter_does_not_send_it(
+    tmp_path: Path,
+) -> None:
+    tools = tmp_path / "tools"
+    checkout = fake_checkout(tools)
+    delegate = FakeRunner(checkout)
+
+    def pinned_runtime(
+        command: Sequence[str], cwd: Path, env: dict[str, str], timeout: float
+    ) -> CommandResult:
+        if "--embedding-provider" in command:
+            return CommandResult(
+                tuple(command),
+                2,
+                '{"status":"error","reason":"invalid_flag"}',
+                "unknown flag --embedding-provider for 'gbrain init'",
+                1,
+            )
+        return delegate(command, cwd, env, timeout)
+
+    legacy = pinned_runtime(
+        ("bun", "src/cli.ts", "init", "--embedding-provider", "openai"),
+        checkout,
+        {},
+        1,
+    )
+    assert legacy.returncode == 2
+    assert "unknown flag --embedding-provider" in legacy.stderr
+
+    result = GBrainAdapter(
+        tools,
+        tmp_path / "run",
+        runner=pinned_runtime,
+        config=GBrainExecutionConfig.semantic("openai", credential="test-key"),
+    ).run([document()], ["When is launch?"])[0]
+
+    init_commands = [call[0] for call in delegate.calls if call[0][2:3] == ("init",)]
+    assert result.status == "OK"
+    assert len(init_commands) == 2
+    assert "--embedding-provider" not in init_commands[1]
+    assert "openai:text-embedding-3-small" in init_commands[1]
+
+
+def test_semantic_mode_fails_closed_when_pinned_help_lacks_embedding_contract(
+    tmp_path: Path,
+) -> None:
+    tools = tmp_path / "tools"
+    checkout = fake_checkout(tools)
+    delegate = FakeRunner(checkout)
+
+    def unsupported(
+        command: Sequence[str], cwd: Path, env: dict[str, str], timeout: float
+    ) -> CommandResult:
+        if tuple(command)[-2:] == ("init", "--help"):
+            return CommandResult(tuple(command), 0, "--pglite --no-embedding --json", "", 1)
+        return delegate(command, cwd, env, timeout)
+
+    with pytest.raises(GBrainCapabilityError, match="GBRAIN_CAPABILITY_UNAVAILABLE"):
+        GBrainAdapter(
+            tools,
+            tmp_path / "run",
+            runner=unsupported,
+            config=GBrainExecutionConfig.semantic("openai", credential="test-key"),
+        ).run([document()], ["When is launch?"])
+
+    assert not any(call[0][2:3] == ("init",) and "--help" not in call[0] for call in delegate.calls)
+
+
 def test_adapter_uses_exact_pin_frozen_bun_and_native_surfaces(tmp_path: Path) -> None:
     tools = tmp_path / "tools"
     checkout = fake_checkout(tools)
@@ -121,6 +226,7 @@ def test_adapter_uses_exact_pin_frozen_bun_and_native_surfaces(tmp_path: Path) -
     cli = [command for command in commands if command[:2] == ("bun", "src/cli.ts")]
     assert [command[2] for command in cli] == [
         "init",
+        "init",
         "import",
         "sync",
         "status",
@@ -128,8 +234,10 @@ def test_adapter_uses_exact_pin_frozen_bun_and_native_surfaces(tmp_path: Path) -
         "query",
         "think",
     ]
-    assert "text-embedding-3-small" in cli[0]
-    assert THINK_MODEL in cli[0]
+    init = cli[1]
+    assert "--embedding-provider" not in init
+    assert "openai:text-embedding-3-small" in init
+    assert THINK_MODEL in init
     assert cli[-1][-3:] == ("--model", THINK_MODEL, "--json")
     assert all(call[2]["GBRAIN_HOME"] == str(adapter.home) for call in runner.calls)
     assert all(call[2]["GBRAIN_SKIP_STARTUP_HOOKS"] == "1" for call in runner.calls)
@@ -227,6 +335,14 @@ def test_model_rejection_is_contained_and_no_personal_surfaces_exist(tmp_path: P
         seen.append(tuple(command))
         if "think" in command:
             return CommandResult(tuple(command), 1, "", "model not usable", 1)
+        if command[-2:] == ("init", "--help"):
+            return CommandResult(
+                tuple(command),
+                0,
+                "--embedding-model --embedding-dimensions --chat-model --no-embedding",
+                "",
+                1,
+            )
         output = GBRAIN_COMMIT if command[-2:] == ("rev-parse", "HEAD") else "{}"
         if "search" in command or "query" in command:
             output = "[]"

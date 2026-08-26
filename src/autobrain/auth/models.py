@@ -2,15 +2,27 @@
 
 import time
 from enum import StrEnum
+from uuid import uuid4
 
 from pydantic import Field, SecretStr
 
+from autobrain.contracts import (
+    SourceConnectionState,
+    SourceConnectionStatusProjectionV1,
+    SourceProvider,
+    SourceTransportMode,
+)
 from autobrain.models import ConnectionState, Status, StrictModel
 
 
 class Provider(StrEnum):
+    """Canonical source-provider identities used by auth and connectors."""
+
     SLACK = "slack"
     NOTION = "notion"
+    CONFLUENCE = "confluence"
+    GOOGLE_DRIVE = "google_drive"
+    SHAREPOINT = "sharepoint"
 
 
 class OAuthMetadata(StrictModel):
@@ -61,6 +73,47 @@ class ConnectionStatus(StrictModel):
 class AuthStatusReport(StrictModel):
     schema_version: int = 1
     connections: tuple[ConnectionStatus, ...]
+    projections: tuple[SourceConnectionStatusProjectionV1, ...] = ()
+
+    def with_projections(self) -> "AuthStatusReport":
+        """Rebuild projections from the authoritative connection rows."""
+        return self.model_copy(
+            update={"projections": tuple(_projection_for(item) for item in self.connections)}
+        )
+
+
+def _projection_for(status: ConnectionStatus) -> SourceConnectionStatusProjectionV1:
+    if status.status is Status.CAPABILITY_UNAVAILABLE:
+        state = SourceConnectionState.FAILED
+        diagnostic = "source_transport_unavailable"
+    else:
+        state = {
+            ConnectionState.CONNECTED: SourceConnectionState.READY,
+            ConnectionState.EXPIRED: SourceConnectionState.EXPIRED,
+            ConnectionState.REAUTHORIZATION_REQUIRED: SourceConnectionState.FAILED,
+        }.get(status.state, SourceConnectionState.AWAITING_LOCAL_INPUT)
+        diagnostic = {
+            SourceConnectionState.READY: "auth_ready",
+            SourceConnectionState.EXPIRED: "auth_expired",
+        }.get(state, "auth_required")
+    provider = SourceProvider(status.provider.value)
+    mode = {
+        SourceProvider.SLACK: SourceTransportMode.LIVE_MCP_OAUTH,
+        SourceProvider.NOTION: SourceTransportMode.LIVE_MCP_OAUTH,
+        SourceProvider.CONFLUENCE: SourceTransportMode.OAUTH_3LO_REST,
+        SourceProvider.GOOGLE_DRIVE: SourceTransportMode.OAUTH_REST,
+        SourceProvider.SHAREPOINT: SourceTransportMode.GRAPH_OAUTH_PREVIEW,
+    }[provider]
+    return SourceConnectionStatusProjectionV1(
+        schema_version=1,
+        request_id=uuid4(),
+        provider=provider,
+        mode=mode,
+        state=state,
+        ready=state is SourceConnectionState.READY,
+        credential_present=state is SourceConnectionState.READY,
+        diagnostics=[diagnostic],
+    )
 
 
 class OAuthError(RuntimeError):

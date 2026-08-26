@@ -15,6 +15,7 @@ from autobrain.auth.oauth import OAuthManager
 from autobrain.auth.service import ConnectionManager
 from autobrain.auth.storage import TokenStore
 from autobrain.connectors.notion_snapshot import NotionSnapshotError, NotionSnapshotStore
+from autobrain.connectors.readiness import readiness_for
 from autobrain.paths import AutoBrainPaths
 from autobrain.secrets import RuntimeEnvironment, RuntimeSettings
 from autobrain.source_store import SlackSourceStore
@@ -193,6 +194,11 @@ def source_status(
     sources = AutoBrainPaths.from_home().sources
     slack = SlackSourceStore(sources).status()
     notion = NotionSnapshotStore(sources).status()
+    readiness = {
+        provider.value: readiness_for(provider).model_dump(mode="json")
+        for provider in Provider
+        if provider not in {Provider.SLACK, Provider.NOTION}
+    }
     if json_output:
         typer.echo(
             json.dumps(
@@ -200,6 +206,11 @@ def source_status(
                     **slack.model_dump(mode="json"),
                     "slack": slack.model_dump(mode="json"),
                     "notion_snapshot": notion.model_dump(mode="json"),
+                    "connectors": {
+                        "slack": slack.model_dump(mode="json"),
+                        "notion": notion.model_dump(mode="json"),
+                        **readiness,
+                    },
                 },
                 indent=2,
             )
@@ -207,3 +218,8 @@ def source_status(
         return
     typer.echo(f"Slack: {slack.state.value}: {slack.detail}")
     typer.echo(f"Notion snapshot: {'READY' if notion.ready else 'NOT_CONFIGURED'}: {notion.detail}")
+    for provider in Provider:
+        if provider in {Provider.SLACK, Provider.NOTION}:
+            continue
+        status = readiness[provider.value]
+        typer.echo(f"{provider.value}: {status['state']}: {status['detail']}")

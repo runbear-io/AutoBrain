@@ -18,6 +18,14 @@ from autobrain.fixture import (
     fixture_connectors,
     load_fixture,
 )
+from autobrain.local_server import (
+    DEFAULT_LOCAL_PORT,
+    PROJECTION_PATH,
+    LocalRunServer,
+    RunOutcomeStatus,
+    outcome_for_run_dir,
+)
+from autobrain.model_access import inspect_model_access, render_model_access_human
 from autobrain.models import Status
 from autobrain.orchestration import (
     DEFAULT_BUDGET_USD,
@@ -179,6 +187,25 @@ def subscription_ask(
     typer.echo(answer)
 
 
+model_access_app = typer.Typer(help="Inspect local model capability access.")
+app.add_typer(model_access_app, name="model-access")
+
+
+@model_access_app.command("status")
+def model_access_status(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the complete capability matrix as JSON."),
+    ] = False,
+) -> None:
+    """Report chat, embedding, verifier, and metering capability separately."""
+    status = inspect_model_access(os.environ)
+    if json_output:
+        typer.echo(json.dumps(status.as_dict(), indent=2, sort_keys=True))
+        return
+    typer.echo(render_model_access_human(status))
+
+
 @app.command()
 def doctor(
     provider: Annotated[
@@ -204,6 +231,11 @@ def doctor(
         typer.echo(report.model_dump_json(indent=2))
         return
     typer.echo(f"AutoBrain doctor: {report.status.value}")
+    typer.echo(
+        "Precredential readiness: "
+        f"{'READY' if report.readiness.ready else 'BLOCKED'} "
+        f"(governance={','.join(report.readiness.governance_codes) or 'none'})"
+    )
     for check in report.checks:
         typer.echo(f"{check.status.value:24} {check.name}: {check.detail}")
     typer.echo(f"State root: {Path(report.paths.root)}")
@@ -307,7 +339,16 @@ def run_comparison(
                 model=gbrain_model,
                 dimensions=gbrain_dimensions,
                 endpoint=gbrain_endpoint,
-                credential=os.environ.get("AUTOBRAIN_GBRAIN_API_KEY"),
+                credential=(
+                    os.environ.get("AUTOBRAIN_GBRAIN_API_KEY")
+                    or os.environ.get(
+                        {
+                            GBrainEmbeddingProvider.GEMINI: "GEMINI_API_KEY",
+                            GBrainEmbeddingProvider.OPENAI: "OPENAI_API_KEY",
+                            GBrainEmbeddingProvider.VOYAGE: "VOYAGE_API_KEY",
+                        }.get(gbrain_provider, ""),
+                    )
+                ),
             )
         )
         config = RunConfig(
@@ -491,3 +532,50 @@ def reopen_report(
 
 if __name__ == "__main__":
     app()
+
+
+@app.command("serve")
+def serve_local_fixture(
+    run_dir: Annotated[
+        Path | None,
+        typer.Option("--run-dir", help="Directory holding the comparison.json to publish."),
+    ] = None,
+    port: Annotated[
+        int,
+        typer.Option("--port", help=f"Loopback port to bind. Default {DEFAULT_LOCAL_PORT}."),
+    ] = DEFAULT_LOCAL_PORT,
+    check: Annotated[
+        bool,
+        typer.Option("--check", help="Report what would be published, then exit."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the outcome payload as JSON."),
+    ] = False,
+) -> None:
+    """Serve one redacted run projection on 127.0.0.1 for a local browser client.
+
+    This is a local, unauthenticated developer fixture. It binds loopback only,
+    is never exposed to a network, and is not a hosted deployment. Only browser
+    origins on localhost or 127.0.0.1 are granted CORS access.
+    """
+    target = run_dir if run_dir is not None else AutoBrainPaths.from_home().runs
+    outcome = outcome_for_run_dir(target)
+    if check:
+        if json_output:
+            typer.echo(json.dumps(outcome.to_payload(), indent=2))
+        else:
+            typer.echo(f"{outcome.status.value}: {outcome.error or target}")
+        if outcome.status is RunOutcomeStatus.FAILED and "no comparison.json" in (
+            outcome.error or ""
+        ):
+            raise typer.Exit(1)
+        return
+    with LocalRunServer(lambda: outcome_for_run_dir(target), port=port) as server:
+        typer.echo(f"AutoBrain local fixture (unauthenticated, loopback only): {server.base_url}")
+        typer.echo(f"projection: {server.base_url}{PROJECTION_PATH}")
+        typer.echo("Press Ctrl+C to stop.")
+        try:
+            server.wait_forever()
+        except KeyboardInterrupt:
+            typer.echo("stopped")

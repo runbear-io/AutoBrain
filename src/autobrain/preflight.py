@@ -6,9 +6,24 @@ from pathlib import Path
 
 from pydantic import Field
 
+from autobrain.connectors.readiness import (
+    SourceTransportReadiness,
+    SourceTransportRegistry,
+    TransportGovernanceCode,
+    TransportReadinessState,
+)
+from autobrain.contracts import (
+    ModelAccessMode,
+    ModelAccessProfileV1,
+    ModelCapabilityStatus,
+    SourceProvider,
+    SourceTransportMode,
+)
 from autobrain.embedding import check_embedding_backend
+from autobrain.model_access import ModelAccessStatus, inspect_model_access
 from autobrain.models import CandidatePin, CheckResult, DoctorPaths, Status, StrictModel
 from autobrain.paths import AutoBrainPaths, PathConfinementError
+from autobrain.preflight_google_drive import check_google_drive_source
 from autobrain.preflight_slack import check_slack_source
 from autobrain.preflight_subscription import check_subscription_provider
 from autobrain.preflight_support import (
@@ -29,10 +44,22 @@ from autobrain.preflight_support import (
     keyring_available as default_keyring_available,
 )
 from autobrain.secrets import EnvironmentReadiness, RuntimeEnvironment
-from autobrain.subscription import ProviderId
+from autobrain.source_store import SlackSourceStore
+from autobrain.subscription import ProviderId, provider_registry
 
 _MIN_NODE = (24, 0, 0)
 _MIN_BUN = (1, 3, 10)
+
+
+class PrecredentialReadiness(StrictModel):
+    """One deterministic, offline readiness result for the local doctor path."""
+
+    schema_version: int = 1
+    ready: bool
+    source_transport: SourceTransportReadiness
+    model_access: ModelAccessProfileV1
+    governance_codes: list[str] = Field(default_factory=list)
+    remediation: list[str] = Field(default_factory=list)
 
 
 class DoctorReport(StrictModel):
@@ -42,6 +69,7 @@ class DoctorReport(StrictModel):
     checks: list[CheckResult]
     environment: EnvironmentReadiness
     paths: DoctorPaths
+    readiness: PrecredentialReadiness
     candidate_pins: list[CandidatePin] = Field(default_factory=list)
 
 
@@ -62,6 +90,9 @@ class Preflight:
         browser_available: Callable[[], bool] = default_browser_available,
         subscription_provider: ProviderId = ProviderId.CODEX,
         embedding_environ: Mapping[str, str] | None = None,
+        source_provider: SourceProvider = SourceProvider.SLACK,
+        source_mode: SourceTransportMode = SourceTransportMode.EXPORT_ARCHIVE,
+        source_oauth_config_path: Path | None = None,
     ) -> None:
         self.paths = paths
         self.environment = environment
@@ -76,21 +107,30 @@ class Preflight:
         self.browser_probe = browser_available
         self.subscription_provider = subscription_provider
         self.embedding_environ = dict(embedding_environ or {})
+        self.source_provider = source_provider
+        self.source_mode = source_mode
+        self.source_oauth_config_path = source_oauth_config_path
 
     def run(self) -> DoctorReport:
         checks = [self._runtime("python", (3, 12, 0)), self._runtime("node", _MIN_NODE)]
         checks.extend((self._runtime("bun", _MIN_BUN), self._writable_paths()))
         checks.append(self._boolean("keyring", self.keyring_probe, Status.ENV_UNAVAILABLE))
         readiness = self.environment.readiness()
+        subscription_checks = [
+            check_subscription_provider(
+                provider,
+                command_runner=self.command_runner,
+                executable_finder=self.executable_finder,
+            )
+            for provider in provider_registry().provider_ids
+        ]
+        slack_check = check_slack_source(paths=self.paths, readiness=readiness)
         checks.extend(
             (
-                check_subscription_provider(
-                    self.subscription_provider,
-                    command_runner=self.command_runner,
-                    executable_finder=self.executable_finder,
-                ),
+                *subscription_checks,
                 check_embedding_backend(self.embedding_environ),
-                check_slack_source(paths=self.paths, readiness=readiness),
+                slack_check,
+                check_google_drive_source(),
             )
         )
         pins, pin_check = self._pins()
@@ -115,6 +155,9 @@ class Preflight:
                 self._boolean("browser_open", self.browser_probe, Status.CAPABILITY_UNAVAILABLE),
             )
         )
+        source_transport = self._source_transport(slack_check)
+        model_access = self._model_access()
+        readiness_result = self._readiness(source_transport, model_access)
         return DoctorReport(
             status=self._overall(checks),
             generated_at=datetime.now(UTC),
@@ -126,7 +169,65 @@ class Preflight:
                 tools=str(self.paths.tools),
                 cache=str(self.paths.cache),
             ),
+            readiness=readiness_result,
             candidate_pins=pins,
+        )
+
+    def _source_transport(self, slack_check: CheckResult) -> SourceTransportReadiness:
+        del slack_check
+        result = SourceTransportRegistry(config_path=self.source_oauth_config_path).resolve(
+            self.source_provider, self.source_mode
+        )
+        if (
+            self.source_provider is SourceProvider.SLACK
+            and self.source_mode is SourceTransportMode.EXPORT_ARCHIVE
+        ):
+            archive_status = SlackSourceStore(self.paths.sources).status()
+            if archive_status.ready:
+                return result
+            return result.model_copy(
+                update={
+                    "state": TransportReadinessState.UNAVAILABLE,
+                    "ready": False,
+                    "governance_code": TransportGovernanceCode.SOURCE_TRANSPORT_UNAVAILABLE,
+                    "detail": archive_status.detail,
+                    "remediation": "Configure and verify a local Slack export archive.",
+                }
+            )
+        return result
+
+    def _model_access(self) -> ModelAccessProfileV1:
+        status: ModelAccessStatus = inspect_model_access(self.embedding_environ)
+        profiles = status.profiles
+        # Prefer a verified recommendation-capable profile, then a ready
+        # subscription, while keeping selection stable for empty environments.
+        return max(
+            profiles,
+            key=lambda profile: (
+                profile.recommendation_eligible,
+                profile.chat is ModelCapabilityStatus.READY
+                and profile.verifier is ModelCapabilityStatus.READY,
+                profile.mode is ModelAccessMode.PROVIDER_API_BYOK,
+            ),
+        )
+
+    @staticmethod
+    def _readiness(
+        source_transport: SourceTransportReadiness,
+        model_access: ModelAccessProfileV1,
+    ) -> PrecredentialReadiness:
+        codes = [source_transport.governance_code.value]
+        remediation: list[str] = []
+        if not source_transport.ready:
+            remediation.append(source_transport.remediation or source_transport.detail)
+        if not model_access.recommendation_eligible:
+            remediation.extend(model_access.diagnostics)
+        return PrecredentialReadiness(
+            ready=source_transport.ready and model_access.recommendation_eligible,
+            source_transport=source_transport,
+            model_access=model_access,
+            governance_codes=sorted(set(codes)),
+            remediation=remediation,
         )
 
     def _runtime(self, name: str, minimum: tuple[int, int, int] | None = None) -> CheckResult:

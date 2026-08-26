@@ -34,7 +34,7 @@ def test_slack_export_freezes_the_same_documents_candidates_receive(tmp_path: Pa
     snapshot = SlackExportSourceConnector(
         archive_path,
         expected_sha256=summary.archive_sha256,
-    ).crawl(include_dms=False)
+    ).crawl()
     normalized = normalize_raw_items([dict(document) for document in snapshot.documents])
     frozen_dir = tmp_path / "frozen"
 

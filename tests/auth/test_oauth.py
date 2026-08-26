@@ -527,6 +527,85 @@ def test_real_callback_port_is_released_for_all_pre_browser_failures(
     replacement.close()
 
 
+def test_unsupported_provider_cannot_enter_oauth(tmp_path: Path) -> None:
+    """An unsupported provider must fail-closed before any HTTP request."""
+    requests: list[httpx.Request] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        requests.append(_request)
+        raise AssertionError("unsupported provider must not make HTTP requests")
+
+    manager = OAuthManager(
+        TokenStore(tmp_path, backend=MemoryKeyring()),
+        http=httpx.Client(transport=httpx.MockTransport(handler)),
+        browser_open=lambda _url: True,
+        callback_factory=FakeCallback,
+        allow_localhost_http=True,
+    )
+    with pytest.raises(OAuthError, match="not a supported"):
+        manager.authorize(Provider.SHAREPOINT)
+    assert requests == []
+
+
+@pytest.mark.parametrize("provider", [Provider.SLACK, Provider.NOTION])
+def test_supported_provider_resource_is_narrowed_non_none(
+    provider: Provider, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Supported providers must retain a non-None resource through the OAuth path."""
+    config = providers.config_for(provider)
+    assert config.supported is True
+    assert config.resource is not None  # narrowed for the OAuth flow
+
+    base = "http://127.0.0.1:9100"
+    monkeypatch.setitem(providers.CONFIGS, provider, fake_config(base, provider))
+    resources_seen: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        meta = metadata_response(request, base)
+        if meta:
+            return meta
+        if request.url.path == "/register":
+            return httpx.Response(201, json={"client_id": "dynamic"})
+        if request.url.path == "/token":
+            form = parse_qs(request.read().decode())
+            resources_seen.append(form["resource"][0])
+            if provider is Provider.SLACK:
+                return httpx.Response(
+                    200,
+                    json={
+                        "access_token": "xoxp",
+                        "refresh_token": "r",
+                        "team": {"id": "T1"},
+                        "authed_user": {"id": "U1"},
+                        "audience": f"{base}/mcp",
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "a",
+                    "refresh_token": "r",
+                    "workspace_id": "W",
+                    "user_id": "U",
+                    "resource": f"{base}/mcp",
+                },
+            )
+        raise AssertionError(request.url)
+
+    manager = OAuthManager(
+        TokenStore(tmp_path, backend=MemoryKeyring()),
+        http=httpx.Client(transport=httpx.MockTransport(handler)),
+        browser_open=lambda _url: True,
+        callback_factory=FakeCallback,
+        allow_localhost_http=True,
+    )
+    if provider is Provider.SLACK:
+        manager.authorize(provider, slack_client_id="id", slack_client_secret="secret")
+    else:
+        manager.authorize(provider)
+    assert resources_seen == [f"{base}/mcp"]
+
+
 def test_discovery_rejects_malformed_metadata_and_audience() -> None:
     base = "http://127.0.0.1:9006"
     client = httpx.Client(

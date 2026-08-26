@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 import autobrain.production as production
+from autobrain.cancellation import RunCancellation
 from autobrain.candidates.llm_wiki import LLMWikiObservation, LLMWikiRunResult
 from autobrain.metering import BudgetExceededError, LoopbackMeteringProxy
 from autobrain.models import (
@@ -51,11 +52,10 @@ class _Connector:
     def __init__(self, records: list[dict[str, str]]) -> None:
         self.records = records
 
-    def probe(self) -> dict[str, list[str]]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, list[str]]:
         return {"advertised": ["search"], "allowed": ["search"]}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         return ConnectorSnapshot(
             provider=self.provider,
             documents=tuple(self.records),
@@ -449,11 +449,7 @@ def test_llm_wiki_candidate_pin_survives_full_run_persistence_and_reopen(
         "corpus_sha256": comparison["corpus_hash"],
     }
 
-    before = {
-        path: path.read_bytes()
-        for path in result.run_dir.rglob("*")
-        if path.is_file()
-    }
+    before = {path: path.read_bytes() for path in result.run_dir.rglob("*") if path.is_file()}
     loaded = load_manifest(manifest_path)
     inventory = list_runs(tmp_path / "runs")
     self_comparison = compare_runs(tmp_path / "runs", result.run_id, result.run_id)
@@ -467,9 +463,7 @@ def test_llm_wiki_candidate_pin_survives_full_run_persistence_and_reopen(
     assert reopened is not None
     assert (reopened / "report.html").read_text(encoding="utf-8").startswith("<!doctype html>")
     assert {
-        path: path.read_bytes()
-        for path in result.run_dir.rglob("*")
-        if path.is_file()
+        path: path.read_bytes() for path in result.run_dir.rglob("*") if path.is_file()
     } == before
 
 

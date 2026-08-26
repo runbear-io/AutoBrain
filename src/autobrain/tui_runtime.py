@@ -11,9 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from autobrain.auth.models import Provider
+from autobrain.auth.models import AuthStatusReport, Provider
 from autobrain.auth.service import ConnectionManager
 from autobrain.candidates.gbrain_config import GBrainExecutionConfig, GBrainReadiness
+from autobrain.contracts import SourceConnectionState, SourceConnectionStatusProjectionV1
 from autobrain.embedding import EmbeddingReadiness, inspect_embedding_backend
 from autobrain.experiment import ExperimentPlan, ExperimentSetupError, build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState
@@ -28,7 +29,6 @@ from autobrain.paths import AutoBrainPaths
 from autobrain.source_store import SlackSourceStore
 from autobrain.subscription import (
     ProviderId,
-    SubscriptionProvider,
     SubscriptionStatus,
     provider_registry,
 )
@@ -37,6 +37,14 @@ from autobrain.tui_effects import login_command
 
 class RefreshableScreen(Protocol):
     def refresh(self) -> None: ...
+
+
+class ConnectionStatusProvider(Protocol):
+    def status(self) -> AuthStatusReport: ...
+
+
+class SubscriptionStatusProvider(Protocol):
+    def status(self) -> SubscriptionStatus: ...
 
 
 class ConnectionFlowRunner(Protocol):
@@ -56,48 +64,65 @@ class ConnectionSnapshot:
     sources: dict[Provider, ConnectionState]
     subscription_provider: ProviderId = ProviderId.CODEX
     source_details: dict[Provider, str] | None = None
+    source_projections: dict[Provider, SourceConnectionStatusProjectionV1] | None = None
     slack_export_path: Path | None = None
     slack_export_sha256: str | None = None
 
 
 def connection_snapshot(
     *,
-    manager: ConnectionManager | None = None,
-    subscription_client: SubscriptionProvider | None = None,
+    manager: ConnectionStatusProvider | None = None,
+    subscription_client: SubscriptionStatusProvider | None = None,
     subscription_provider: ProviderId = ProviderId.CODEX,
     refresh_subscription: bool = False,
     source_store: SlackSourceStore | None = None,
 ) -> ConnectionSnapshot:
     paths = AutoBrainPaths.from_home()
     report = (manager or ConnectionManager(paths.root)).status()
-    source_states = {item.provider: item.state for item in report.connections}
+    auth_report = report.with_projections()
+    projections: dict[Provider, SourceConnectionStatusProjectionV1] = {
+        Provider(item.provider.value): item for item in auth_report.projections
+    }
+    source_states: dict[Provider, ConnectionState] = {
+        provider: _legacy_connection_state(projection.state)
+        for provider, projection in projections.items()
+    }
     subscription = (
         subscription_client.status()
         if subscription_client is not None
         else provider_registry().probe(subscription_provider, refresh=refresh_subscription).status
     )
     slack_status = (source_store or SlackSourceStore(paths.sources)).status()
+    projections[Provider.SLACK] = slack_status.projection
+    source_states[Provider.SLACK] = _legacy_connection_state(slack_status.projection.state)
     embeddings = inspect_embedding_backend(os.environ)
-    source_details: dict[Provider, str] = {}
-    if slack_status.ready and slack_status.config is not None:
-        source_states[Provider.SLACK] = ConnectionState.CONNECTED
-        source_details[Provider.SLACK] = "export ready"
-        return ConnectionSnapshot(
-            subscription_provider=subscription_provider,
-            subscription=subscription,
-            embeddings=embeddings,
-            sources=source_states,
-            source_details=source_details,
-            slack_export_path=slack_status.archive_path,
-            slack_export_sha256=slack_status.config.archive_sha256,
-        )
+    source_details: dict[Provider, str] = {
+        Provider.SLACK: "export ready" if slack_status.projection.ready else slack_status.detail
+    }
     return ConnectionSnapshot(
         subscription_provider=subscription_provider,
         subscription=subscription,
         embeddings=embeddings,
         sources=source_states,
         source_details=source_details,
+        source_projections=projections,
+        slack_export_path=(slack_status.archive_path if slack_status.projection.ready else None),
+        slack_export_sha256=(
+            slack_status.config.archive_sha256
+            if slack_status.projection.ready and slack_status.config is not None
+            else None
+        ),
     )
+
+
+def _legacy_connection_state(state: SourceConnectionState) -> ConnectionState:
+    if state is SourceConnectionState.READY:
+        return ConnectionState.CONNECTED
+    if state is SourceConnectionState.EXPIRED:
+        return ConnectionState.EXPIRED
+    if state is SourceConnectionState.AWAITING_LOCAL_INPUT:
+        return ConnectionState.DISCONNECTED
+    return ConnectionState.REAUTHORIZATION_REQUIRED
 
 
 def run_connection_flow(

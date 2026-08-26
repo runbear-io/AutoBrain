@@ -61,6 +61,11 @@ class LifecycleRunner:
         self.calls.append((argv, env))
         if argv[-2:] == ("rev-parse", "HEAD"):
             stdout = GBRAIN_COMMIT
+        elif argv[-2:] == ("init", "--help"):
+            stdout = (
+                "--pglite --non-interactive --no-embedding --embedding-model "
+                "--embedding-dimensions --chat-model --json"
+            )
         elif self.failure == "provider" and "import" in argv:
             return CommandResult(
                 argv,

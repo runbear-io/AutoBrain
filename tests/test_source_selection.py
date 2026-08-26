@@ -4,6 +4,7 @@ from pathlib import Path
 
 from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
+from autobrain.cancellation import RunCancellation
 from autobrain.models import CandidateId, Status
 from autobrain.orchestration import ConnectorSnapshot, RunConfig, RunOrchestrator
 from autobrain.production import SlackExportSourceConnector, build_production_connectors
@@ -12,11 +13,10 @@ from autobrain.production import SlackExportSourceConnector, build_production_co
 class _Connector:
     provider = "slack"
 
-    def probe(self) -> dict[str, object]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, object]:
         return {"ok": True}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         return ConnectorSnapshot(provider=self.provider, documents=(), coverage={})
 
 

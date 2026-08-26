@@ -14,7 +14,24 @@ from pathlib import Path
 
 import keyring
 
-from autobrain.models import CandidatePins
+from autobrain.models import CandidatePin, CandidatePins
+
+
+def candidate_pin_matches(
+    pin: CandidatePin,
+    *,
+    distribution: str,
+    version: str,
+    commit: str | None,
+) -> bool:
+    """Match native identity to the approved registry entry without candidate branches."""
+    return (
+        pin.distribution == distribution
+        and pin.version == version
+        and commit is not None
+        and pin.commit == commit
+    )
+
 
 EXPECTED_PINS = {
     "llm-wiki": (

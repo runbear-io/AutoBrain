@@ -33,11 +33,11 @@ def test_hosted_provider_argv_and_secret_environment(
     GBrainAdapter(tools, tmp_path / "run", runner=runner, config=config).run(
         [document()], ["launch?"]
     )
-    init = next(call for call in runner.calls if call[0][2:3] == ("init",))
-    assert ("--embedding-provider", provider) == init[0][init[0].index("--embedding-provider") :][
-        :2
-    ]
-    assert model in init[0]
+    init = next(
+        call for call in runner.calls if call[0][2:3] == ("init",) and "--help" not in call[0]
+    )
+    assert "--embedding-provider" not in init[0]
+    assert f"{provider}:{model}" in init[0]
     assert str(dimensions) in init[0]
     assert init[2][env_name] == "super-secret"
     assert all("super-secret" not in part for part in init[0])
@@ -54,7 +54,9 @@ def test_quick_start_is_keyless_and_skips_dream_query_think(
         tools, tmp_path / "run", runner=runner, config=GBrainExecutionConfig.quick_start()
     ).run([document()], ["launch?"])[0]
     cli = [call[0] for call in runner.calls if call[0][:2] == ("bun", "src/cli.ts")]
-    assert [command[2] for command in cli] == ["init", "import", "sync", "status", "search"]
+    assert [command[2] for command in cli] == ["init", "init", "import", "sync", "status", "search"]
+    assert "--no-embedding" in cli[1]
+    assert "--quickstart" not in cli[1]
     assert all("OPENAI_API_KEY" not in call[2] for call in runner.calls)
     assert result.answer
     assert result.keyword_only is True

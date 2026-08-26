@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from autobrain.cancellation import RunCancellation
 from autobrain.models import CandidateId, CandidateObservation, Status
 from autobrain.orchestration import (
     CandidateContext,
@@ -20,11 +21,10 @@ class _FakeMcpConnector:
         self.provider = provider
         self.documents = tuple(documents)
 
-    def probe(self) -> dict[str, object]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, object]:
         return {"allowed": True, "capability_available": True}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         return ConnectorSnapshot(
             provider=self.provider,
             documents=self.documents,

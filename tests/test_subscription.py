@@ -7,6 +7,12 @@ from typing import cast
 import pytest
 
 from autobrain.metering import LoopbackMeteringProxy
+from autobrain.model_access import (
+    ModelAccess,
+    ModelAccessRegistry,
+    ModelAccessUnavailable,
+    ModelCapability,
+)
 from autobrain.orchestration import RunConfig
 from autobrain.subscription import (
     CodexSubscriptionClient,
@@ -63,6 +69,38 @@ def test_subscription_upstream_handles_local_embeddings_without_codex() -> None:
     data = cast(list[dict[str, object]], response["data"])
     assert len(data) == 2
     assert len(cast(list[float], data[0]["embedding"])) == 1536
+
+
+def test_model_access_registry_resolves_by_capability_not_provider_name() -> None:
+    def semantic(payload: dict[str, object]) -> dict[str, object]:
+        return {"model": payload["model"], "data": []}
+
+    registry = ModelAccessRegistry(
+        {
+            ModelCapability.SEMANTIC_EMBEDDING: ModelAccess(
+                capability=ModelCapability.SEMANTIC_EMBEDDING,
+                provider="google:gemini-embedding-001",
+                handler=semantic,
+            )
+        }
+    )
+
+    assert registry.require(ModelCapability.SEMANTIC_EMBEDDING).handler({"model": "x"}) == {
+        "model": "x",
+        "data": [],
+    }
+    with pytest.raises(ModelAccessUnavailable, match="smoke_embedding"):
+        registry.require(ModelCapability.SMOKE_EMBEDDING)
+
+
+def test_subscription_semantic_embedding_does_not_fallback_to_local_hash() -> None:
+    upstream = build_subscription_upstream(
+        CodexSubscriptionClient(CodexSubscriptionConfig()),
+        model_access=ModelAccessRegistry({}),
+    )
+
+    with pytest.raises(ModelAccessUnavailable, match="semantic_embedding"):
+        upstream({"model": "text-embedding-3-small", "input": ["must be hosted"]})
 
 
 def test_subscription_chat_can_use_an_explicit_semantic_embedding_backend() -> None:

@@ -54,11 +54,10 @@ def _records(count: int = 24) -> list[dict[str, Any]]:
 class _Connector:
     provider = "slack"
 
-    def probe(self) -> dict[str, Any]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, Any]:
         return {"allowed": ["search", "fetch"]}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         return ConnectorSnapshot(
             provider=self.provider,
             documents=tuple(_records()),
@@ -103,7 +102,7 @@ def test_stage_events_are_exact_post_redaction_persisted_entries(tmp_path: Path)
     events: list[StageEvent] = []
 
     class _SecretConnector(_Connector):
-        def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
+        def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
             raise RuntimeError(f"failed under /private/{secret}/run")
 
     def sink(event: StageEvent) -> None:
@@ -350,14 +349,14 @@ def test_hung_connector_cancellation_settles_with_cleanup_result_and_no_thread_d
     class _HungConnector:
         provider = "slack"
 
-        def probe(self, *, cancellation: RunCancellation) -> dict[str, Any]:
+        def probe(self, cancellation: RunCancellation | None = None) -> dict[str, Any]:
+            assert cancellation is not None, "orchestration must plumb cancellation"
             entered.set()
             cancellation.wait()
             cancellation.raise_if_cancelled()
             raise AssertionError("cancelled connector continued")
 
-        def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-            del include_dms
+        def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
             raise AssertionError("cancelled connector crawled")
 
     candidate = _Candidate()
@@ -408,8 +407,7 @@ def test_hung_connector_cancellation_settles_with_cleanup_result_and_no_thread_d
 
 def test_sink_failure_does_not_replace_primary_runtime_failure(tmp_path: Path) -> None:
     class _FailingConnector(_Connector):
-        def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-            del include_dms
+        def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
             raise RuntimeError("primary crawl failure")
 
     def sink(event: StageEvent) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from autobrain.auth.models import AuthStatusReport, ConnectionStatus, Provider
+from autobrain.cancellation import RunCancellation
 from autobrain.embedding import EmbeddingBackendConfig, EmbeddingReadiness
 from autobrain.experiment import ExperimentSetupError, build_automatic_plan
 from autobrain.models import CandidateId, ConnectionState, Status
@@ -35,11 +36,10 @@ def _smoke_readiness() -> EmbeddingReadiness:
 class FakeConnector:
     provider = Provider.SLACK.value
 
-    def probe(self) -> dict[str, object]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, object]:
         return {"ok": True}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         return ConnectorSnapshot(provider=self.provider, documents=(), coverage={})
 
 
