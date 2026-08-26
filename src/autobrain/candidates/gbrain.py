@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -22,7 +23,8 @@ from typing import Any, cast
 
 from autobrain.cancellation import RunCancellation
 from autobrain.candidates.gbrain_config import GBrainExecutionConfig
-from autobrain.models import NormalizedDocument
+from autobrain.lifecycle import CleanupReceipt, remaining_paths
+from autobrain.models import CandidateId, NormalizedDocument
 from autobrain.retrieval_ids import provenance_map, resolve_retrieved_source_ids
 
 GBRAIN_COMMIT = "f49ca569232dbc0d8e0783d84606115e3bfe5ab1"
@@ -51,6 +53,10 @@ class GBrainIsolationError(GBrainError):
 
 class GBrainProcessError(GBrainError):
     """The pinned CLI exited unsuccessfully or emitted invalid JSON."""
+
+
+class GBrainCapabilityError(GBrainProcessError):
+    """The pinned CLI does not advertise a capability required by this mode."""
 
 
 class GBrainMissingProviderError(GBrainProcessError):
@@ -526,6 +532,48 @@ class GBrainAdapter:
             base_url=base_url,
         )
 
+    def _init_capabilities(self, *, base_url: str | None = None) -> frozenset[str]:
+        """Read supported init flags from the pinned CLI instead of guessing."""
+        help_result = self._run_cli("init", "--help", base_url=base_url)
+        return frozenset(re.findall(r"--[a-z0-9-]+", help_result.stdout + help_result.stderr))
+
+    def _init_args(self, capabilities: frozenset[str]) -> list[str]:
+        args = ["init", "--pglite", "--non-interactive"]
+        if self.config.keyword_only:
+            required = "--no-embedding"
+            if required not in capabilities:
+                raise GBrainCapabilityError(
+                    "GBRAIN_CAPABILITY_UNAVAILABLE: pinned GBrain init does not support "
+                    f"keyword-only mode ({required})"
+                )
+            args.append(required)
+        else:
+            embedding = self.config.embedding
+            if not {"--embedding-model", "--embedding-dimensions"}.issubset(capabilities):
+                raise GBrainCapabilityError(
+                    "GBRAIN_CAPABILITY_UNAVAILABLE: pinned GBrain init does not support "
+                    "the configured semantic embedding contract"
+                )
+            assert embedding.model is not None
+            assert embedding.dimensions is not None
+            args.extend(
+                [
+                    "--embedding-model",
+                    f"{embedding.provider.value}:{embedding.model}",
+                    "--embedding-dimensions",
+                    str(embedding.dimensions),
+                ]
+            )
+        if self.config.chat_provider == "openai" and self.config.chat_model:
+            if "--chat-model" not in capabilities:
+                raise GBrainCapabilityError(
+                    "GBRAIN_CAPABILITY_UNAVAILABLE: pinned GBrain init does not support "
+                    "the configured chat model contract"
+                )
+            args.extend(["--chat-model", self.config.chat_model])
+        args.append("--json")
+        return args
+
     def prepare_sources(
         self, documents: Sequence[NormalizedDocument], holdout_markers: Sequence[str] = ()
     ) -> Path:
@@ -576,26 +624,8 @@ class GBrainAdapter:
         self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.prepare_sources(documents, holdout_markers)
         gold_sources = provenance_map(documents)
-        init_args = ["init", "--pglite", "--non-interactive"]
-        if self.config.keyword_only:
-            init_args.append("--quickstart")
-        else:
-            embedding = self.config.embedding
-            assert embedding.model is not None
-            assert embedding.dimensions is not None
-            init_args.extend(
-                [
-                    "--embedding-provider",
-                    embedding.provider.value,
-                    "--embedding-model",
-                    embedding.model,
-                    "--embedding-dimensions",
-                    str(embedding.dimensions),
-                ]
-            )
-        if self.config.chat_provider == "openai" and self.config.chat_model:
-            init_args.extend(["--chat-model", self.config.chat_model])
-        init_args.append("--json")
+        capabilities = self._init_capabilities(base_url=base_url)
+        init_args = self._init_args(capabilities)
         self._run_cli(*init_args, base_url=base_url)
         self._run_cli("import", str(self.sources), "--json", base_url=base_url)
         try:
@@ -762,12 +792,26 @@ class GBrainAdapter:
         gateway = self.checkout / "src/core/ai/gateway.ts"
         return gateway.exists() and "OPENAI_BASE_URL" in gateway.read_text(encoding="utf-8")
 
-    def cleanup(self) -> None:
+    def cleanup(self) -> CleanupReceipt:
         """Remove only this adapter's run-local process/state; never global GBrain state."""
-        if self.home.exists():
-            for path in sorted(self.home.rglob("*"), reverse=True):
-                if path.is_file() or path.is_symlink():
-                    path.unlink(missing_ok=True)
-                elif path.is_dir():
-                    path.rmdir()
-            self.home.rmdir()
+        removed: list[str] = []
+        try:
+            if self.home.exists():
+                for path in sorted(self.home.rglob("*"), reverse=True):
+                    if path.is_file() or path.is_symlink():
+                        path.unlink(missing_ok=True)
+                    elif path.is_dir():
+                        path.rmdir()
+                self.home.rmdir()
+                removed.append(str(self.home))
+            return CleanupReceipt(
+                candidate=CandidateId.GBRAIN,
+                removed_paths=removed,
+                remaining_paths=list(remaining_paths(self.home)),
+            )
+        except KeyboardInterrupt:
+            return CleanupReceipt(candidate=CandidateId.GBRAIN, interrupted=True)
+        except Exception as exc:
+            return CleanupReceipt(
+                candidate=CandidateId.GBRAIN, removed_paths=removed, error=str(exc)
+            )

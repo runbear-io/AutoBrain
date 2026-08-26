@@ -11,6 +11,7 @@ from typing import Literal, cast
 
 from pydantic import Field, model_validator
 
+from autobrain.cancellation import RunCancellation
 from autobrain.models import (
     CandidateId,
     CandidateObservation,
@@ -139,11 +140,14 @@ class FixtureConnector:
             if item.provider == provider
         )
 
-    def probe(self) -> dict[str, list[str]]:
+    def probe(self, cancellation: RunCancellation | None = None) -> dict[str, list[str]]:
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         return {"advertised": ["search", "fetch"], "allowed": ["search", "fetch"]}
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         return ConnectorSnapshot(
             provider=self.provider,
             documents=self.documents,

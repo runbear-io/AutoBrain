@@ -1,0 +1,255 @@
+{
+  "description": "AutoBrain integration provenance; null means not verified, not unknown-by-guess.",
+  "integrations": [
+    {
+      "auth_kind": "local_export",
+      "backend": "autobrain-slack-export",
+      "capabilities": [
+        "read_only",
+        "frozen_snapshot"
+      ],
+      "evidence": "repository source connector and frozen export contract",
+      "id": "source.slack-export",
+      "license": null,
+      "provider": "slack",
+      "reuse": "thin_adapter",
+      "source": "slack",
+      "status": "current",
+      "usage_provenance": "unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "oauth",
+      "backend": "hosted-notion-mcp",
+      "capabilities": [
+        "read_only",
+        "search",
+        "fetch",
+        "live_mcp_capture"
+      ],
+      "evidence": "official hosted MCP endpoint and read-tool allowlist",
+      "id": "source.notion-mcp",
+      "license": null,
+      "provider": "notion",
+      "reuse": "protocol_reuse",
+      "source": "notion",
+      "status": "current",
+      "usage_provenance": "unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "api_key",
+      "backend": "llm-wiki-compiler",
+      "capabilities": [
+        "ingest",
+        "retrieval",
+        "answer"
+      ],
+      "evidence": "candidate-pins.json and native lifecycle adapter",
+      "id": "candidate.llm-wiki",
+      "license": "MIT",
+      "provider": "llm-wiki-compiler",
+      "reuse": "thin_adapter",
+      "source": null,
+      "status": "current",
+      "usage_provenance": "measured_or_unavailable",
+      "version": "1.1.0"
+    },
+    {
+      "auth_kind": "api_key",
+      "backend": "mem0ai",
+      "capabilities": [
+        "ingest",
+        "retrieval",
+        "answer"
+      ],
+      "evidence": "candidate-pins.json and native lifecycle adapter",
+      "id": "candidate.mem0",
+      "license": "Apache-2.0",
+      "provider": "mem0ai",
+      "reuse": "thin_adapter",
+      "source": null,
+      "status": "current",
+      "usage_provenance": "measured_or_unavailable",
+      "version": "2.0.18"
+    },
+    {
+      "auth_kind": "api_key",
+      "backend": "gbrain",
+      "capabilities": [
+        "ingest",
+        "retrieval",
+        "answer"
+      ],
+      "evidence": "candidate-pins.json and pinned native CLI adapter",
+      "id": "candidate.gbrain",
+      "license": "MIT",
+      "provider": "gbrain",
+      "reuse": "thin_adapter",
+      "source": null,
+      "status": "current",
+      "usage_provenance": "measured_or_unavailable",
+      "version": "0.46.19.0"
+    },
+    {
+      "auth_kind": "consumer_subscription",
+      "backend": "codex-cli",
+      "capabilities": [
+        "status",
+        "login",
+        "structured_answer",
+        "read_only"
+      ],
+      "evidence": "verified provider protocol and local CLI contract",
+      "id": "subscription.codex",
+      "license": null,
+      "provider": "codex",
+      "reuse": "protocol_reuse",
+      "source": null,
+      "status": "current",
+      "usage_provenance": "native_or_estimated_or_unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "consumer_subscription",
+      "backend": "claude-code-cli",
+      "capabilities": [
+        "status",
+        "login",
+        "structured_answer",
+        "read_only"
+      ],
+      "evidence": "verified first-party consumer login and JSON CLI contract",
+      "id": "subscription.claude",
+      "license": null,
+      "provider": "claude",
+      "reuse": "protocol_reuse",
+      "source": null,
+      "status": "current",
+      "usage_provenance": "native_or_unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "unsupported",
+      "backend": "kimi-cli",
+      "capabilities": [],
+      "evidence": "no verified official consumer CLI contract",
+      "id": "subscription.kimi",
+      "license": null,
+      "provider": "kimi",
+      "reuse": "gated",
+      "source": null,
+      "status": "gated",
+      "usage_provenance": "unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "unsupported",
+      "backend": "grok-cli",
+      "capabilities": [],
+      "evidence": "no verified official consumer CLI contract",
+      "id": "subscription.grok",
+      "license": null,
+      "provider": "grok",
+      "reuse": "gated",
+      "source": null,
+      "status": "gated",
+      "usage_provenance": "unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "none",
+      "backend": "local-hash-embedding",
+      "capabilities": [
+        "embedding",
+        "smoke_only"
+      ],
+      "evidence": "deterministic local implementation; never recommendation eligible",
+      "id": "embedding.local-hash",
+      "license": null,
+      "provider": null,
+      "reuse": "direct_reuse",
+      "source": null,
+      "status": "current",
+      "usage_provenance": "unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "api_key",
+      "backend": "openai:text-embedding-3-small",
+      "capabilities": [
+        "embedding",
+        "semantic"
+      ],
+      "evidence": "registered OpenAI-compatible embedding transport",
+      "id": "embedding.openai",
+      "license": null,
+      "provider": "openai",
+      "reuse": "protocol_reuse",
+      "source": null,
+      "status": "current",
+      "usage_provenance": "measured_or_unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "api_key",
+      "backend": "google:gemini-embedding-001",
+      "capabilities": [
+        "embedding",
+        "semantic"
+      ],
+      "evidence": "registered Gemini embedding transport; BYOK capability",
+      "id": "embedding.gemini",
+      "license": null,
+      "provider": "google",
+      "reuse": "protocol_reuse",
+      "source": null,
+      "status": "current",
+      "usage_provenance": "measured_or_unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "oauth",
+      "backend": "google-drive-connector",
+      "capabilities": [],
+      "evidence": "connector is explicitly unsupported by current project policy",
+      "id": "source.google-drive",
+      "license": null,
+      "provider": "google_drive",
+      "reuse": "gated",
+      "source": "google_drive",
+      "status": "gated",
+      "usage_provenance": "unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "oauth",
+      "backend": "atlassian-mcp",
+      "capabilities": [],
+      "evidence": "official MCP authentication contract is unverified",
+      "id": "source.confluence",
+      "license": null,
+      "provider": "confluence",
+      "reuse": "gated",
+      "source": "confluence",
+      "status": "gated",
+      "usage_provenance": "unavailable",
+      "version": null
+    },
+    {
+      "auth_kind": "unsupported",
+      "backend": "onyx",
+      "capabilities": [],
+      "evidence": "no design-partner evidence; no verified license, public API, runtime, ACL, resource, network, or teardown proof",
+      "id": "source.onyx",
+      "license": null,
+      "provider": "onyx",
+      "reuse": "gated",
+      "source": "onyx",
+      "status": "gated",
+      "usage_provenance": "unavailable",
+      "version": null
+    }
+  ],
+  "schema_version": 1
+}

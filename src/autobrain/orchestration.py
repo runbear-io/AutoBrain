@@ -33,11 +33,15 @@ from autobrain.embedding import (
     EmbeddingBackend,
     EmbeddingBackendConfig,
     EmbeddingBackendRegistry,
+    build_gemini_embedding_upstream,
     build_openai_embedding_upstream,
     production_embedding_registry,
 )
 from autobrain.evaluate import evaluate_candidate, evaluate_case
 from autobrain.experiment import automatic_experiment_copy
+from autobrain.integration_provenance import integration_catalog
+from autobrain.lifecycle import CleanupReceipt, cleanup_receipt_complete
+from autobrain.model_access import ModelAccess, ModelAccessRegistry, ModelCapability
 from autobrain.models import (
     BenchmarkCase,
     BenchmarkProvenance,
@@ -52,6 +56,7 @@ from autobrain.models import (
     DecisionResult,
     LatencySpan,
     LatencySpanKind,
+    NativeCandidateResult,
     SourceKind,
     SourceMutability,
     SourceProvenance,
@@ -61,7 +66,7 @@ from autobrain.models import (
     normalize_safe_source_url,
 )
 from autobrain.paths import AutoBrainPaths, OccupiedRunError
-from autobrain.preflight_support import load_candidate_pins
+from autobrain.preflight_support import candidate_pin_matches, load_candidate_pins
 from autobrain.report import build_comparison, load_comparison, write_artifacts
 from autobrain.secrets import redact
 from autobrain.subscription_domain import ProviderId
@@ -103,11 +108,18 @@ def _empty_artifact() -> dict[str, Any]:
 
 
 class Connector(Protocol):
+    """A read-only source crawler.
+
+    Source-neutral by construction: provider-specific options such as Slack DM
+    inclusion belong to the implementer's constructor, never to this seam.
+    Cancellation is optional so a connector may be driven outside a run.
+    """
+
     provider: str
 
-    def probe(self) -> Mapping[str, Any]: ...
+    def probe(self, cancellation: RunCancellation | None = None) -> Mapping[str, Any]: ...
 
-    def crawl(self, *, include_dms: bool) -> ConnectorSnapshot: ...
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot: ...
 
 
 @dataclass(frozen=True)
@@ -140,7 +152,7 @@ class Candidate(Protocol):
 
     def run(self, context: CandidateContext) -> CandidateOutcome: ...
 
-    def cleanup(self) -> None: ...
+    def cleanup(self) -> CleanupReceipt | None: ...
 
 
 def retain_selected_candidates(
@@ -229,6 +241,7 @@ class CandidateOutcome:
     cost_status: CostStatus = CostStatus.COMPLETE
     usage_source: UsageSource = UsageSource.MEASURED
     evaluation: CandidateEvaluation | None = None
+    native_result: NativeCandidateResult | None = None
 
 
 @dataclass(frozen=True)
@@ -420,6 +433,9 @@ class RunOrchestrator:
         self._stages: list[dict[str, Any]] = []
         self._ledger: list[dict[str, Any]] = []
         self._manifest: dict[str, Any] = {}
+        self._cleanup_receipts: dict[str, CleanupReceipt] = {}
+        self._cleanup_attempted: set[str] = set()
+        self._cleanup_errors: list[str] = []
         self._started = 0.0
         self._known_secrets = tuple(
             secret
@@ -472,7 +488,11 @@ class RunOrchestrator:
         resolved_api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
         embedding_config = config.embedding_config(
             environ=os.environ,
-            api_key=resolved_api_key,
+            api_key=(
+                resolved_api_key
+                if config.embedding_backend == EmbeddingBackend.OPENAI.value
+                else api_key
+            ),
         )
         embedding_readiness = embedding_config.readiness()
         if (
@@ -561,11 +581,27 @@ class RunOrchestrator:
             embedding_upstream = (
                 build_openai_embedding_upstream(embedding_config)
                 if embedding_config.descriptor.openai_transport
+                else build_gemini_embedding_upstream(embedding_config)
+                if embedding_config.descriptor.gemini_transport
+                else None
+            )
+            model_access = (
+                ModelAccessRegistry(
+                    {
+                        ModelCapability.SEMANTIC_EMBEDDING: ModelAccess(
+                            capability=ModelCapability.SEMANTIC_EMBEDDING,
+                            provider=embedding_config.descriptor.provenance_backend,
+                            handler=embedding_upstream,
+                        )
+                    }
+                )
+                if embedding_upstream is not None
                 else None
             )
             subscription_upstream = build_subscription_upstream(
                 subscription_client,
                 embedding_upstream=embedding_upstream,
+                model_access=model_access,
             )
 
             def selected_chat_provenance() -> ChatProvenance:
@@ -678,11 +714,30 @@ class RunOrchestrator:
             raise RuntimeError("RunOrchestrator is single-use; construct a new instance")
         self._run_started = True
         result = self._run_workflow()
-        cleanup_errors: list[str] = []
+        cleanup_errors: list[str] = [*self._cleanup_errors]
         cleanup_interruptions: list[str] = []
         for candidate in self.candidates:
+            if candidate.candidate_id in self._cleanup_attempted:
+                continue
+            self._cleanup_attempted.add(candidate.candidate_id)
             try:
-                candidate.cleanup()
+                receipt = candidate.cleanup()
+                if receipt is not None:
+                    self._cleanup_receipts[candidate.candidate_id] = receipt
+                    cleanup_manifest = self._manifest.setdefault("cleanup", {})
+                    cleanup_manifest[candidate.candidate_id] = receipt.model_dump(mode="json")
+                if receipt is not None and not cleanup_receipt_complete(receipt):
+                    cleanup_errors.append(f"{candidate.candidate_id}: incomplete cleanup receipt")
+                    self._ledger.append(
+                        {
+                            "kind": "cleanup",
+                            "candidate": candidate.candidate_id,
+                            "status": Status.FAILED.value,
+                            "detail": "cleanup receipt did not prove complete removal",
+                            "receipt": receipt.model_dump(mode="json"),
+                        }
+                    )
+                    continue
             except KeyboardInterrupt:
                 detail = "cleanup interrupted"
                 cleanup_interruptions.append(f"{candidate.candidate_id}: {detail}")
@@ -711,6 +766,7 @@ class RunOrchestrator:
                         "kind": "cleanup",
                         "candidate": candidate.candidate_id,
                         "status": Status.OK.value,
+                        "receipt": receipt.model_dump(mode="json") if receipt is not None else None,
                     }
                 )
 
@@ -1011,6 +1067,7 @@ class RunOrchestrator:
                     tuple(candidate_results),
                     verdict,
                 )
+            self._cleanup_candidates(run_dir)
             evaluations = self._canonical_evaluations(
                 candidate_results,
                 evaluator_cases,
@@ -1251,15 +1308,7 @@ class RunOrchestrator:
         results: dict[str, Mapping[str, Any]] = {}
         for connector in self.connectors:
             self.cancellation.raise_if_cancelled()
-            parameters = inspect.signature(connector.probe).parameters
-            result: Mapping[str, Any]
-            if "cancellation" in parameters:
-                result = cast(
-                    Mapping[str, Any],
-                    connector.probe(cancellation=self.cancellation),  # type: ignore[call-arg]
-                )
-            else:
-                result = connector.probe()
+            result = connector.probe(cancellation=self.cancellation)
             results[connector.provider] = dict(result)
             self._ledger.append(
                 {"kind": "probe", "provider": connector.provider, "read_only": True}
@@ -1271,18 +1320,7 @@ class RunOrchestrator:
         snapshots: list[ConnectorSnapshot] = []
         for connector in self.connectors:
             self.cancellation.raise_if_cancelled()
-            parameters = inspect.signature(connector.crawl).parameters
-            snapshot: ConnectorSnapshot
-            if "cancellation" in parameters:
-                snapshot = cast(
-                    ConnectorSnapshot,
-                    connector.crawl(
-                        include_dms=self.config.include_dms,
-                        cancellation=self.cancellation,  # type: ignore[call-arg]
-                    ),
-                )
-            else:
-                snapshot = connector.crawl(include_dms=self.config.include_dms)
+            snapshot = connector.crawl(cancellation=self.cancellation)
             snapshots.append(snapshot)
             self._ledger.append(
                 {
@@ -1706,8 +1744,8 @@ class RunOrchestrator:
             forbidden_tokens=tuple(sorted(forbidden_tokens)),
         )
 
-    @staticmethod
     def _canonical_evaluations(
+        self,
         outcomes: Sequence[CandidateOutcome],
         evaluator_cases: Sequence[EvaluatorCaseRecord],
         corpus_sha: str,
@@ -1766,17 +1804,23 @@ class RunOrchestrator:
                 total_cost_usd=outcome.cost_usd if complete_cost else None,
                 cost_status=effective_cost_status,
                 usage_source=outcome.usage_source,
-                valid_pin=True,
+                valid_pin=(
+                    True
+                    if outcome.native_result is None
+                    else self._native_pin_is_valid(outcome.native_result)
+                ),
                 corpus_hash=corpus_sha,
                 query_wall_time_ms=sum(
                     observation.latency_ms for observation in outcome.observations
                 ),
             )
             execution_config = outcome.artifact.get("execution_config")
-            keyword_only = False
-            if isinstance(execution_config, Mapping):
-                typed_execution_config = cast(Mapping[str, object], execution_config)
-                keyword_only = typed_execution_config.get("keyword_only") is True
+            keyword_only = (
+                isinstance(execution_config, Mapping)
+                and cast(Mapping[str, object], execution_config).get("keyword_only") is True
+            )
+            if outcome.native_result is not None:
+                evaluation = evaluation.model_copy(update={"native_result": outcome.native_result})
             if outcome.status is not Status.OK:
                 evaluation = evaluation.model_copy(
                     update={"status": outcome.status, "eligible_override": False}
@@ -1794,8 +1838,78 @@ class RunOrchestrator:
                 evaluation = evaluation.model_copy(
                     update={"status": Status.FAILED, "eligible_override": False}
                 )
+            receipt = self._cleanup_receipts.get(outcome.candidate)
+            if outcome.native_result is not None and not cleanup_receipt_complete(receipt):
+                evaluation = evaluation.model_copy(
+                    update={
+                        "eligible_override": False,
+                        "eligibility_reasons": [
+                            *evaluation.eligibility_reasons,
+                            "cleanup receipt does not prove complete candidate cleanup",
+                        ],
+                    }
+                )
             evaluations.append(evaluation.model_copy(update={"corpus_hash": corpus_sha}))
         return evaluations
+
+    def _native_pin_is_valid(self, native: NativeCandidateResult | None) -> bool:
+        if native is None:
+            return False
+        try:
+            pin = next(
+                item for item in load_candidate_pins().candidates if item.id is native.candidate
+            )
+        except (OSError, ValueError, StopIteration):
+            return False
+        return candidate_pin_matches(
+            pin,
+            distribution=native.backend.name,
+            version=native.backend.version or "",
+            commit=native.backend.commit,
+        )
+
+    def _cleanup_candidates(self, run_dir: Path) -> None:
+        for candidate in self.candidates:
+            if candidate.candidate_id in self._cleanup_attempted:
+                continue
+            self._cleanup_attempted.add(candidate.candidate_id)
+            try:
+                receipt = candidate.cleanup()
+            except BaseException as exc:
+                detail = f"{type(exc).__name__}: {exc}"
+                self._cleanup_errors.append(f"{candidate.candidate_id}: {detail}")
+                self._manifest.setdefault("cleanup", {})[candidate.candidate_id] = {
+                    "candidate": candidate.candidate_id,
+                    "complete": False,
+                    "error": detail,
+                }
+                self._ledger.append(
+                    {
+                        "kind": "cleanup",
+                        "candidate": candidate.candidate_id,
+                        "status": Status.FAILED.value,
+                        "detail": detail,
+                    }
+                )
+                continue
+            if receipt is None:
+                continue
+            self._cleanup_receipts[candidate.candidate_id] = receipt
+            self._manifest.setdefault("cleanup", {})[candidate.candidate_id] = receipt.model_dump(
+                mode="json"
+            )
+            complete = cleanup_receipt_complete(receipt)
+            if not complete:
+                self._cleanup_errors.append(f"{candidate.candidate_id}: incomplete cleanup receipt")
+            self._ledger.append(
+                {
+                    "kind": "cleanup",
+                    "candidate": candidate.candidate_id,
+                    "status": Status.OK.value if complete else Status.FAILED.value,
+                    "receipt": receipt.model_dump(mode="json"),
+                }
+            )
+        self._persist(run_dir)
 
     def _write_evaluator_holdout(
         self,
@@ -1991,6 +2105,7 @@ class RunOrchestrator:
             usage_source=usage_source,
             sources=sources,
             latency_spans=spans,
+            integrations=list(integration_catalog()),
         )
 
     def _canonical_coverage(self) -> tuple[list[CoverageRecord], list[str]]:
@@ -2229,6 +2344,11 @@ class RunOrchestrator:
             "evaluation": (
                 outcome.evaluation.model_dump(mode="json")
                 if outcome.evaluation is not None
+                else None
+            ),
+            "native_result": (
+                outcome.native_result.model_dump(mode="json")
+                if outcome.native_result is not None
                 else None
             ),
         }

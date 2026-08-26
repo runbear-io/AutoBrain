@@ -19,6 +19,8 @@ from autobrain.models import (
 )
 
 _OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
+_GEMINI_EMBEDDING_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _LOCAL_HASH_BACKEND = "local-hash-embedding"
 _TEST_SEMANTIC_SELECTOR = "test-semantic"
 _TEST_SEMANTIC_BACKEND = "test:semantic-fixture"
@@ -29,6 +31,7 @@ class EmbeddingBackend(StrEnum):
 
     LOCAL_HASH = "local-hash"
     OPENAI = "openai"
+    GEMINI = "gemini"
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,8 @@ class EmbeddingBackendDescriptor:
     recommendation_eligible: bool
     requires_api_key: bool
     openai_transport: bool = False
+    gemini_transport: bool = False
+    api_key_env: str | None = None
 
     @property
     def provenance(self) -> EmbeddingProvenance:
@@ -129,6 +134,16 @@ _PRODUCTION_EMBEDDING_REGISTRY = EmbeddingBackendRegistry(
             recommendation_eligible=True,
             requires_api_key=True,
             openai_transport=True,
+            api_key_env="OPENAI_API_KEY",
+        ),
+        EmbeddingBackendDescriptor(
+            selector=EmbeddingBackend.GEMINI.value,
+            provenance_backend=f"google:{_GEMINI_EMBEDDING_MODEL}",
+            quality=EmbeddingQuality.SEMANTIC,
+            recommendation_eligible=True,
+            requires_api_key=True,
+            gemini_transport=True,
+            api_key_env="GEMINI_API_KEY",
         ),
     )
 )
@@ -170,7 +185,13 @@ class EmbeddingBackendConfig:
         if descriptor is None:
             choices = ", ".join(selected_registry.selectors)
             raise ValueError(f"AUTOBRAIN_EMBEDDING_BACKEND must be one of: {choices}")
-        resolved_key = api_key if api_key is not None else environ.get("OPENAI_API_KEY")
+        resolved_key = (
+            api_key
+            if api_key is not None
+            else environ.get(descriptor.api_key_env)
+            if descriptor.api_key_env
+            else None
+        )
         return cls(
             descriptor=descriptor,
             registry=selected_registry,
@@ -214,12 +235,13 @@ class EmbeddingBackendConfig:
                 recommendation_ready=False,
             )
         if descriptor.requires_api_key and self.api_key is None:
+            env_name = descriptor.api_key_env or "API_KEY"
             return EmbeddingReadiness(
                 backend=descriptor.selector,
                 status=Status.MISSING_PROVIDER,
                 detail=(
-                    "SEMANTIC_EMBEDDING_UNAVAILABLE: OPENAI_API_KEY is required for "
-                    "openai:text-embedding-3-small"
+                    f"SEMANTIC_EMBEDDING_UNAVAILABLE: {env_name} is required for "
+                    f"{descriptor.provenance_backend}"
                 ),
                 provenance=provenance,
                 recommendation_ready=False,
@@ -332,5 +354,107 @@ def build_openai_embedding_upstream(
         if not isinstance(value, dict):
             raise RuntimeError("semantic embedding provider returned a non-object response")
         return cast(dict[str, Any], value)
+
+    return request
+
+
+def build_gemini_embedding_upstream(
+    config: EmbeddingBackendConfig,
+) -> Callable[[dict[str, object]], dict[str, object]]:
+    """Build the explicit Google Gemini semantic-embedding request boundary.
+
+    Accepts an OpenAI-style embedding payload (``model`` + ``input``) and
+    translates it to the Gemini ``embedContent`` / ``batchEmbedContent`` REST
+    API, returning an OpenAI-compatible response envelope so callers can treat
+    the upstream uniformly.  No live calls are made at construction time.
+    """
+    if not config.descriptor.gemini_transport or config.api_key is None:
+        raise ValueError("semantic Gemini embedding backend is not ready")
+    api_key = config.api_key.get_secret_value()
+    model = _GEMINI_EMBEDDING_MODEL
+    base = _GEMINI_EMBEDDING_API_BASE
+
+    def request(payload: dict[str, object]) -> dict[str, object]:
+        raw_input = payload.get("input")
+        if isinstance(raw_input, str):
+            texts = [raw_input]
+        elif isinstance(raw_input, list):
+            texts = [item for item in cast(list[object], raw_input) if isinstance(item, str)]
+        else:
+            raise ValueError("gemini embedding upstream requires 'input' string or list")
+        if not texts:
+            raise ValueError("gemini embedding upstream requires at least one input text")
+
+        if len(texts) == 1:
+            url = f"{base}/{model}:embedContent"
+            body = json.dumps(
+                {
+                    "content": {"parts": [{"text": texts[0]}]},
+                    "taskType": "RETRIEVAL_DOCUMENT",
+                }
+            ).encode("utf-8")
+        else:
+            url = f"{base}/{model}:batchEmbedContent"
+            body = json.dumps(
+                {
+                    "requests": [
+                        {
+                            "content": {"parts": [{"text": text}]},
+                            "taskType": "RETRIEVAL_DOCUMENT",
+                        }
+                        for text in texts
+                    ],
+                }
+            ).encode("utf-8")
+
+        outgoing = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "x-goog-api-key": api_key,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(outgoing, timeout=30) as response:
+                value = json.loads(response.read())
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"semantic embedding request failed ({type(error).__name__})"
+            ) from None
+        if not isinstance(value, dict):
+            raise RuntimeError("semantic embedding provider returned a non-object response")
+
+        # Translate Gemini response to OpenAI-compatible envelope.
+        response = cast(dict[str, object], value)
+        if len(texts) == 1:
+            embedding_obj = response.get("embedding")
+            vectors = (
+                [cast(list[float], cast(dict[str, object], embedding_obj)["values"])]
+                if isinstance(embedding_obj, dict)
+                else []
+            )
+        else:
+            embeddings = response.get("embeddings")
+            vectors = (
+                [
+                    cast(list[float], item["values"])
+                    for item in cast(list[dict[str, object]], embeddings)
+                ]
+                if isinstance(embeddings, list)
+                else []
+            )
+        return {
+            "object": "list",
+            "data": [
+                {"object": "embedding", "index": i, "embedding": vec}
+                for i, vec in enumerate(vectors)
+            ],
+            "model": f"google:{model}",
+            "_autobrain_provider": "gemini",
+            "_autobrain_usage_source": "measured",
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
 
     return request

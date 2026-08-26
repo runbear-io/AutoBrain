@@ -8,6 +8,7 @@ adapters into the orchestration protocol.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -20,10 +21,12 @@ import anyio
 
 from autobrain.auth.models import Provider
 from autobrain.auth.oauth import OAuthManager
-from autobrain.auth.providers import config_for
+from autobrain.auth.providers import CONFIGS, config_for
 from autobrain.auth.service import ConnectionManager
 from autobrain.cancellation import RunCancellation, RunCancelled
 from autobrain.candidates.gbrain import (
+    GBRAIN_COMMIT,
+    GBRAIN_VERSION,
     GBrainAdapter,
     GBrainMissingProviderError,
     GBrainProcessError,
@@ -37,6 +40,7 @@ from autobrain.candidates.mem0 import (
 )
 from autobrain.connectors.notion_snapshot import NotionSnapshotConnector
 from autobrain.connectors.slack_export import SlackExportConnector, SlackExportCrawlResult
+from autobrain.lifecycle import CleanupReceipt
 from autobrain.mcp.transport import StreamableHttpConnection
 from autobrain.metering import (
     BudgetExceededError,
@@ -48,16 +52,29 @@ from autobrain.metering import (
     reconcile_usage,
 )
 from autobrain.models import (
+    BackendIdentity,
     CandidateId,
     CandidateObservation,
     CandidateQuery,
+    CapabilityClass,
+    CorpusIdentity,
     CostStatus,
+    EvidenceStatus,
     LatencySpan,
     LatencySpanKind,
+    NativeCandidateResult,
+    NativeMode,
     Status,
 )
 from autobrain.orchestration import Candidate, CandidateContext, CandidateOutcome, ConnectorSnapshot
 from autobrain.paths import AutoBrainPaths
+
+
+def _required_resource(provider: Provider) -> str:
+    resource = config_for(provider).resource
+    if resource is None:
+        raise ValueError(f"unsupported MCP provider: {provider.value}")
+    return resource
 
 
 def _provider_upstream(
@@ -124,6 +141,39 @@ def _provider_spans(
     )
 
 
+def _native_corpus(context: CandidateContext) -> CorpusIdentity:
+    payload = [document.model_dump(mode="json") for document in context.normalized_documents]
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return CorpusIdentity(sha256=digest, document_count=len(payload))
+
+
+def _native_result(
+    candidate: CandidateId,
+    context: CandidateContext,
+    *,
+    mode: NativeMode,
+    backend_name: str,
+    version: str,
+    commit: str | None,
+    capability: CapabilityClass,
+    evidence_status: EvidenceStatus,
+    eligible: bool,
+    reasons: list[str] | None = None,
+) -> NativeCandidateResult:
+    return NativeCandidateResult(
+        candidate=candidate,
+        mode=mode,
+        backend=BackendIdentity(name=backend_name, version=version, commit=commit),
+        capability=capability,
+        evidence_status=evidence_status,
+        corpus=_native_corpus(context),
+        recommendation_eligible=eligible,
+        eligibility_reasons=reasons or [],
+    )
+
+
 def _budget_outcome(
     candidate: str,
     proxy: LoopbackMeteringProxy,
@@ -173,16 +223,11 @@ class _McpConnector:
         async def inspect() -> Mapping[str, Any]:
             async with self.connection as connection:
                 snapshot = connection.snapshot
-                if self.provider_enum is Provider.SLACK:
-                    required_groups = (
-                        {"slack-channel-list", "slack_channels_list"},
-                        {"slack-channel-history", "slack_channel_history"},
-                    )
-                else:
-                    required_groups = (
-                        {"notion-search", "notion_search"},
-                        {"notion-fetch", "notion_fetch"},
-                    )
+                provider_enum = self.provider_enum
+                provider_config = CONFIGS.get(provider_enum) if provider_enum is not None else None
+                required_groups = (
+                    provider_config.required_tool_groups if provider_config is not None else ()
+                )
                 allowed = set(snapshot.allowed)
                 return {
                     "advertised": list(snapshot.advertised),
@@ -194,8 +239,11 @@ class _McpConnector:
         return cast(Mapping[str, Any], _run_async(inspect(), cancellation))
 
     @property
-    def provider_enum(self) -> Provider:
-        return Provider(self.provider)
+    def provider_enum(self) -> Provider | None:
+        try:
+            return Provider(self.provider)
+        except ValueError:
+            return None
 
 
 class SlackMcpConnector(_McpConnector):
@@ -208,19 +256,14 @@ class SlackMcpConnector(_McpConnector):
         super().__init__(Provider.SLACK, connection)
         self.include_dms = include_dms
 
-    def crawl(
-        self,
-        *,
-        include_dms: bool,
-        cancellation: RunCancellation | None = None,
-    ) -> ConnectorSnapshot:
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         from autobrain.connectors.slack import SlackCrawler
 
         async def collect() -> ConnectorSnapshot:
             async with self.connection as connection:
                 result = await SlackCrawler(
                     connection,
-                    include_dms=include_dms or self.include_dms,
+                    include_dms=self.include_dms,
                 ).crawl(scopes=config_for(Provider.SLACK).scopes)
                 return ConnectorSnapshot(
                     provider=self.provider,
@@ -251,13 +294,7 @@ class SlackExportSourceConnector:
     def probe(self, cancellation: RunCancellation | None = None) -> Mapping[str, Any]:
         return cast(Mapping[str, Any], _run_async(self._connector.probe(), cancellation))
 
-    def crawl(
-        self,
-        *,
-        include_dms: bool,
-        cancellation: RunCancellation | None = None,
-    ) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         result = cast(
             SlackExportCrawlResult,
             _run_async(self._connector.crawl(), cancellation),
@@ -273,13 +310,7 @@ class NotionMcpConnector(_McpConnector):
     def __init__(self, connection: StreamableHttpConnection) -> None:
         super().__init__(Provider.NOTION, connection)
 
-    def crawl(
-        self,
-        *,
-        include_dms: bool,
-        cancellation: RunCancellation | None = None,
-    ) -> ConnectorSnapshot:
-        del include_dms
+    def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         from autobrain.connectors.notion import NotionCrawler
 
         async def collect() -> ConnectorSnapshot:
@@ -329,7 +360,7 @@ def build_production_connectors(
             connectors[Provider.SLACK] = SlackMcpConnector(
                 StreamableHttpConnection.with_oauth(
                     Provider.SLACK,
-                    config_for(Provider.SLACK).resource,
+                    _required_resource(Provider.SLACK),
                     slack_token,
                     manager=oauth,
                 ),
@@ -345,7 +376,7 @@ def build_production_connectors(
             connectors[Provider.NOTION] = NotionMcpConnector(
                 StreamableHttpConnection.with_oauth(
                     Provider.NOTION,
-                    config_for(Provider.NOTION).resource,
+                    _required_resource(Provider.NOTION),
                     notion_token,
                     manager=oauth,
                 )
@@ -433,6 +464,22 @@ class LLMWikiCandidate:
                 "metering": summary.model_dump(mode="json"),
             },
             observations=candidate_observations,
+            native_result=_native_result(
+                CandidateId.LLM_WIKI,
+                context,
+                mode=NativeMode.SEMANTIC,
+                backend_name="llm-wiki-compiler",
+                version="1.1.0",
+                capability=CapabilityClass.RETRIEVAL_AND_ANSWER,
+                commit="3e17bcfe8b50f24c14c6bcda0cb9224d94fd8206",
+                evidence_status=(
+                    EvidenceStatus.COMPLETE if result.observations else EvidenceStatus.PARTIAL
+                ),
+                eligible=bool(result.observations) and result.status is Status.OK,
+                reasons=[]
+                if result.observations and result.status is Status.OK
+                else ["native LLM Wiki evidence is incomplete"],
+            ),
             cost_status=CostStatus.COMPLETE if complete_cost else CostStatus.INCOMPLETE,
             usage_source=summary.usage_source,
             latency_spans=(
@@ -445,8 +492,11 @@ class LLMWikiCandidate:
             ),
         )
 
-    def cleanup(self) -> None:
-        self.metering_proxy.close()
+    def cleanup(self) -> CleanupReceipt:
+        try:
+            return self.adapter.cleanup()
+        finally:
+            self.metering_proxy.close()
 
 
 class Mem0Candidate:
@@ -521,6 +571,24 @@ class Mem0Candidate:
                     "metering": summary.model_dump(mode="json"),
                 },
                 observations=tuple(candidate_observations),
+                native_result=_native_result(
+                    CandidateId.MEM0,
+                    context,
+                    mode=NativeMode.SEMANTIC,
+                    backend_name="mem0ai",
+                    version="2.0.18",
+                    capability=CapabilityClass.RETRIEVAL_AND_ANSWER,
+                    commit="001c235229be8795e3834520467bd0d661ed8f34",
+                    evidence_status=(
+                        EvidenceStatus.COMPLETE
+                        if len(candidate_observations) == len(queries)
+                        else EvidenceStatus.PARTIAL
+                    ),
+                    eligible=len(candidate_observations) == len(queries),
+                    reasons=[]
+                    if len(candidate_observations) == len(queries)
+                    else ["native Mem0 evidence is incomplete"],
+                ),
                 cost_status=(
                     CostStatus.COMPLETE
                     if summary.cost_status is CostStatus.COMPLETE
@@ -557,9 +625,14 @@ class Mem0Candidate:
                 )
             raise
 
-    def cleanup(self) -> None:
+    def cleanup(self) -> CleanupReceipt:
         try:
-            self.adapter.cleanup()
+            receipt = self.adapter.cleanup()
+            return CleanupReceipt(
+                candidate=CandidateId.MEM0,
+                closed_resources=list(receipt.closed_resources),
+                removed_paths=list(receipt.removed_paths),
+            )
         finally:
             self.metering_proxy.close()
 
@@ -673,6 +746,36 @@ class GBrainCandidate:
                 "metering": summary.model_dump(mode="json"),
             },
             observations=tuple(candidate_observations),
+            native_result=_native_result(
+                CandidateId.GBRAIN,
+                context,
+                mode=(
+                    NativeMode.KEYWORD_ONLY
+                    if self.adapter.config.keyword_only
+                    else NativeMode.SEMANTIC
+                ),
+                backend_name="gbrain",
+                version=GBRAIN_VERSION,
+                capability=(
+                    CapabilityClass.RETRIEVAL_ONLY
+                    if self.adapter.config.keyword_only
+                    else CapabilityClass.RETRIEVAL_AND_ANSWER
+                ),
+                commit=GBRAIN_COMMIT,
+                evidence_status=(
+                    EvidenceStatus.COMPLETE
+                    if len(successful) == len(queries)
+                    else EvidenceStatus.PARTIAL
+                ),
+                eligible=(not self.adapter.config.keyword_only and len(successful) == len(queries)),
+                reasons=(
+                    ["GBrain keyword-only mode is retrieval-only"]
+                    if self.adapter.config.keyword_only
+                    else []
+                    if len(successful) == len(queries)
+                    else ["native GBrain evidence is incomplete"]
+                ),
+            ),
             cost_status=CostStatus.COMPLETE if complete_cost else CostStatus.INCOMPLETE,
             usage_source=summary.usage_source,
             latency_spans=(
@@ -688,9 +791,16 @@ class GBrainCandidate:
             ),
         )
 
-    def cleanup(self) -> None:
+    def cleanup(self) -> CleanupReceipt:
         try:
-            self.adapter.cleanup()
+            receipt = self.adapter.cleanup()
+            return CleanupReceipt(
+                candidate=CandidateId.GBRAIN,
+                removed_paths=list(receipt.removed_paths),
+                remaining_paths=list(receipt.remaining_paths),
+                interrupted=receipt.interrupted,
+                error=receipt.error,
+            )
         finally:
             self.metering_proxy.close()
 
@@ -723,40 +833,45 @@ def build_production_candidates(
     }
     for proxy in proxies.values():
         proxy.__enter__()
-    adapters: dict[CandidateId, Candidate] = {}
-    if CandidateId.LLM_WIKI in proxies:
-        adapters[CandidateId.LLM_WIKI] = LLMWikiCandidate(
-            LLMWikiAdapter(
-                LLMWikiConfig(
-                    workspace=native_root / "llm-wiki",
-                    tool_cache=state.tool_dir(CandidateId.LLM_WIKI.value),
-                    base_url=proxies[CandidateId.LLM_WIKI].base_url,
-                )
-            ),
-            api_key=api_key,
-            metering_proxy=proxies[CandidateId.LLM_WIKI],
-        )
-    if CandidateId.MEM0 in proxies:
-        adapters[CandidateId.MEM0] = Mem0Candidate(
-            Mem0Adapter(
-                Mem0AdapterConfig(
-                    run_id=run_dir.name,
-                    run_dir=native_root / "mem0",
-                    heldout_source_ids=set(),
-                    api_key=api_key,
-                    base_url=proxies[CandidateId.MEM0].base_url,
-                )
-            ),
-            metering_proxy=proxies[CandidateId.MEM0],
-        )
-    if CandidateId.GBRAIN in proxies:
-        adapters[CandidateId.GBRAIN] = GBrainCandidate(
-            GBrainAdapter(
-                tools_root=state.tools,
-                run_root=native_root / "gbrain",
-                config=gbrain_config or GBrainExecutionConfig.quick_start(),
-            ),
-            base_url=proxies[CandidateId.GBRAIN].base_url,
-            metering_proxy=proxies[CandidateId.GBRAIN],
-        )
-    return tuple(adapters[candidate_id] for candidate_id in candidate_ids)
+    try:
+        adapters: dict[CandidateId, Candidate] = {}
+        if CandidateId.LLM_WIKI in proxies:
+            adapters[CandidateId.LLM_WIKI] = LLMWikiCandidate(
+                LLMWikiAdapter(
+                    LLMWikiConfig(
+                        workspace=native_root / "llm-wiki",
+                        tool_cache=state.tool_dir(CandidateId.LLM_WIKI.value),
+                        base_url=proxies[CandidateId.LLM_WIKI].base_url,
+                    )
+                ),
+                api_key=api_key,
+                metering_proxy=proxies[CandidateId.LLM_WIKI],
+            )
+        if CandidateId.MEM0 in proxies:
+            adapters[CandidateId.MEM0] = Mem0Candidate(
+                Mem0Adapter(
+                    Mem0AdapterConfig(
+                        run_id=run_dir.name,
+                        run_dir=native_root / "mem0",
+                        heldout_source_ids=set(),
+                        api_key=api_key,
+                        base_url=proxies[CandidateId.MEM0].base_url,
+                    )
+                ),
+                metering_proxy=proxies[CandidateId.MEM0],
+            )
+        if CandidateId.GBRAIN in proxies:
+            adapters[CandidateId.GBRAIN] = GBrainCandidate(
+                GBrainAdapter(
+                    tools_root=state.tools,
+                    run_root=native_root / "gbrain",
+                    config=gbrain_config or GBrainExecutionConfig.quick_start(),
+                ),
+                base_url=proxies[CandidateId.GBRAIN].base_url,
+                metering_proxy=proxies[CandidateId.GBRAIN],
+            )
+        return tuple(adapters[candidate_id] for candidate_id in candidate_ids)
+    except BaseException:
+        for proxy in proxies.values():
+            proxy.close()
+        raise

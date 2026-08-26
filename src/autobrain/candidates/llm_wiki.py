@@ -19,6 +19,7 @@ from typing import Any, Final, cast
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from autobrain.cancellation import RunCancellation
+from autobrain.lifecycle import CleanupReceipt, remaining_paths
 from autobrain.models import (
     BenchmarkCase,
     CandidateId,
@@ -360,6 +361,27 @@ class LLMWikiAdapter:
     def verify_workspace(self) -> str:
         """Verify the completed workspace seal and return its root digest."""
         return self._verify_workspace_seal()
+
+    def cleanup(self) -> CleanupReceipt:
+        """Remove only this adapter's run-local workspace."""
+        try:
+            removed: list[str] = []
+            if self.config.workspace.exists():
+                shutil.rmtree(self.config.workspace)
+                removed.append(str(self.config.workspace))
+            return CleanupReceipt(
+                candidate=CandidateId.LLM_WIKI,
+                removed_paths=removed,
+                remaining_paths=list(remaining_paths(self.config.workspace)),
+            )
+        except KeyboardInterrupt:
+            return CleanupReceipt(candidate=CandidateId.LLM_WIKI, interrupted=True)
+        except Exception as exc:
+            return CleanupReceipt(
+                candidate=CandidateId.LLM_WIKI,
+                remaining_paths=list(remaining_paths(self.config.workspace)),
+                error=str(exc),
+            )
 
     @property
     def pin(self) -> CandidatePin:
@@ -888,9 +910,7 @@ class LLMWikiAdapter:
             },
         )
 
-    def _environment(
-        self, api_key: str, run_home: Path
-    ) -> tuple[dict[str, str], dict[str, str]]:
+    def _environment(self, api_key: str, run_home: Path) -> tuple[dict[str, str], dict[str, str]]:
         environment = self._base_process_environment()
         settings = {
             "HOME": str(run_home),

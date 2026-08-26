@@ -52,6 +52,11 @@ def eligibility_reasons(
         reasons.append("corpus hash is missing")
     if candidate.direct_leakage:
         reasons.append("direct holdout/oracle leakage detected")
+    if candidate.native_result is not None and not candidate.native_result.recommendation_eligible:
+        reasons.extend(
+            candidate.native_result.eligibility_reasons
+            or ["native candidate result is not recommendation-eligible"]
+        )
     if candidate.usage_source is not UsageSource.MEASURED:
         reasons.append(f"usage is {candidate.usage_source.value}")
     if candidate.cost_status is not CostStatus.COMPLETE:

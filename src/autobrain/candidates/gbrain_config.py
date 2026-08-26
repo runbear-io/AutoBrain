@@ -190,7 +190,7 @@ class GBrainExecutionConfig:
             "dimensions": self.embedding.dimensions,
             "endpoint": self.embedding.endpoint,
             "capabilities": {
-                "embedding": True,
+                "embedding": self.semantic_enabled,
                 "chat": self.chat_provider == "openai",
                 "think": False,
             },

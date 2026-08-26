@@ -11,6 +11,11 @@ from __future__ import annotations
 # stdlib module object, so that compatibility hook remains effective.
 import shutil as shutil
 
+from autobrain.model_access import (
+    ModelAccess,
+    ModelAccessRegistry,
+    ModelCapability,
+)
 from autobrain.subscription_claude import (
     ClaudeSubscriptionClient,
     ClaudeSubscriptionConfig,
@@ -51,6 +56,9 @@ __all__ = [
     "ClaudeSubscriptionConfig",
     "CodexSubscriptionClient",
     "CodexSubscriptionConfig",
+    "ModelAccess",
+    "ModelAccessRegistry",
+    "ModelCapability",
     "ProviderAnswer",
     "ProviderCapability",
     "ProviderConfig",

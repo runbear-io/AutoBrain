@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable
 from typing import Protocol, cast
 
+from autobrain.model_access import ModelAccessRegistry, ModelCapability
 from autobrain.subscription_domain import ProviderAnswer, UsageKind
 
 
@@ -35,12 +36,21 @@ def build_subscription_upstream(
     client: AnswerClient,
     *,
     embedding_upstream: Callable[[dict[str, object]], dict[str, object]] | None = None,
+    model_access: ModelAccessRegistry | None = None,
 ) -> Callable[[dict[str, object]], dict[str, object]]:
-    """Build an OpenAI-compatible upstream with explicit chat and embedding backends."""
+    """Build an OpenAI-compatible upstream with explicit capability resolution.
+
+    Omitting ``model_access`` retains the one-release local smoke boundary.  A
+    supplied registry is authoritative: semantic embedding requests resolve
+    only through its registered capability and never fall back to local hash
+    vectors.
+    """
 
     def upstream(payload: dict[str, object]) -> dict[str, object]:
         model = payload.get("model")
         if isinstance(model, str) and model.startswith("text-embedding"):
+            if model_access is not None:
+                return model_access.require(ModelCapability.SEMANTIC_EMBEDDING).handler(payload)
             if embedding_upstream is not None:
                 return embedding_upstream(payload)
             inputs = payload.get("input")
