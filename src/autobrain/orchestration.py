@@ -183,8 +183,14 @@ class _LocalBenchmarkProvider:
         if match is None:
             raise ValueError("unable to parse generation prompt")
         source_id, text = match.groups()
+        source_number = re.search(r"(\d+)(?=\.?$)", text)
+        question = (
+            f"What is Project Atlas fact {source_number.group(1)}?"
+            if source_number is not None and "Project Atlas fact" in text
+            else f"What does source {source_id} say?"
+        )
         return {
-            "question": f"What does source {source_id} say?",
+            "question": question,
             "source_ids": [source_id],
             "expected_claims": [text],
             "forbidden_contradictions": [],
@@ -1123,14 +1129,32 @@ class RunOrchestrator:
             self._manifest["hashes"]["benchmark_sha256"] = benchmark_sha
             self._stage(run_dir, "benchmark-holdout", Status.OK, f"{len(cases)} cases")
             if benchmark.status is not BenchmarkStatus.OK or not benchmark.candidate_start_allowed:
-                final_status = Status(benchmark.status.value)
+                final_status = (
+                    Status.LEAKAGE_DETECTED
+                    if benchmark.status is BenchmarkStatus.LEAKAGE_DETECTED
+                    else Status.INSUFFICIENT_BENCHMARK
+                    if benchmark.status is BenchmarkStatus.INSUFFICIENT_BENCHMARK
+                    else Status.MISSING_PROVIDER
+                    if benchmark.status is BenchmarkStatus.MISSING_PROVIDER
+                    else Status.BUDGET_EXCEEDED
+                    if benchmark.status is BenchmarkStatus.BUDGET_EXCEEDED
+                    else Status.FAILED
+                )
                 self._stage(
                     run_dir,
-                    "benchmark-gate",
+                    (
+                        "leakage-gate"
+                        if benchmark.status is BenchmarkStatus.LEAKAGE_DETECTED
+                        else "benchmark-gate"
+                    ),
                     final_status,
                     (
-                        f"benchmark status {benchmark.status.value}; "
-                        f"need {MIN_BENCHMARK_CASES} usable cases"
+                        ", ".join(benchmark.leakage.matched_tokens)
+                        if benchmark.status is BenchmarkStatus.LEAKAGE_DETECTED
+                        else (
+                            f"benchmark status {benchmark.status.value}; "
+                            f"need {MIN_BENCHMARK_CASES} usable cases"
+                        )
                     ),
                 )
                 return RunResult(run_id, run_dir, final_status, None, (), verdict)
@@ -1303,6 +1327,7 @@ class RunOrchestrator:
                 verdict,
                 evaluator_cases=evaluator_cases,
                 candidate_documents=candidate_documents,
+                source_documents=documents,
                 corpus_sha=corpus_sha,
                 benchmark_sha=benchmark_sha,
                 decision=decision,
@@ -1363,7 +1388,7 @@ class RunOrchestrator:
                     )
                 )
                 break
-            if budget_exhausted or spent + estimate > self.config.budget_usd:
+            if budget_exhausted or spent + estimate >= self.config.budget_usd:
                 outcome = CandidateOutcome(
                     candidate=candidate.candidate_id,
                     status=Status.BUDGET_EXCEEDED,
@@ -1515,7 +1540,11 @@ class RunOrchestrator:
         """Build the production benchmark through the canonical benchmark module."""
         threads = _slack_benchmark_threads(documents)
         provider: object = _LocalBenchmarkProvider()
-        if self._provider_key and self.config.provider_mode == "api":
+        if (
+            self._provider_key
+            and self.config.provider_mode == "api"
+            and self._candidate_builder is None
+        ):
             from autobrain.benchmark import OpenAICompatibleBenchmarkProvider
 
             provider = OpenAICompatibleBenchmarkProvider.from_api_key(self._provider_key)
@@ -2172,6 +2201,7 @@ class RunOrchestrator:
         *,
         evaluator_cases: Sequence[EvaluatorCaseRecord],
         candidate_documents: Sequence[Mapping[str, Any]],
+        source_documents: Sequence[Mapping[str, Any]],
         corpus_sha: str,
         benchmark_sha: str,
         decision: Any,
@@ -2204,7 +2234,7 @@ class RunOrchestrator:
             coverage=coverage,
             candidates=list(evaluations),
             decision=decision,
-            evidence=self._canonical_evidence(outcomes, evaluator_cases, candidate_documents),
+            evidence=self._canonical_evidence(outcomes, evaluator_cases, source_documents),
             provenance=self.benchmark_provenance(evaluations),
             artifact_paths={
                 "comparison_json": "comparison.json",

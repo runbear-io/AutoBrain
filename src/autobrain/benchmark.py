@@ -607,15 +607,30 @@ def build_benchmark(
     if len(candidate_cases) < settings.min_cases:
         return _blocked_result(BenchmarkStatus.INSUFFICIENT_BENCHMARK, rejections, usage)
 
-    # Keep benchmark roots as candidate-visible provenance, but remove every
-    # benchmark reply from the candidate corpus. The replies belong only to
-    # evaluator artifacts; selected holdout roots are removed as well.
-    benchmark_reply_ids = {reply.source_id for thread in selected for reply in thread.replies}
-    candidate_documents = _remove_holdouts(
-        candidate_documents,
-        selected_holdout_ids | benchmark_reply_ids,
-    )
+    # Benchmark roots and replies are evaluator-owned evidence. Remove every
+    # benchmark record from the candidate corpus, including bot replies and
+    # documents linked to those records.
+    benchmark_ids = {
+        identifier
+        for thread in selected
+        for identifier in _thread_ids(thread)
+    }
+    # Scan the pre-freeze source boundary as well: a non-holdout record can
+    # accidentally quote a held-out root even though all benchmark roots are
+    # later removed from the candidate corpus.
+    benchmark_reply_ids = {
+        reply.source_id for thread in selected for reply in thread.replies
+    }
+    source_boundary_payload = [
+        json.dumps(document.model_dump(mode="json"), sort_keys=True)
+        for document in candidate_documents
+        if document.source_id not in benchmark_reply_ids
+        and not any(related in benchmark_ids for related in document.related_source_ids)
+        and document.metadata.get("parent_source_id") not in benchmark_ids
+    ]
+    candidate_documents = _remove_holdouts(candidate_documents, benchmark_ids)
     forbidden = (
+        *selected_holdout_ids,
         # Flattened Slack fixtures retain selected holdout replies in the raw
         # connector record; protect those evaluator-only strings even though
         # normalization intentionally drops unknown fixture fields.
@@ -645,7 +660,7 @@ def build_benchmark(
             for claim in holdout.expected_claims
         ],
     )
-    candidate_payload = [
+    candidate_payload = source_boundary_payload + [
         json.dumps(document.model_dump(mode="json"), sort_keys=True)
         for document in candidate_documents
     ] + [json.dumps(case.model_dump(mode="json"), sort_keys=True) for case in candidate_cases]
