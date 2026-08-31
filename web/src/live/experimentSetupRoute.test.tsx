@@ -104,9 +104,10 @@ describe("experiment setup wizard reachability", () => {
     expect(container.textContent).toContain("Retrieval only");
   });
 
-  test("production setup does not present a fixture source choice", () => {
+  test("production setup exposes local files but not fixture sources", () => {
     openWizard();
     expect(container.querySelector('[data-testid="source-option-fixture"]')).toBeNull();
+    expect(container.querySelector('[data-testid="source-option-local-file"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="source-option-slack-export"]')).not.toBeNull();
   });
 
@@ -139,6 +140,42 @@ describe("configuring a preview without the CLI", () => {
     expect(blockers.textContent).toContain("Choose");
     expect(blockers.textContent?.trim().length).toBeGreaterThan(20);
     expect(blockers.textContent).not.toMatch(/^[A-Z_]+$/);
+  });
+
+  test("supported local HTML is accepted through the setup path", async () => {
+    openWizard();
+    click(testId("source-option-local-file"));
+    const input = testId("local-file-input") as HTMLInputElement;
+    const file = new File(["<h1>Policy</h1><p>Visible</p>"], "policy.html", { type: "text/html" });
+    await act(async () => {
+      Object.defineProperty(input, "files", { value: [file] });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    click(testId("candidate-option-gbrain"));
+    click(testId("subscription-option-codex"));
+    expect(testId("corpus-summary").textContent).toContain("1 document");
+    expect((testId("submit-preview") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("PDF and DOCX local files are blocked as unavailable", async () => {
+    for (const name of ["report.pdf", "brief.docx"]) {
+      openWizard();
+      click(testId("source-option-local-file"));
+      const input = testId("local-file-input") as HTMLInputElement;
+      const file = new File(["binary"], name);
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      await act(async () => {
+        Object.defineProperty(input, "files", {
+          configurable: true,
+          value: transfer.files,
+        });
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      expect(testId("readiness-blockers").textContent?.toLowerCase()).toContain("unavailable");
+      expect((testId("submit-preview") as HTMLButtonElement).disabled).toBe(true);
+      click(navButton("New experiment"));
+    }
   });
 
   test("a gated source blocks the run with its remediation on screen", () => {

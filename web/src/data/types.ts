@@ -52,6 +52,7 @@ export type SourceId = "slack" | "notion";
 /** Stable identifier shared with the source import/capability contract. */
 export type SourceCapabilityId =
   | "fixture"
+  | "local-file"
   | "slack-export"
   | "notion-snapshot"
   | "approved-read-only-connector";

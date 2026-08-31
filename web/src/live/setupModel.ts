@@ -52,6 +52,7 @@ export type SetupEvent =
   | { type: "source/select"; source: SourceCapabilityId }
   | { type: "source/format"; format: SourceImportFormat }
   | { type: "source/payload"; payload: string }
+  | { type: "source/file"; format: SourceImportFormat; payload: string }
   | { type: "candidate/toggle"; candidate: CandidateId }
   | { type: "subscription/select"; subscription: SubscriptionId }
   | { type: "reset" };
@@ -108,6 +109,9 @@ export function reduceSetup(state: SetupState, event: SetupEvent): SetupState {
 
     case "source/payload":
       return withParsedImport({ ...state, payload: event.payload });
+
+    case "source/file":
+      return withParsedImport({ ...state, format: event.format, payload: event.payload });
 
     case "candidate/toggle": {
       const selected = state.candidates.includes(event.candidate)
@@ -189,12 +193,19 @@ export function setupReadiness(state: SetupState): SetupReadiness {
         guidance:
           capability.remediation ?? "Reauthorize this source from the local runner, then retry.",
       });
+    } else if (state.source === "local-file" && state.payload.trim().length === 0) {
+      source = "NOT_CONFIGURED";
+      blockers.push({
+        code: "LOCAL_FILE_MISSING",
+        title: "No local file chosen",
+        guidance: "Choose a Markdown, TXT, or HTML file to read it locally without uploading it.",
+      });
     } else if (state.importError !== null) {
       source = "NOT_CONFIGURED";
       blockers.push({
-        code: "SOURCE_IMPORT_INVALID",
-        title: "The pasted export could not be read",
-        guidance: `Fix the export and paste it again: ${state.importError}.`,
+        code: state.source === "local-file" ? "LOCAL_FILE_INVALID" : "SOURCE_IMPORT_INVALID",
+        title: state.source === "local-file" ? "The local file cannot be read" : "The pasted export could not be read",
+        guidance: `${state.source === "local-file" ? "Choose a supported local file" : "Fix the export and paste it again"}: ${state.importError}.`,
       });
     } else if (state.format === "JSONL" && state.parsed === null) {
       source = "NOT_CONFIGURED";

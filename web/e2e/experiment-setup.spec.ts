@@ -65,6 +65,43 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
+    name: "supported local Markdown and HTML files are readable without fixture exposure",
+    run: async (page) => {
+      for (const file of [
+        { name: "policy.md", mimeType: "text/markdown", buffer: Buffer.from("# Policy\\n\\nRefunds within 30 days.") },
+        { name: "policy.html", mimeType: "text/html", buffer: Buffer.from("<h1>Policy</h1><p>Refunds within 30 days.</p>") },
+      ]) {
+        await page.getByTestId("source-option-local-file").click();
+        await page.getByTestId("local-file-input").setInputFiles(file);
+        await page.getByTestId("candidate-option-gbrain").click();
+        await page.getByTestId("subscription-option-codex").click();
+        const summary = (await page.getByTestId("corpus-summary").textContent()) ?? "";
+        assert(summary.includes("1 document"), `expected one local document, got: ${summary}`);
+        assert(await page.getByTestId("submit-preview").isEnabled(), `${file.name} should be ready`);
+        if (file.name.endsWith(".md")) {
+          await page.getByTestId("candidate-option-gbrain").click();
+          await page.getByTestId("subscription-option-codex").click();
+        }
+      }
+      assert((await page.getByTestId("source-option-fixture").count()) === 0, "fixture must stay hidden");
+    },
+  },
+  {
+    name: "typed PDF and DOCX local files are blocked as unavailable",
+    run: async (page) => {
+      for (const file of [
+        { name: "report.pdf", mimeType: "application/pdf", buffer: Buffer.from("pdf") },
+        { name: "brief.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: Buffer.from("docx") },
+      ]) {
+        await page.getByTestId("source-option-local-file").click();
+        await page.getByTestId("local-file-input").setInputFiles(file);
+        const blockers = ((await page.getByTestId("readiness-blockers").textContent()) ?? "").toLowerCase();
+        assert(blockers.includes("unavailable"), `expected unavailable guidance for ${file.name}`);
+        assert(await page.getByTestId("submit-preview").isDisabled(), `${file.name} must stay blocked`);
+      }
+    },
+  },
+  {
     name: "a JSONL import reports its document count and unblocks submission",
     run: async (page) => {
       await configureOfficialPreview(page);

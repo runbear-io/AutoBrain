@@ -8,12 +8,21 @@
 
 export type SourceCapabilityId =
   | "fixture"
+  | "local-file"
   | "slack-export"
   | "notion-snapshot"
   | "approved-read-only-connector";
 
-export type SourceReadiness = "READY" | "CONFIGURED" | "AUTH_REQUIRED" | "GATED";
-export type SourceImportFormat = "JSON" | "JSONL";
+export type SourceReadiness = "READY" | "CONFIGURED" | "AUTH_REQUIRED" | "GATED" | "TEST_ONLY";
+export type SourceImportFormat =
+  | "JSON"
+  | "JSONL"
+  | "MARKDOWN"
+  | "TXT"
+  | "HTML"
+  | "PDF"
+  | "DOCX"
+  | "UNSUPPORTED";
 export type SourceMutability = "frozen_export" | "live_mcp_captured" | "future_read_only";
 export type SourceCapability = "read" | "search" | "fetch" | "normalize" | "freeze";
 
@@ -34,13 +43,24 @@ export const SOURCE_CAPABILITIES: readonly SourceCapabilityInventoryItem[] = [
   {
     id: "fixture",
     label: "Local fixture",
-    readiness: "READY",
+    readiness: "TEST_ONLY",
     acceptedFormats: ["JSON", "JSONL"],
     mutability: "frozen_export",
     capabilities: ["read", "normalize", "freeze"],
     credentialsRequired: false,
-    detail: "Deterministic, local, credential-free input for development and QA.",
+    detail: "Deterministic, local, credential-free input for development and QA only.",
     remediation: null,
+  },
+  {
+    id: "local-file",
+    label: "Local file",
+    readiness: "READY",
+    acceptedFormats: ["MARKDOWN", "TXT", "HTML", "PDF", "DOCX"],
+    mutability: "frozen_export",
+    capabilities: ["read", "normalize", "freeze"],
+    credentialsRequired: false,
+    detail: "Read one local Markdown, TXT, or HTML document without uploading it.",
+    remediation: "Choose a Markdown, TXT, or HTML file. PDF and DOCX extraction is unavailable.",
   },
   {
     id: "slack-export",
@@ -100,9 +120,15 @@ export interface SourceImportBatch {
   records: SourceImportRecord[];
 }
 
-const SOURCE_IDS: readonly ImportSourceId[] = ["fixture", "slack-export", "notion-snapshot"];
+const SOURCE_IDS: readonly ImportSourceId[] = [
+  "fixture",
+  "local-file",
+  "slack-export",
+  "notion-snapshot",
+];
 const FORBIDDEN_KEY = /(?:secret|token|password|api[_-]?key|authorization|credential)/i;
 const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
+const MAX_LOCAL_FILE_BYTES = 256 * 1024;
 const MAX_RECORDS = 50_000;
 const MAX_TEXT_CHARS = 250_000;
 
@@ -148,6 +174,40 @@ function validateRecord(value: unknown, index: number): SourceImportRecord {
   return { ...value, source_id: sourceId, title, text };
 }
 
+function localFileText(payload: string, format: SourceImportFormat): string {
+  if (format === "PDF" || format === "DOCX" || format === "UNSUPPORTED") {
+    throw new SourceImportError(`${format} local-file extraction is unavailable`);
+  }
+  if (format === "HTML") {
+    return payload
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  return payload;
+}
+
+export function localFileFormatForName(name: string): SourceImportFormat {
+  const extension = name.slice(name.lastIndexOf(".")).toLowerCase();
+  const formats: Record<string, SourceImportFormat> = {
+    ".md": "MARKDOWN",
+    ".markdown": "MARKDOWN",
+    ".txt": "TXT",
+    ".text": "TXT",
+    ".html": "HTML",
+    ".htm": "HTML",
+    ".pdf": "PDF",
+    ".docx": "DOCX",
+  };
+  return formats[extension] ?? "UNSUPPORTED";
+}
+
 export class SourceImportError extends Error {
   constructor(message: string) {
     super(`invalid source import: ${message}`);
@@ -175,7 +235,21 @@ export function parseSourceImport(
   }
 
   let records: unknown[];
-  if (format === "JSONL") {
+  if (source === "local-file") {
+    if (new TextEncoder().encode(payload).byteLength > MAX_LOCAL_FILE_BYTES) {
+      throw new SourceImportError("local file exceeds the 256 KiB limit");
+    }
+    const text = localFileText(payload, format);
+    if (text.trim().length === 0) throw new SourceImportError("local file has no readable text");
+    records = [
+      {
+        source_id: `local_file:${format.toLowerCase()}`,
+        title: `${format.toLowerCase()} local file`,
+        text,
+        source_kind: "LOCAL_FILE",
+      },
+    ];
+  } else if (format === "JSONL") {
     records = payload
       .split(/\r?\n/)
       .map((line) => line.trim())

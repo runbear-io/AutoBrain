@@ -2,28 +2,64 @@ import { describe, expect, test } from "bun:test";
 import {
   PUBLIC_SOURCE_CAPABILITIES,
   SOURCE_CAPABILITIES,
+  localFileFormatForName,
   parseSourceImport,
   sourceCapability,
   SourceImportError,
 } from "./sourceContracts";
 
 describe("source capability and import contracts", () => {
+  test("local file capability exposes only supported text/html plus typed unavailable formats", () => {
+    const local = sourceCapability("local-file");
+    expect(local.acceptedFormats).toEqual(["MARKDOWN", "TXT", "HTML", "PDF", "DOCX"]);
+    expect(local.credentialsRequired).toBe(false);
+    expect(local.detail).toContain("without uploading");
+    expect(localFileFormatForName("policy.md")).toBe("MARKDOWN");
+    expect(localFileFormatForName("notes.txt")).toBe("TXT");
+    expect(localFileFormatForName("page.html")).toBe("HTML");
+    expect(localFileFormatForName("report.pdf")).toBe("PDF");
+    expect(localFileFormatForName("brief.docx")).toBe("DOCX");
+  });
+
+  test("parses supported local HTML and blocks PDF/DOCX extraction", () => {
+    const result = parseSourceImport("local-file", "<h1>Policy</h1><script>secret</script>Visible", "HTML");
+    expect(result.records[0]?.text).toBe("Policy Visible");
+    expect(result.records[0]?.source_kind).toBe("LOCAL_FILE");
+    expect(() => parseSourceImport("local-file", "binary", "PDF")).toThrow(/unavailable/i);
+    expect(() => parseSourceImport("local-file", "binary", "DOCX")).toThrow(/unavailable/i);
+  });
   test("keeps fixture utilities in the internal inventory but out of public choices", () => {
     expect(SOURCE_CAPABILITIES.map((item) => item.id)).toEqual([
       "fixture",
+      "local-file",
       "slack-export",
       "notion-snapshot",
       "approved-read-only-connector",
     ]);
     expect(PUBLIC_SOURCE_CAPABILITIES.map((item) => item.id)).toEqual([
+      "local-file",
       "slack-export",
       "notion-snapshot",
       "approved-read-only-connector",
     ]);
+    expect(sourceCapability("fixture").readiness).toBe("TEST_ONLY");
     expect(sourceCapability("fixture").credentialsRequired).toBe(false);
     expect(sourceCapability("slack-export").mutability).toBe("frozen_export");
     expect(sourceCapability("notion-snapshot").capabilities).toContain("fetch");
     expect(sourceCapability("approved-read-only-connector").readiness).toBe("GATED");
+  });
+
+  test("normalized export sources remain JSON or JSONL only", () => {
+    for (const source of PUBLIC_SOURCE_CAPABILITIES.filter((item) => item.id !== "local-file")) {
+      expect(source.acceptedFormats).toEqual(["JSON", "JSONL"]);
+    }
+    expect(() =>
+      parseSourceImport(
+        "slack-export",
+        JSON.stringify({ source_id: "slack:1", title: "Notes", text: "x" }),
+        "TXT" as never,
+      ),
+    ).toThrow(/does not accept/i);
   });
 
   test("parses a versioned JSON envelope and preserves normalized fields", () => {

@@ -8,7 +8,11 @@
  */
 
 import { useCallback, useMemo, useReducer, useState } from "react";
-import { PUBLIC_SOURCE_CAPABILITIES, type SourceImportFormat } from "../data/sourceContracts";
+import {
+  localFileFormatForName,
+  PUBLIC_SOURCE_CAPABILITIES,
+  type SourceImportFormat,
+} from "../data/sourceContracts";
 import type { CandidateId } from "../data/experimentContracts";
 import {
   ExperimentBoundaryError,
@@ -154,47 +158,73 @@ export function ExperimentSetupPanel({
               ))}
             </div>
 
-            <div className="wizard-field">
-              <span className="wizard-field__label">Import format</span>
-              <div className="wizard-options wizard-options--inline">
-                {FORMATS.map((format) => (
-                  <button
-                    key={format}
-                    type="button"
-                    className="wizard-option"
-                    data-testid={`format-option-${format}`}
-                    aria-pressed={setup.format === format}
-                    onClick={() => dispatch({ type: "source/format", format })}
-                  >
-                    <span className="wizard-option__title">{format}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <label className="wizard-field">
-              <span className="wizard-field__label">Normalized records</span>
-              <textarea
-                className="wizard-textarea"
-                data-testid="source-payload"
-                rows={5}
-                spellCheck={false}
-                placeholder={
-                  setup.format === "JSONL"
-                    ? '{"source_id": "doc-1", "title": "Refund policy", "text": "…"}'
-                    : '[{"source_id": "doc-1", "title": "Refund policy", "text": "…"}]'
-                }
-                value={setup.payload}
-                onChange={(event) =>
-                  dispatch({ type: "source/payload", payload: event.target.value })
-                }
-              />
-              <span className="wizard-field__hint" data-testid="corpus-summary">
-                {setup.parsed === null
-                  ? "Leave empty to use the source as the local runner already has it."
-                  : `${setup.parsed.records.length} documents will be frozen for this run.`}
-              </span>
-            </label>
+            {setup.source === "local-file" ? (
+              <label className="wizard-field">
+                <span className="wizard-field__label">Local document</span>
+                <input
+                  data-testid="local-file-input"
+                  type="file"
+                  accept=".md,.markdown,.txt,.text,.html,.htm,.pdf,.docx"
+                  onChange={async (event) => {
+                    const file = event.currentTarget.files?.[0];
+                    if (!file) return;
+                    dispatch({
+                      type: "source/file",
+                      format: localFileFormatForName(file.name),
+                      payload: await file.text(),
+                    });
+                  }}
+                />
+                <span className="wizard-field__hint" data-testid="corpus-summary">
+                  {setup.parsed === null
+                    ? "Choose Markdown, TXT, or HTML. PDF and DOCX are typed but unavailable."
+                    : `${setup.parsed.records.length} document will be frozen for this run.`}
+                </span>
+              </label>
+            ) : (
+              <>
+                <div className="wizard-field">
+                  <span className="wizard-field__label">Import format</span>
+                  <div className="wizard-options wizard-options--inline">
+                    {FORMATS.map((format) => (
+                      <button
+                        key={format}
+                        type="button"
+                        className="wizard-option"
+                        data-testid={`format-option-${format}`}
+                        aria-pressed={setup.format === format}
+                        onClick={() => dispatch({ type: "source/format", format })}
+                      >
+                        <span className="wizard-option__title">{format}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <label className="wizard-field">
+                  <span className="wizard-field__label">Normalized records</span>
+                  <textarea
+                    className="wizard-textarea"
+                    data-testid="source-payload"
+                    rows={5}
+                    spellCheck={false}
+                    placeholder={
+                      setup.format === "JSONL"
+                        ? '{"source_id": "doc-1", "title": "Refund policy", "text": "…"}'
+                        : '[{"source_id": "doc-1", "title": "Refund policy", "text": "…"}]'
+                    }
+                    value={setup.payload}
+                    onChange={(event) =>
+                      dispatch({ type: "source/payload", payload: event.target.value })
+                    }
+                  />
+                  <span className="wizard-field__hint" data-testid="corpus-summary">
+                    {setup.parsed === null
+                      ? "Leave empty to use the source as the local runner already has it."
+                      : `${setup.parsed.records.length} documents will be frozen for this run.`}
+                  </span>
+                </label>
+              </>
+            )}
           </div>
         </li>
 

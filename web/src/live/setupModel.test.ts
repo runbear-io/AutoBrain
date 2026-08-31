@@ -31,6 +31,30 @@ function readySetup(): SetupState {
 }
 
 describe("experiment setup readiness", () => {
+  test("a supported local Markdown file is ready without exposing fixtures", () => {
+    let state = initialSetup();
+    state = reduceSetup(state, { type: "source/select", source: "local-file" });
+    state = reduceSetup(state, {
+      type: "source/file",
+      format: "MARKDOWN",
+      payload: "# Refunds\\n\\nRefunds within 30 days.",
+    });
+    state = reduceSetup(state, { type: "candidate/toggle", candidate: "gbrain" });
+    state = reduceSetup(state, { type: "subscription/select", subscription: "codex" });
+    expect(setupReadiness(state).state).toBe("READY");
+    expect(state.parsed?.records[0]?.source_kind).toBe("LOCAL_FILE");
+  });
+
+  test("typed PDF and DOCX local files remain blocked as unavailable", () => {
+    for (const format of ["PDF", "DOCX"] as const) {
+      let state = initialSetup();
+      state = reduceSetup(state, { type: "source/select", source: "local-file" });
+      state = reduceSetup(state, { type: "source/file", format, payload: "binary placeholder" });
+      const readiness = setupReadiness(state);
+      expect(readiness.state).toBe("BLOCKED");
+      expect(readiness.blockers.some((item) => item.guidance.includes("unavailable"))).toBe(true);
+    }
+  });
   test("starts unknown with no source, candidate, or subscription chosen", () => {
     const readiness = setupReadiness(initialSetup());
     expect(readiness.state).not.toBe("READY");
