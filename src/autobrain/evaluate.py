@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from statistics import quantiles
 from typing import Any
 
@@ -120,7 +120,7 @@ def evaluate_case(
 
 def evaluate_candidate(
     candidate: CandidateId,
-    cases: Sequence[tuple[Any, ...]],
+    cases: Iterable[tuple[Any, ...]],
     *,
     total_cost_usd: float | None,
     cost_status: CostStatus | str,
@@ -137,8 +137,14 @@ def evaluate_candidate(
     cache: RunCache | None = None,
     mode: EvaluationMode = EvaluationMode.RETRIEVAL_ONLY,
 ) -> CandidateEvaluation:
-    """Aggregate typed case results while retaining partial failures."""
-    evaluated: list[CaseEvaluation] = []
+    """Aggregate typed case results in one pass without retaining every case.
+
+    The returned contract contains aggregate metrics only, so keeping the full
+    per-case evaluation list needlessly scales memory with the benchmark size.
+    """
+    scored = answered = generated = required = cited = contradiction_count = 0
+    quality_total = retrieval_total = 0.0
+    latencies: list[int] = []
     for item in cases:
         if len(item) < 5:
             raise ValueError(
@@ -147,37 +153,36 @@ def evaluate_candidate(
         benchmark_case, answer, cited_sources, confidence, latency, *rest = item
         case_status = rest[0] if rest else Status.OK
         failure_detail = rest[1] if len(rest) > 1 else ""
-        evaluated.append(
-            evaluate_case(
-                benchmark_case,
-                answer=answer,
-                cited_source_ids=cited_sources,
-                reference_confidence=confidence,
-                status=case_status,
-                failure_detail=failure_detail,
-                latency_ms=latency,
-                candidate=candidate,
-                mode=mode,
-                cache=cache,
-            )
+        result = evaluate_case(
+            benchmark_case,
+            answer=answer,
+            cited_source_ids=cited_sources,
+            reference_confidence=confidence,
+            status=case_status,
+            failure_detail=failure_detail,
+            latency_ms=latency,
+            candidate=candidate,
+            mode=mode,
+            cache=cache,
         )
-    scored = len(evaluated)
-    answered = sum(result.status == Status.OK for result in evaluated)
-    quality = sum(result.score for result in evaluated) / scored if scored else 0.0
-    required = sum(result.required_claims for result in evaluated)
-    cited = sum(result.cited_claims for result in evaluated)
+        scored += 1
+        answered += result.status == Status.OK
+        generated += bool(getattr(benchmark_case, "generated", False))
+        quality_total += result.score
+        required += result.required_claims
+        cited += result.cited_claims
+        contradiction_count += result.forbidden_matches
+        retrieval_total += result.retrieval_recall
+        if result.status == Status.OK and result.latency_ms > 0:
+            latencies.append(result.latency_ms)
+    quality = quality_total / scored if scored else 0.0
     source_support = (
-        sum(result.retrieval_recall for result in evaluated) / (100 * scored)
+        retrieval_total / (100 * scored)
         if mode is EvaluationMode.RETRIEVAL_ONLY and scored
         else cited / required
         if required
         else 0.0
     )
-    latencies = [
-        result.latency_ms
-        for result in evaluated
-        if result.status == Status.OK and result.latency_ms > 0
-    ]
     return CandidateEvaluation(
         candidate=candidate,
         status=Status.OK if scored else Status.FAILED,
@@ -186,7 +191,7 @@ def evaluate_candidate(
         quality_score=round(quality, 4),
         answer_success_rate=answered / scored if scored else 0.0,
         source_support_rate=source_support,
-        contradiction_count=sum(result.forbidden_matches for result in evaluated),
+        contradiction_count=contradiction_count,
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
         total_cost_usd=total_cost_usd,
@@ -201,6 +206,6 @@ def evaluate_candidate(
         valid_pin=valid_pin,
         corpus_hash=corpus_hash,
         direct_leakage=direct_leakage,
-        generated_cases=sum(getattr(item[0], "generated", False) for item in cases),
+        generated_cases=generated,
         partial_failures=scored - answered,
     )

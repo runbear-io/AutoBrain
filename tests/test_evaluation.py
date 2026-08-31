@@ -1,4 +1,6 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime
+from typing import Any
 
 from autobrain.evaluate import evaluate_candidate, evaluate_case
 from autobrain.models import (
@@ -95,6 +97,33 @@ def test_failed_retrieval_stays_zero() -> None:
     assert result.failure_detail == "candidate timed out"
 
 
+def test_candidate_aggregation_accepts_streaming_cases() -> None:
+    def cases() -> Iterator[tuple[Any, ...]]:
+        yield (case(), "The launch is Tuesday.", ["slack:launch"], 1.0, 10)
+        yield (
+            case().model_copy(update={"case_id": "case-002", "generated": True}),
+            "",
+            [],
+            0.6,
+            0,
+            Status.FAILED,
+            "provider unavailable",
+        )
+
+    aggregate = evaluate_candidate(
+        CandidateId.MEM0,
+        cases(),
+        total_cost_usd=0.12,
+        cost_status="COST_COMPLETE",
+        mode=EvaluationMode.ANSWER_AWARE,
+    )
+    assert aggregate.scored_cases == 2
+    assert aggregate.answered_cases == 1
+    assert aggregate.generated_cases == 1
+    assert aggregate.quality_score == 50.0
+    assert aggregate.partial_failures == 1
+
+
 def test_candidate_aggregation_averages_recall_and_keeps_failures() -> None:
     aggregate = evaluate_candidate(
         CandidateId.MEM0,
@@ -140,7 +169,7 @@ def test_retrieval_only_is_default_and_does_not_require_answer_generation() -> N
 
 def test_retrieval_only_metrics_are_comparable_across_fixture_candidates() -> None:
     retrieval_case = case().model_copy(update={"expected_claims": []})
-    cases = [
+    cases: list[tuple[Any, ...]] = [
         (retrieval_case, "", ["slack:launch"], 1.0, 10),
         (
             retrieval_case.model_copy(
