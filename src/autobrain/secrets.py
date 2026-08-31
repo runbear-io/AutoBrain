@@ -10,12 +10,51 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 from autobrain.models import StrictModel
 
 _SENSITIVE_KEY = re.compile(r"(?:secret|token|password|api[_-]?key|authorization|credential)", re.I)
+_URL_USERINFO = re.compile(r"(?i)(://)([^/@\s:]+):([^/@\s]+)@")
+_PLACEHOLDER_VALUE = (
+    r"(?:<\s*[A-Z0-9_-]+\s*>|\[\s*[A-Z0-9_-]+\s*\]|"
+    r"\{\{?\s*[A-Z0-9_-]+\s*\}?\}|\$\{\s*[A-Z0-9_-]+\s*\}|"
+    r"(?:YOUR|EXAMPLE|SAMPLE|DUMMY|TEST)[_-][A-Z0-9_-]+|"
+    r"PLACEHOLDER(?:[_-]VALUE)?|CHANGEME)"
+)
+_SAFE_CREDENTIAL_PLACEHOLDER = re.compile(
+    rf"(?i)(?:\b(?:bearer)\s+|\b(?:(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|key|token|secret|"
+    rf"password|cookie)|(?:proxy-)?authorization)\b\s*[:=]\s*(?:bearer\s+)?){_PLACEHOLDER_VALUE}"
+)
+_LABELLED_SECRET = re.compile(
+    r"(?i)(?P<label>\b(?:(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|key|token|secret|"
+    r"password|cookie)|(?:proxy-)?authorization)\b\s*[:=]\s*)"
+    r"(?P<value>\"[^\"]*\"|'[^']*'|[^,;&\s]+)"
+)
 _SECRET_PATTERN = re.compile(
     r"(?i)(?<![a-z0-9])(?:sk-[a-z0-9_-]{8,}|xox[a-z]-[a-z0-9-]{8,}|"
     r"bearer\s+[a-z0-9._~+/=-]{8,}|"
-    r"(?:api[_-]?key|token|password|authorization|credential)[=: ]+[a-z0-9._~+/=-]{8,}|"
-    r"//[^/\s:@]+:[^@\s]+@)"
+    r"(?:api[_-]?key|token|password|authorization|credential)\s*[=:]\s*[a-z0-9._~+/=-]{8,})"
 )
+
+
+def redact_secret_text(value: str) -> str:
+    """Redact credential-shaped values, including labelled values and URL userinfo."""
+    placeholders: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        placeholders.append(match.group(0))
+        return f"__AUTOBRAIN_SAFE_PLACEHOLDER_{len(placeholders) - 1}__"
+
+    redacted = _SAFE_CREDENTIAL_PLACEHOLDER.sub(protect, value)
+    redacted = _URL_USERINFO.sub(r"\1[REDACTED]@", redacted)
+    redacted = _LABELLED_SECRET.sub("[REDACTED]", redacted)
+    redacted = _SECRET_PATTERN.sub("[REDACTED]", redacted)
+    for index, placeholder in enumerate(placeholders):
+        redacted = redacted.replace(f"__AUTOBRAIN_SAFE_PLACEHOLDER_{index}__", placeholder)
+    return redacted
+
+
+def contains_secret(value: str) -> bool:
+    """Return whether text contains a credential-shaped value."""
+    return redact_secret_text(value) != value
+
+
 type Redactable = (
     bool
     | int
@@ -138,5 +177,5 @@ def _redact_value(
         for secret in sorted((item for item in known_secrets if item), key=len, reverse=True):
             if secret:
                 result = result.replace(secret, "[REDACTED]")
-        return _SECRET_PATTERN.sub("[REDACTED]", result)
+        return redact_secret_text(result)
     return value

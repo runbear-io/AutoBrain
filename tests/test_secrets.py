@@ -77,3 +77,35 @@ def test_recursive_redaction_preserves_non_string_schema_types() -> None:
 def test_environment_access_never_writes_secret_state(tmp_path: Path) -> None:
     RuntimeEnvironment.from_environ({"OPENAI_API_KEY": "interrupted-secret"})
     assert list(tmp_path.iterdir()) == []
+
+
+def test_shared_credential_detection_covers_labelled_secrets_and_url_userinfo() -> None:
+    from autobrain.secrets import contains_secret, redact_secret_text
+
+    values = (
+        "API_KEY: labelled-secret-value",
+        "proxy-authorization=Bearer labelled-secret-value",
+        "https://user:password-value@example.test/path",
+    )
+    for value in values:
+        assert contains_secret(value)
+        assert value not in redact_secret_text(value)
+        assert "[REDACTED]" in redact_secret_text(value)
+
+    persisted = redact({"detail": values[0]})
+    assert persisted == {"detail": "[REDACTED]"}
+
+
+def test_shared_credential_detection_allows_conceptual_bearer_documentation() -> None:
+    from autobrain.secrets import contains_secret
+
+    assert not contains_secret("OAuth clients use bearer tokens and credentials.")
+
+
+def test_shared_credential_detection_allows_security_documentation_without_assignments() -> None:
+    from autobrain.secrets import contains_secret
+
+    assert not contains_secret(
+        "Password rotation and token lifecycle documentation explain API key and credential "
+        "storage."
+    )

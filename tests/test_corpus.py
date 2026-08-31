@@ -100,6 +100,25 @@ def test_boundary_rejects_secret_or_oracle_artifacts_and_prompt_text_stays() -> 
         freeze_corpus([document("notion:page:a", "oracle: reference answer")], Path("/tmp/x"))
 
 
+def test_boundary_rejects_labelled_credentials_and_url_userinfo() -> None:
+    for text in (
+        "API_KEY: labelled-secret-value",
+        "https://user:password-value@example.test/path",
+    ):
+        with pytest.raises(CorpusBoundaryError):
+            normalize_raw_items(
+                [
+                    {
+                        "source_id": "notion:page:secret",
+                        "source_kind": "NOTION_PAGE",
+                        "url": "https://notion.so/secret",
+                        "title": "A",
+                        "text": text,
+                    }
+                ]
+            )
+
+
 def test_boundary_allows_conceptual_bearer_token_documentation() -> None:
     normalized = normalize_raw_items(
         [
@@ -114,6 +133,23 @@ def test_boundary_allows_conceptual_bearer_token_documentation() -> None:
     )
 
     assert normalized[0].text.startswith("OAuth clients use bearer tokens")
+
+
+def test_boundary_allows_security_documentation_metadata_without_credentials() -> None:
+    normalized = normalize_raw_items(
+        [
+            {
+                "source_id": "notion:page:security",
+                "source_kind": "NOTION_PAGE",
+                "url": "https://notion.so/security",
+                "title": "OAuth and password security",
+                "text": "Use bearer tokens and API keys carefully.",
+                "metadata": {"topic": "API key rotation and secret storage"},
+            }
+        ]
+    )
+
+    assert normalized[0].metadata["topic"] == "API key rotation and secret storage"
 
 
 def test_dirty_output_is_not_overwritten(tmp_path: Path) -> None:
