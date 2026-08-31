@@ -7,6 +7,8 @@ from urllib.parse import parse_qs, urlparse
 
 from autobrain.auth.models import ConsentDeniedError, OAuthError, StateMismatchError
 
+_CALLBACK_PATH = "/oauth/callback"
+
 
 @dataclass(frozen=True)
 class CallbackResult:
@@ -27,43 +29,65 @@ class LocalCallback:
         self._result: CallbackResult | None = None
         self._error: BaseException | None = None
         self._done = Event()
+        self._response_complete = Event()
+        self._transition_lock = Lock()
         self._close_lock = Lock()
         self._closed = False
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
-                query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                parsed = urlparse(self.path)
+                if parsed.path != _CALLBACK_PATH:
+                    self.send_response(404)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b"Not found.")
+                    return
+
+                query = parse_qs(parsed.query, keep_blank_values=True)
                 state = query.get("state", [""])[0]
-                if owner._done.is_set():
-                    status, message = 409, b"Authorization callback was already handled."
-                elif state != owner.expected_state:
-                    owner._error = StateMismatchError("OAuth callback state mismatch")
-                    status, message = 400, b"Authorization rejected: invalid state."
-                elif query.get("error", [""])[0]:
-                    owner._error = ConsentDeniedError("OAuth consent was denied")
-                    status, message = 403, b"Authorization was denied. No credentials were stored."
-                elif not query.get("code", [""])[0]:
-                    owner._error = OAuthError("OAuth callback did not contain a code")
-                    status, message = 400, b"Authorization rejected: missing authorization code."
-                else:
-                    owner._result = CallbackResult(query["code"][0], state)
-                    status, message = 200, b"Authorization accepted. You may close this window."
-                self.send_response(status)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(message)
-                owner._done.set()
+                with owner._transition_lock:
+                    if owner._done.is_set():
+                        status, message = 409, b"Authorization callback was already handled."
+                    elif state != owner.expected_state:
+                        owner._error = StateMismatchError("OAuth callback state mismatch")
+                        status, message = 400, b"Authorization rejected: invalid state."
+                    elif query.get("error", [""])[0]:
+                        owner._error = ConsentDeniedError("OAuth consent was denied")
+                        status, message = (
+                            403,
+                            b"Authorization was denied. No credentials were stored.",
+                        )
+                    elif not query.get("code", [""])[0]:
+                        owner._error = OAuthError("OAuth callback did not contain a code")
+                        status, message = (
+                            400,
+                            b"Authorization rejected: missing authorization code.",
+                        )
+                    else:
+                        owner._result = CallbackResult(query["code"][0], state)
+                        status, message = (
+                            200,
+                            b"Authorization accepted. You may close this window.",
+                        )
+
+                    self.send_response(status)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(message)
+                    owner._done.set()
+
+            def finish(self) -> None:
+                try:
+                    super().finish()
+                finally:
+                    owner._response_complete.set()
 
             def log_message(self, format: str, *args: object) -> None:
                 del format, args
 
-        try:
-            self._server = ThreadingHTTPServer((host, port), Handler)
-        except OSError:
-            if port == 0:
-                raise
-            self._server = ThreadingHTTPServer((host, 0), Handler)
+        self._server = ThreadingHTTPServer((host, port), Handler)
         self._server.daemon_threads = True
         self.port = self._server.server_address[1]
         self._thread = Thread(target=self._server.serve_forever, daemon=True)
@@ -77,6 +101,8 @@ class LocalCallback:
         try:
             if not self._done.wait(self.timeout):
                 raise OAuthError("OAuth callback timed out")
+            if not self._response_complete.wait(self.timeout):
+                raise OAuthError("OAuth callback response did not complete")
             if self._error:
                 raise self._error
             if self._result is None:

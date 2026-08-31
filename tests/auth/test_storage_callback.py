@@ -3,6 +3,7 @@ import os
 import threading
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,103 @@ def test_hung_callback_is_bounded_and_releases_listener() -> None:
     replacement.close()
 
 
+def test_callback_rejects_non_callback_path_without_consuming_callback() -> None:
+    callback = LocalCallback("127.0.0.1", 0, "expected", timeout=0.01)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as request_error:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{callback.port}/wrong-path?code=ok&state=expected",
+                timeout=2,
+            )
+        assert request_error.value.code == 404
+        with pytest.raises(OAuthError, match="timed out"):
+            callback.wait()
+    finally:
+        callback.close()
+
+
+def test_callback_transition_is_one_shot_under_concurrent_requests() -> None:
+    callback = LocalCallback("127.0.0.1", 0, "expected", timeout=2)
+    barrier = threading.Barrier(3)
+    responses: list[int] = []
+
+    def request(code: str) -> None:
+        barrier.wait()
+        try:
+            with urllib.request.urlopen(
+                f"{callback.redirect_uri}?code={code}&state=expected", timeout=2
+            ) as opened:
+                opened.read()
+                responses.append(opened.status)
+        except urllib.error.HTTPError as exc:
+            exc.read()
+            responses.append(exc.code)
+
+    threads = [threading.Thread(target=request, args=(f"code-{index}",)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    result = callback.wait()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(responses) == [200, 409]
+    assert result.code in {"code-0", "code-1"}
+    assert result.state == "expected"
+
+
+def test_callback_wait_does_not_shutdown_during_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callback = LocalCallback("127.0.0.1", 0, "expected", timeout=2)
+    response_started = threading.Event()
+    release_response = threading.Event()
+    response_finished = threading.Event()
+    response: list[int] = []
+    shutdown_started_before_response = False
+
+    original_finish = BaseHTTPRequestHandler.finish
+
+    def blocked_finish(handler: BaseHTTPRequestHandler) -> None:
+        response_started.set()
+        assert release_response.wait(2)
+        original_finish(handler)
+        response_finished.set()
+
+    monkeypatch.setattr(BaseHTTPRequestHandler, "finish", blocked_finish)
+
+    original_shutdown = callback._server.shutdown
+
+    def shutdown() -> None:
+        nonlocal shutdown_started_before_response
+        shutdown_started_before_response = not response_finished.is_set()
+        original_shutdown()
+
+    monkeypatch.setattr(callback._server, "shutdown", shutdown)
+
+    def request() -> None:
+        with urllib.request.urlopen(
+            f"{callback.redirect_uri}?code=ok&state=expected", timeout=2
+        ) as opened:
+            opened.read()
+            response.append(opened.status)
+
+    request_thread = threading.Thread(target=request)
+    request_thread.start()
+    assert response_started.wait(2)
+
+    wait_thread = threading.Thread(target=callback.wait)
+    wait_thread.start()
+    release_response.set()
+    request_thread.join(2)
+    assert not request_thread.is_alive()
+    wait_thread.join(2)
+    assert not wait_thread.is_alive()
+    assert response == [200]
+    assert response_finished.is_set()
+    assert not shutdown_started_before_response
+
+
 def test_callback_reports_consent_denial() -> None:
     callback = LocalCallback("127.0.0.1", 0, "expected", timeout=2)
     error, status, body = _callback_request(callback, "error=access_denied&state=expected")
@@ -156,7 +254,7 @@ def test_atomic_write_interruption_leaves_no_partial_secret_file(
     assert list(tmp_path.glob(".oauth-tokens.json.*")) == []
 
 
-def test_callback_falls_back_when_preferred_port_is_busy() -> None:
+def test_callback_rejects_occupied_fixed_port_without_fallback() -> None:
     import socket
 
     blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -165,14 +263,7 @@ def test_callback_falls_back_when_preferred_port_is_busy() -> None:
     blocker.listen(1)
     busy_port = blocker.getsockname()[1]
     try:
-        callback = LocalCallback("127.0.0.1", busy_port, "expected", timeout=2)
-        try:
-            assert callback.port != busy_port
-            error, status, body = _callback_request(callback, "code=ok&state=expected")
-            assert error is None
-            assert status == 200
-            assert "accepted" in body.lower()
-        finally:
-            callback.close()
+        with pytest.raises(OSError):
+            LocalCallback("127.0.0.1", busy_port, "expected", timeout=2)
     finally:
         blocker.close()
