@@ -78,7 +78,11 @@ class ExperimentReadiness(StrictModel):
 
 class ExperimentRequest(StrictModel):
     schema_version: Literal[1]
-    experiment_id: str = Field(min_length=1, max_length=128)
+    experiment_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+    )
     identity: ExperimentIdentity
     candidates: list[CandidateId] = Field(min_length=1)
     evaluation_mode: Literal["retrieval_only", "answer_aware"] = "retrieval_only"

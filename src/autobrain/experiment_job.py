@@ -64,6 +64,11 @@ class _Run(Protocol):
 RunFactory = Callable[[ExperimentRequest, Callable[[Any], None], RunCancellation], _Run]
 ResultLoader = Callable[[str], JobResult]
 Comparator = Callable[[str, str], dict[str, Any]]
+MAX_REQUEST_BODY_BYTES = 1_048_576
+
+
+class RequestBodyTooLarge(ValueError):
+    """An HTTP request exceeded the local experiment boundary limit."""
 
 
 @dataclass
@@ -271,17 +276,26 @@ class ExperimentJobBoundary:
                 )
             loaded = self._result_loader(run_id)
             with self._lock:
+                cancelled = (
+                    job.cancellation.cancelled
+                    or job.lifecycle.status is ExperimentLifecycleStatus.CANCELLED
+                )
+                if cancelled:
+                    job.lifecycle = (
+                        job.lifecycle
+                        if job.lifecycle.status is ExperimentLifecycleStatus.CANCELLED
+                        else job.lifecycle.transition(ExperimentLifecycleStatus.CANCELLED)
+                    )
+                    job.result = JobResult(status=ExperimentLifecycleStatus.CANCELLED.value)
+                    return
                 job.result = loaded
                 result_status = str(getattr(result, "status", "OK"))
                 target = (
-                    ExperimentLifecycleStatus.CANCELLED
-                    if job.cancellation.cancelled
-                    else ExperimentLifecycleStatus.FAILED
+                    ExperimentLifecycleStatus.FAILED
                     if loaded.status == "FAILED" or result_status in {"FAILED", "Status.FAILED"}
                     else ExperimentLifecycleStatus.SUCCEEDED
                 )
-                if job.lifecycle.status is not ExperimentLifecycleStatus.CANCELLED:
-                    job.lifecycle = job.lifecycle.transition(target)
+                job.lifecycle = job.lifecycle.transition(target)
         except RunCancelled:
             with self._lock:
                 if job.lifecycle.status is not ExperimentLifecycleStatus.CANCELLED:
@@ -467,6 +481,10 @@ class _JobHandler(BaseHTTPRequestHandler):
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
+        if length > MAX_REQUEST_BODY_BYTES:
+            raise RequestBodyTooLarge(
+                f"request body exceeds the {MAX_REQUEST_BODY_BYTES // 1_048_576} MiB limit"
+            )
         decoded: object = json.loads(self.rfile.read(length) or b"{}")
         value: dict[str, Any]
         if isinstance(decoded, dict):
@@ -493,6 +511,8 @@ class _JobHandler(BaseHTTPRequestHandler):
                 else 400
             )
             self._json(code, {"error": error.code.value, "detail": redact_text(error.detail)})
+        elif isinstance(error, RequestBodyTooLarge):
+            self._json(413, {"error": "INVALID_REQUEST", "detail": str(error)})
         elif isinstance(error, (ValidationError, json.JSONDecodeError, ValueError)):
             self._json(400, {"error": "INVALID_REQUEST", "detail": "request failed validation"})
         else:

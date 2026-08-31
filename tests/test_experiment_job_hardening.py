@@ -17,6 +17,18 @@ from autobrain.models import Status
 from tests.test_experiment_job_boundary import request_payload
 
 
+class IgnoresCancellationRun:
+    def __init__(self, cancellation: Any) -> None:
+        self.cancellation = cancellation
+        self.run_id = "run-race"
+
+    def cancel(self) -> None:
+        self.cancellation.cancel()
+
+    def run(self) -> Any:
+        return type("Result", (), {"run_id": self.run_id, "status": Status.OK})()
+
+
 class BlockingRun:
     def __init__(self, cancellation: Any) -> None:
         self.cancellation = cancellation
@@ -35,6 +47,21 @@ class BlockingRun:
         self.release.wait(timeout=2)
         self.cancellation.raise_if_cancelled()
         return type("Result", (), {"run_id": self.run_id, "status": Status.OK})()
+
+
+def test_cancelled_run_cannot_expose_a_success_result() -> None:
+    jobs = ExperimentJobBoundary(
+        factory=lambda _request, _sink, cancellation: IgnoresCancellationRun(cancellation),
+        result_loader=lambda run_id: JobResult.success(run_id),
+    )
+    jobs.create(ExperimentRequest.model_validate(request_payload(experiment_id="race")))
+    jobs.validate("race")
+    jobs.start("race")
+    jobs.cancel("race")
+    assert jobs.wait("race", timeout=1)
+
+    assert jobs.status("race").status.value == "CANCELLED"
+    assert jobs.result("race").status == "CANCELLED"
 
 
 def test_validate_and_start_are_idempotent_and_duplicate_create_replays_same_request() -> None:
@@ -84,6 +111,25 @@ def test_local_job_limit_is_bounded() -> None:
         jobs.create(ExperimentRequest.model_validate(request_payload(experiment_id="exp-2")))
     assert error.value.code is StableExperimentErrorCode.INVALID_REQUEST
     assert error.value.detail == "local experiment job limit reached"
+
+
+def test_http_rejects_oversized_request_bodies() -> None:
+    jobs = ExperimentJobBoundary(
+        factory=lambda _request, _sink, cancellation: BlockingRun(cancellation)
+    )
+    with ExperimentJobServer(jobs, port=0) as server:
+        connection = HTTPConnection(server.host, server.port, timeout=2)
+        connection.putrequest("POST", "/api/v1/experiments")
+        connection.putheader("Content-Type", "application/json")
+        connection.putheader("Content-Length", str(1_048_577))
+        connection.endheaders()
+        response = connection.getresponse()
+        assert response.status == 413
+        assert json.loads(response.read()) == {
+            "error": "INVALID_REQUEST",
+            "detail": "request body exceeds the 1 MiB limit",
+        }
+        connection.close()
 
 
 def test_http_errors_are_stable_json_for_malformed_and_unknown_requests() -> None:

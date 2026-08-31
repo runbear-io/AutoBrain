@@ -16,8 +16,12 @@ from autobrain.experiment_contracts import (
     StableExperimentError,
     StableExperimentErrorCode,
 )
-from autobrain.models import CandidateId, CorpusIdentity, CostStatus, ExperimentIdentity
-
+from autobrain.models import (
+    CandidateId,
+    CorpusIdentity,
+    CostStatus,
+    ExperimentIdentity,
+)
 
 HASH = "a" * 64
 
@@ -46,10 +50,30 @@ def test_experiment_request_and_identity_are_strict_and_immutable() -> None:
         ExperimentRequest.model_validate({**request.model_dump(mode="json"), "secret": "nope"})
 
 
+@pytest.mark.parametrize("experiment_id", ["exp/1", "../escape", "exp id", "exp?query"])
+def test_experiment_id_is_a_safe_single_path_component(experiment_id: str) -> None:
+    identity = ExperimentIdentity(
+        corpus=CorpusIdentity(sha256=HASH, document_count=2),
+        benchmark_sha256="b" * 64,
+        protocol="retrieval-v1",
+        evaluator="retrieval",
+    )
+    with pytest.raises(ValidationError):
+        ExperimentRequest(
+            schema_version=1,
+            experiment_id=experiment_id,
+            identity=identity,
+            candidates=[CandidateId.GBRAIN],
+        )
+
+
 def test_readiness_is_explicit_and_cannot_claim_ready_with_blockers() -> None:
     blocked = ExperimentReadiness(
         state=ExperimentReadinessState.BLOCKED,
-        checks={"source": ReadinessCheckState.READY, "embedding": ReadinessCheckState.NOT_CONFIGURED},
+        checks={
+            "source": ReadinessCheckState.READY,
+            "embedding": ReadinessCheckState.NOT_CONFIGURED,
+        },
         blockers=["SEMANTIC_EMBEDDING_REQUIRED"],
     )
     assert not blocked.ready
