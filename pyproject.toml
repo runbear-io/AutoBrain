@@ -47,8 +47,11 @@ include = [
   "DESIGN.md",
   "pyproject.toml",
   "uv.lock",
+  "schemas/fixture-v1.json",
 ]
 exclude = [
+  ".omo/**",
+  "web/**",
   ".senpi/task-10-final-qa-20260818/**",
   ".senpi/task9-final-qa-20260818/**",
   ".senpi/task9-qa-20260818/**",

@@ -214,6 +214,27 @@ def test_retained_task_text_uses_authoritative_release_source_digest() -> None:
     assert f"`sha256:{expected}`" in task_text
 
 
+def test_built_sdist_excludes_repository_local_trees(tmp_path: Path) -> None:
+    subprocess.run(
+        [os.environ.get("AUTOBRAIN_TEST_UV", "uv"), "build", "--sdist", "--out-dir", str(tmp_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    sdist = next(tmp_path.glob("autobrain-*.tar.gz"))
+    with tarfile.open(sdist, "r:gz") as archive:
+        members = {
+            member.name.split("/", 1)[1] for member in archive.getmembers() if "/" in member.name
+        }
+    top_level = {member.split("/", 1)[0] for member in members}
+
+    assert ".omo" not in top_level
+    assert ".senpi" in top_level
+    assert "web" not in top_level
+    assert "src/autobrain/candidate-pins.json" in members
+    assert "schemas/fixture-v1.json" in members
+
+
 def test_built_sdist_closes_over_exact_verified_release_evidence(tmp_path: Path) -> None:
     subprocess.run(
         [os.environ.get("AUTOBRAIN_TEST_UV", "uv"), "build", "--sdist", "--out-dir", str(tmp_path)],
