@@ -1,0 +1,30 @@
+{
+  "todo": 1,
+  "title": "Define experiment and retrieval contracts",
+  "status": "PASS",
+  "changed_files": [
+    "src/autobrain/experiment_contracts.py",
+    "tests/test_experiment_contracts.py",
+    "web/src/data/experimentContracts.ts",
+    "web/src/data/experimentContracts.test.ts"
+  ],
+  "checks": {
+    "python_focused": "28 passed",
+    "python_regression_slice": "120 passed",
+    "basedpyright": "0 errors, 0 warnings, 0 notes",
+    "web_tests": "106 passed, 0 fail",
+    "web_typecheck": "passed"
+  },
+  "evidence": [
+    ".omo/evidence/autobrain-web-first-experiment/todo-1-python.txt",
+    ".omo/evidence/autobrain-web-first-experiment/todo-1-web.txt"
+  ],
+  "guardrails": [
+    "retrieval-only is the default contract",
+    "identity and lifecycle models are frozen/strict",
+    "readiness cannot claim READY with blockers",
+    "retrieval metric counts reconcile",
+    "stable error codes are explicit",
+    "no browser credentials or provider calls added"
+  ]
+}

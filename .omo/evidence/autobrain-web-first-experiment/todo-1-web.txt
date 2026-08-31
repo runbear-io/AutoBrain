@@ -1,0 +1,133 @@
+$ cd web && bun test
+bun test v1.4.0 (34cbb9a40)
+
+src/state/appState.test.ts:
+(pass) prototype state journey > diagnosis advances deterministically and caps at 100 percent [0.10ms]
+(pass) prototype state journey > source reconnect makes the quick start launchable [0.08ms]
+(pass) prototype state journey > optimization completes all trials and selects trial nine [0.08ms]
+
+src/live/httpIntegration.test.ts:
+(pass) real HTTP against a live local fixture > a succeeded run is read over the wire and summarized [672.14ms]
+(pass) real HTTP against a live local fixture > a failed run is read over the wire without a projection [597.66ms]
+(pass) real HTTP against a live local fixture > a cancelled run is distinct from a failure over the wire [108.05ms]
+(pass) real HTTP against a live local fixture > a malformed projection is rejected rather than rendered [106.91ms]
+GET http://127.0.0.1:54553/index.html 404 (Not Found)
+(pass) real HTTP against a live local fixture > unknown paths 404 over real HTTP [590.67ms]
+(pass) CORS grants only loopback dev origins > a vite dev origin is granted access [593.30ms]
+(pass) CORS grants only loopback dev origins > the grant is never a wildcard and never credentialed [600.38ms]
+(pass) CORS grants only loopback dev origins > a remote origin receives no CORS grant [599.09ms]
+(pass) CORS grants only loopback dev origins > a browser preflight is answered for a dev origin [596.93ms]
+(pass) runner url resolution > falls back to the documented loopback default [0.07ms]
+(pass) runner url resolution > accepts a loopback override and trims a trailing slash [0.05ms]
+(pass) runner url resolution > ignores a non-loopback override [0.01ms]
+(pass) runner url resolution > recognizes http://localhost:5173 as loopback [0.01ms]
+(pass) runner url resolution > recognizes http://127.0.0.1:8765 as loopback
+(pass) runner url resolution > recognizes https://localhost:5173 as loopback
+(pass) runner url resolution > rejects https://evil.example as non-loopback [0.01ms]
+(pass) runner url resolution > rejects http://localhost.evil.example as non-loopback
+(pass) runner url resolution > rejects not-a-url as non-loopback [0.03ms]
+(pass) runner url resolution > rejects file:///tmp as non-loopback
+
+src/live/localFixtureRoute.test.tsx:
+(pass) local fixture route reachability > the sidebar exposes a local runner entry [14.30ms]
+(pass) local fixture route reachability > clicking it renders the local runner panel [5.25ms]
+(pass) local fixture route reachability > the route is labeled as a local fixture and not hosted [2.28ms]
+(pass) local fixture route reachability > the panel shows the loopback origin it would read from [2.36ms]
+(pass) local fixture route reachability > no run has been read before the operator asks for one [1.89ms]
+(pass) local fixture route reachability > reading a run invokes fetchRunOutcome and renders the projection [6.15ms]
+(pass) local fixture route reachability > a cancelled run is reported as cancelled, not failed [3.08ms]
+(pass) local fixture route reachability > a malformed payload surfaces an error instead of a bogus summary [2.64ms]
+(pass) synthetic demo is preserved > the app still opens on the synthetic demo journey [0.92ms]
+(pass) synthetic demo is preserved > the synthetic demo routes remain reachable alongside the fixture [12.17ms]
+
+src/live/runClient.test.ts:
+(pass) local run client contract > parses a succeeded outcome and exposes the projection [0.04ms]
+(pass) local run client contract > parses failed and cancelled outcomes with no projection [0.02ms]
+(pass) local run client contract > rejects an unsupported projection schema version [0.06ms]
+(pass) local run client contract > rejects an unknown run status rather than guessing [0.02ms]
+(pass) local run client contract > rejects a succeeded outcome that carries no projection [0.02ms]
+(pass) local run client contract > all three terminal statuses are terminal
+(pass) local run client contract > summarize reports the engine status distinctly from the run status [0.04ms]
+(pass) local run client contract > summarize describes cancellation without implying failure [0.02ms]
+(pass) local run client contract > fetchRunOutcome reads the versioned endpoint from the injected transport [0.06ms]
+
+src/live/validation.test.ts:
+(pass) projection payload validation > accepts a well-formed payload [0.07ms]
+(pass) projection payload validation > accepts nullable numeric fields when explicitly null [0.03ms]
+(pass) projection payload validation > rejects a projection missing required field run_id [0.03ms]
+(pass) projection payload validation > rejects a projection missing required field status [0.01ms]
+(pass) projection payload validation > rejects a projection missing required field verdict [0.01ms]
+(pass) projection payload validation > rejects a projection missing required field rationale
+(pass) projection payload validation > rejects a projection missing required field corpus_hash
+(pass) projection payload validation > rejects a projection missing required field benchmark_hash [0.01ms]
+(pass) projection payload validation > rejects a projection missing required field candidates
+(pass) projection payload validation > rejects a projection missing required field warnings [0.02ms]
+(pass) projection payload validation > rejects a candidate missing required field candidate [0.03ms]
+(pass) projection payload validation > rejects a candidate missing required field status
+(pass) projection payload validation > rejects a candidate missing required field cost_status [0.01ms]
+(pass) projection payload validation > rejects a candidate missing required field quality_score
+(pass) projection payload validation > rejects a candidate missing required field answer_success_rate
+(pass) projection payload validation > rejects a candidate missing required field contradiction_count [0.01ms]
+(pass) projection payload validation > rejects a non-object projection [0.02ms]
+(pass) projection payload validation > rejects an unknown engine status [0.02ms]
+(pass) projection payload validation > rejects an unknown verdict [0.02ms]
+(pass) projection payload validation > rejects an unknown candidate id [0.02ms]
+(pass) projection payload validation > rejects an unknown cost status [0.02ms]
+(pass) projection payload validation > rejects a corpus hash with not-hex-at-all [0.02ms]
+(pass) projection payload validation > rejects a corpus hash with ABCDEFaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+(pass) projection payload validation > rejects a corpus hash with aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+(pass) projection payload validation > rejects a corpus hash with aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+(pass) projection payload validation > rejects a benchmark hash that is not a sha256 [0.01ms]
+(pass) projection payload validation > rejects an empty run id [0.01ms]
+(pass) projection payload validation > rejects a non-string rationale [0.02ms]
+(pass) projection payload validation > rejects candidates that are not an array [0.02ms]
+(pass) projection payload validation > rejects an empty candidate list [0.01ms]
+(pass) projection payload validation > rejects a candidate that is not an object [0.01ms]
+(pass) projection payload validation > rejects warnings that are not an array of strings [0.04ms]
+(pass) projection payload validation > rejects quality_score outside its allowed range (-1) [0.02ms]
+(pass) projection payload validation > rejects quality_score outside its allowed range (100.5)
+(pass) projection payload validation > rejects answer_success_rate outside its allowed range (-0.1)
+(pass) projection payload validation > rejects answer_success_rate outside its allowed range (1.5)
+(pass) projection payload validation > rejects source_support_rate outside its allowed range (2) [0.01ms]
+(pass) projection payload validation > rejects contradiction_count outside its allowed range (-1)
+(pass) projection payload validation > rejects scored_cases outside its allowed range (-3) [0.01ms]
+(pass) projection payload validation > rejects answered_cases outside its allowed range (-1) [0.01ms]
+(pass) projection payload validation > rejects total_cost_usd outside its allowed range (-0.01) [0.01ms]
+(pass) projection payload validation > rejects query_p50_ms outside its allowed range (-5)
+(pass) projection payload validation > rejects query_p95_ms outside its allowed range (-1) [0.01ms]
+(pass) projection payload validation > rejects operating_burden outside its allowed range (-2)
+(pass) projection payload validation > rejects a non-integer count in contradiction_count [0.01ms]
+(pass) projection payload validation > rejects a non-integer count in scored_cases [0.01ms]
+(pass) projection payload validation > rejects a non-integer count in answered_cases
+(pass) projection payload validation > rejects a non-finite number in quality_score [0.03ms]
+(pass) projection payload validation > rejects a non-finite number in answer_success_rate
+(pass) projection payload validation > rejects a non-finite number in total_cost_usd
+(pass) projection payload validation > rejects a numeric field delivered as a numeric string [0.02ms]
+(pass) projection payload validation > rejects a non-nullable numeric field set to null
+(pass) projection payload validation > reports the offending candidate by index [0.03ms]
+
+src/data/demoData.test.ts:
+(pass) synthetic evidence fixtures > GBrain wins the diagnosis by the declared policy [0.02ms]
+(pass) synthetic evidence fixtures > twelve trials produce the declared feasible winner [0.04ms]
+(pass) synthetic evidence fixtures > Pareto frontier excludes pruned and violating trials [0.09ms]
+
+src/data/experimentContracts.test.ts:
+(pass) experiment contract vocabulary > allows only the canonical lifecycle transitions [0.03ms]
+(pass) experiment contract vocabulary > uses stable machine-readable errors [0.01ms]
+(pass) experiment contract vocabulary > rejects readiness that contradicts its blockers [0.06ms]
+(pass) experiment contract vocabulary > rejects retrieval metrics that do not reconcile [0.03ms]
+
+src/data/sourceContracts.test.ts:
+(pass) source capability and import contracts > inventories fixture, Slack, Notion, and future gated read-only inputs [0.05ms]
+(pass) source capability and import contracts > parses a versioned JSON envelope and preserves normalized fields [0.21ms]
+(pass) source capability and import contracts > parses JSONL with blank lines and stable source identity [0.06ms]
+(pass) source capability and import contracts > rejects malformed envelopes, duplicate IDs, and credential-shaped fields [0.13ms]
+(pass) source capability and import contracts > accepts future connector-shaped data without making readiness ready [0.05ms]
+
+ 106 pass
+ 0 fail
+ 176 expect() calls
+Ran 106 tests across 8 files. [4.62s]
+
+$ cd web && bun run typecheck
+$ tsc --noEmit

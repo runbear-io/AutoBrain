@@ -1,0 +1,6 @@
+$ uv run pytest tests/test_experiment_contracts.py tests/test_task2_identity.py tests/test_benchmark.py -q
+............................                                             [100%]
+28 passed in 0.34s
+
+$ uv run basedpyright src/autobrain/experiment_contracts.py src/autobrain/models.py tests/test_experiment_contracts.py
+0 errors, 0 warnings, 0 notes
