@@ -1,0 +1,377 @@
+/*
+ * Retrieval results and comparison surface.
+ *
+ * Styled exclusively against the semantic role tokens in styles/tokens.css and
+ * styles/themes.css, matching live.css and experimentSetup.css. No palette
+ * token, raw color, or magic pixel value appears here, so this surface inherits
+ * both the light product surface and the dark observability surface.
+ */
+
+.results {
+  display: grid;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--bg-surface);
+  border: var(--border-hairline) solid var(--line-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.results__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.results__title {
+  font-family: var(--font-display);
+  font-size: var(--text-h2);
+  font-weight: var(--weight-regular);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+}
+
+.results__origin {
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--text-tertiary);
+}
+
+/* Honest scope label, identical in intent to the wizard and runner panels. */
+.results__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-hairline) dashed var(--line-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.results__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.results__empty {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  font-size: var(--text-small);
+  color: var(--text-tertiary);
+}
+
+/* ------------------------------------------------------------- confidence */
+
+/*
+ * The confidence notice is intentionally the first thing under the header. It
+ * is never styled as a celebration: even an engine decision reads as a bounded
+ * measurement, so the caveat is always visible next to the label.
+ */
+.results-confidence {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: var(--border-hairline) solid var(--status-neutral-line);
+  background: var(--status-neutral-soft);
+}
+
+.results-confidence[data-level="ENGINE_DECISION"] {
+  border-color: var(--accent-data-line);
+  background: var(--accent-data-soft);
+}
+
+.results-confidence[data-level="LIMITED"] {
+  border-color: var(--status-warning-line);
+  background: var(--status-warning-soft);
+}
+
+.results-confidence__label {
+  font-size: var(--text-h3);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.results-confidence__caveat {
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+  max-width: 62ch;
+}
+
+.results-confidence__rationale {
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+  max-width: 62ch;
+}
+
+.results-confidence__warnings {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-caption);
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------------------- provenance */
+
+.results-provenance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+}
+
+.results-provenance div {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background: var(--bg-sunken);
+  border-radius: var(--radius-md);
+}
+
+.results-provenance dt {
+  font-size: var(--text-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.results-provenance dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* A placeholder identity is marked so it is never mistaken for engine truth. */
+.results-provenance__flag {
+  font-family: var(--font-sans);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--status-warning);
+}
+
+/* ------------------------------------------------------------------ table */
+
+.results-section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.results-section__title {
+  font-size: var(--text-h3);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.results-section__hint {
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+  max-width: 62ch;
+}
+
+.results-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-small);
+}
+
+.results-table th,
+.results-table td {
+  padding: var(--space-3);
+  text-align: left;
+  border-bottom: var(--border-hairline) solid var(--line-subtle);
+  white-space: nowrap;
+}
+
+.results-table th {
+  font-size: var(--text-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.results-table td.num,
+.results-table th.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The leader is the highest measured recall, marked but not celebrated. */
+.results-table tbody tr[data-leader="true"] {
+  background: var(--accent-data-soft);
+}
+
+.results-table tbody tr[data-comparable="false"] {
+  color: var(--text-tertiary);
+}
+
+.results-table__candidate {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.results-table__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-sm);
+  flex: none;
+}
+
+.results-table__note {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-regular);
+  color: var(--text-tertiary);
+  white-space: normal;
+  max-width: 34ch;
+}
+
+.results-table__delta[data-direction="improved"] { color: var(--status-success); }
+.results-table__delta[data-direction="regressed"] { color: var(--status-danger); }
+.results-table__delta[data-direction="unchanged"] { color: var(--text-tertiary); }
+.results-table__delta[data-direction="added"],
+.results-table__delta[data-direction="removed"] { color: var(--status-warning); }
+
+.results-blocker {
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: var(--border-hairline) solid var(--status-warning-line);
+  background: var(--status-warning-soft);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------- recovery */
+
+.results-recovery {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: var(--border-hairline) solid var(--status-neutral-line);
+  background: var(--status-neutral-soft);
+}
+
+.results-recovery[data-tone="danger"] {
+  border-color: var(--status-danger-line);
+  background: var(--status-danger-soft);
+}
+
+.results-recovery__headline {
+  font-size: var(--text-h3);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.results-recovery__detail {
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+  max-width: 62ch;
+}
+
+.results-recovery__actions {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.results-recovery__action {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  text-align: left;
+  background: var(--bg-surface);
+  border: var(--border-hairline) solid var(--line-default);
+  border-radius: var(--radius-md);
+  transition: border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.results-recovery__action:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--bg-hover);
+}
+
+.results-recovery__action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Guidance, not a control: no hover affordance and a quieter surface. */
+.results-recovery__action--note {
+  background: transparent;
+  border-style: dashed;
+}
+
+.results-recovery__action strong {
+  font-size: var(--text-small);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.results-recovery__action span {
+  font-size: var(--text-caption);
+  line-height: var(--leading-snug);
+  color: var(--text-secondary);
+}
+
+/* ----------------------------------------------------------------- errors */
+
+.results-error {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: var(--border-hairline) solid var(--status-danger-line);
+  background: var(--status-danger-soft);
+}
+
+.results-error__headline {
+  font-size: var(--text-h3);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.results-error__detail {
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+  max-width: 62ch;
+}
+
+/* ----------------------------------------------------------------- mobile */
+
+@media (max-width: 639px) {
+  .results { padding: var(--space-4); }
+  .results__head { flex-direction: column; }
+  .results-provenance { grid-template-columns: minmax(0, 1fr); }
+}

@@ -42,7 +42,13 @@ export type Route =
    * JOURNEY for the same reason as the local fixture: it is a real local
    * surface, not a step in the synthetic demo.
    */
-  | "experiment-setup";
+  | "experiment-setup"
+  /**
+   * Retrieval results and comparison over the local job boundary. Excluded
+   * from JOURNEY for the same reason as the wizard: it reads a real local run
+   * rather than advancing the synthetic demo.
+   */
+  | "retrieval-results";
 
 /** Ordered primary journey used by the stepper and by next/back navigation. */
 export const JOURNEY: Route[] = [
@@ -75,6 +81,20 @@ export interface AppState {
   selectedCaseId: string | null;
   adoption: AdoptionDecision;
   selectedHistoryId: string | null;
+  /**
+   * Identity of the last Preview submitted to the local job boundary.
+   *
+   * Null until the wizard submits one. The results route reads this so a user
+   * can move from submitting a Preview to reading its result without copying
+   * an id by hand. The benchmark hash here is the wizard's local derivation -
+   * a placeholder that the engine's own hash replaces once a run succeeds.
+   */
+  submittedExperiment: SubmittedExperiment | null;
+}
+
+export interface SubmittedExperiment {
+  experimentId: string;
+  derivedBenchmarkHash: string;
 }
 
 export type TrialFilter = "all" | "feasible" | "violations" | "pruned";
@@ -99,7 +119,8 @@ export type AppEvent =
   | { type: "optimization/select-trial"; index: number | null }
   | { type: "diagnosis/select-case"; caseId: string | null }
   | { type: "adoption/decide"; decision: AdoptionDecision }
-  | { type: "history/select"; id: string | null };
+  | { type: "history/select"; id: string | null }
+  | { type: "experiment/submitted"; experiment: SubmittedExperiment };
 
 export const TOTAL_TRIALS = TRIALS.length;
 
@@ -118,6 +139,7 @@ export function initialState(): AppState {
     selectedCaseId: null,
     adoption: "undecided",
     selectedHistoryId: null,
+    submittedExperiment: null,
   };
 }
 
@@ -165,6 +187,9 @@ export function reduce(state: AppState, event: AppEvent): AppState {
   switch (event.type) {
     case "navigate":
       return { ...state, route: event.route };
+
+    case "experiment/submitted":
+      return { ...state, submittedExperiment: event.experiment };
 
     case "journey/next":
       return { ...state, route: step(state.route, 1) };

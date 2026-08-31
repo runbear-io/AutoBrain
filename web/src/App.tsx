@@ -1,6 +1,7 @@
 import { useCallback, useReducer, useState } from "react";
 import { LocalRunPanel } from "./live/LocalRunPanel";
 import { ExperimentSetupPanel } from "./live/ExperimentSetupPanel";
+import { RetrievalResultsPanel } from "./live/RetrievalResultsPanel";
 import { fetchRunOutcome, localRunnerUrl, type RunOutcome } from "./live/runClient";
 import { DIAGNOSIS_RUN, DIAGNOSIS_STAGES, winner } from "./data/diagnosis";
 import { HISTORY } from "./data/history";
@@ -10,11 +11,11 @@ import { canRunDiagnosis, currentBestTrial, diagnosisPercent, filteredTrials, in
 import "./styles/app.css";
 
 const candidateColors: Record<CandidateId, string> = { gbrain: "var(--candidate-gbrain)", "llm-wiki": "var(--candidate-llm-wiki)", mem0: "var(--candidate-mem0)" };
-const nav = [["subscriptions", "Connect"], ["diagnosis-report", "Diagnosis"], ["tuning-setup", "Tune"], ["optimization-report", "Result"], ["history", "History"], ["experiment-setup", "New experiment"], ["local-fixture", "Local runner"]] as const;
+const nav = [["subscriptions", "Connect"], ["diagnosis-report", "Diagnosis"], ["tuning-setup", "Tune"], ["optimization-report", "Result"], ["history", "History"], ["experiment-setup", "New experiment"], ["retrieval-results", "Results"], ["local-fixture", "Local runner"]] as const;
 
 function Shell({ route, go, children, dark = false }: { route: string; go: (route: any) => void; children: React.ReactNode; dark?: boolean }) {
   return <div className="shell-app" data-surface={dark ? "dark" : "light"}>
-    <aside className="sidebar"><div className="brand"><b>A</b><span>AutoBrain</span></div><nav>{nav.map(([id, label], index) => <button key={id} className={route === id ? "active" : ""} onClick={() => go(id)}><i>{["⌁", "⌕", "⌘", "◇", "↺", "✦", "⎈"][index]}</i><span>{label}</span></button>)}</nav><div className="demo"><span />Synthetic demo</div></aside>
+    <aside className="sidebar"><div className="brand"><b>A</b><span>AutoBrain</span></div><nav>{nav.map(([id, label], index) => <button key={id} className={route === id ? "active" : ""} onClick={() => go(id)}><i>{["⌁", "⌕", "⌘", "◇", "↺", "✦", "◈", "⎈"][index]}</i><span>{label}</span></button>)}</nav><div className="demo"><span />Synthetic demo</div></aside>
     <main>{children}</main>
   </div>;
 }
@@ -80,8 +81,23 @@ function LocalFixture({ state, dispatch }: any) {
 function ExperimentSetup({ state, dispatch }: any) {
   return <Shell route={state.route} go={(route) => dispatch({ type: "navigate", route })}><div className="page">
     <Header eyebrow="Local experiment" title="Set up a retrieval Preview" copy="Configure a source, Brain candidates, your existing subscription, and the retrieval evaluator, then submit the Preview to the local runner on your own machine. No CLI command and no browser-side credential is involved." action={<span className="badge info">Retrieval only</span>}/>
-    <ExperimentSetupPanel baseUrl={localRunnerUrl()}/>
+    <ExperimentSetupPanel baseUrl={localRunnerUrl()} onSubmitted={(experiment) => dispatch({ type: "experiment/submitted", experiment })}/>
   </div></Shell>;
 }
 
-export default function App() { const [state, dispatch] = useReducer(reduce, undefined, initialState); switch (state.route) { case "welcome": case "subscriptions": case "sources": case "quick-start": return <Connections state={state} dispatch={dispatch}/>; case "diagnosis-run": return <DiagnosisRun state={state} dispatch={dispatch}/>; case "diagnosis-report": return <DiagnosisReport state={state} dispatch={dispatch}/>; case "tuning-setup": return <Tuning state={state} dispatch={dispatch}/>; case "optimization-run": return <OptimizationRun state={state} dispatch={dispatch}/>; case "optimization-report": return <Result state={state} dispatch={dispatch}/>; case "history": return <History state={state} dispatch={dispatch}/>; case "local-fixture": return <LocalFixture state={state} dispatch={dispatch}/>; case "experiment-setup": return <ExperimentSetup state={state} dispatch={dispatch}/>; } }
+/**
+ * Retrieval results route.
+ *
+ * Reads a completed experiment's result from the operator's own loopback job
+ * boundary and renders the per-Brain retrieval comparison. Like the wizard,
+ * this is a real local surface, not part of the synthetic demo.
+ */
+function RetrievalResults({ state, dispatch }: any) {
+  const submitted = state.submittedExperiment;
+  return <Shell route={state.route} go={(route) => dispatch({ type: "navigate", route })}><div className="page">
+    <Header eyebrow="Local experiment" title="Compare retrieval on your frozen corpus" copy="Read a completed Preview from the local runner on your own machine. Every Brain is measured on the same frozen corpus using its own native retrieval, and every number here is reported by the engine rather than derived in the browser." action={<span className="badge info">Retrieval only</span>}/>
+    <RetrievalResultsPanel baseUrl={localRunnerUrl()} experimentId={submitted?.experimentId ?? null} derivedBenchmarkHash={submitted?.derivedBenchmarkHash ?? null}/>
+  </div></Shell>;
+}
+
+export default function App() { const [state, dispatch] = useReducer(reduce, undefined, initialState); switch (state.route) { case "welcome": case "subscriptions": case "sources": case "quick-start": return <Connections state={state} dispatch={dispatch}/>; case "diagnosis-run": return <DiagnosisRun state={state} dispatch={dispatch}/>; case "diagnosis-report": return <DiagnosisReport state={state} dispatch={dispatch}/>; case "tuning-setup": return <Tuning state={state} dispatch={dispatch}/>; case "optimization-run": return <OptimizationRun state={state} dispatch={dispatch}/>; case "optimization-report": return <Result state={state} dispatch={dispatch}/>; case "history": return <History state={state} dispatch={dispatch}/>; case "local-fixture": return <LocalFixture state={state} dispatch={dispatch}/>; case "experiment-setup": return <ExperimentSetup state={state} dispatch={dispatch}/>; case "retrieval-results": return <RetrievalResults state={state} dispatch={dispatch}/>; } }

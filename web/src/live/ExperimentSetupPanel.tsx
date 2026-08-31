@@ -71,7 +71,18 @@ function describeLifecycle(lifecycle: ExperimentLifecycleView): Submission {
   };
 }
 
-export function ExperimentSetupPanel({ baseUrl }: { baseUrl: string }) {
+export function ExperimentSetupPanel({
+  baseUrl,
+  onSubmitted,
+}: {
+  baseUrl: string;
+  /**
+   * Reports the identity of an accepted Preview so the results route can read
+   * it back without the operator copying an id by hand. Called only after the
+   * boundary accepted the request, never on a rejection.
+   */
+  onSubmitted?: (experiment: { experimentId: string; derivedBenchmarkHash: string }) => void;
+}) {
   const [setup, dispatch] = useReducer(reduceSetup, undefined, initialSetup);
   const [submission, setSubmission] = useState<Submission | null>(null);
   const [pending, setPending] = useState(false);
@@ -82,6 +93,10 @@ export function ExperimentSetupPanel({ baseUrl }: { baseUrl: string }) {
     try {
       const request = buildExperimentRequest(setup, crypto.randomUUID());
       setSubmission(describeLifecycle(await submitExperiment(baseUrl, request)));
+      onSubmitted?.({
+        experimentId: request.experiment_id,
+        derivedBenchmarkHash: request.identity.benchmark_sha256,
+      });
     } catch (cause) {
       if (cause instanceof ExperimentBoundaryError) {
         const described = describeExperimentError(cause.code, cause.detail);
@@ -98,7 +113,7 @@ export function ExperimentSetupPanel({ baseUrl }: { baseUrl: string }) {
     } finally {
       setPending(false);
     }
-  }, [baseUrl, setup]);
+  }, [baseUrl, setup, onSubmitted]);
 
   return (
     <section className="wizard">

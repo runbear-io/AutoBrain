@@ -1,11 +1,14 @@
 /**
- * Browser E2E runner for the experiment setup wizard.
+ * Browser E2E runner for the local experiment surfaces.
  *
  * Boots the real Python job boundary, builds the Web bundle pointed at it,
  * serves that bundle over loopback, and drives every scenario in
- * experiment-setup.spec.ts through Chromium at desktop and mobile widths.
+ * experiment-setup.spec.ts and retrieval-results.spec.ts through Chromium at
+ * desktop and mobile widths.
  *
- * Everything is loopback and credential-free; nothing is deployed.
+ * Pass a suite name to run one of them (`bun run e2e results`); with no
+ * argument both run. Everything is loopback and credential-free; nothing is
+ * deployed.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -13,7 +16,19 @@ import { createReadStream, existsSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { chromium } from "playwright";
-import { runScenarios } from "./experiment-setup.spec";
+import { runScenarios as runSetupScenarios } from "./experiment-setup.spec";
+import { runScenarios as runResultsScenarios } from "./retrieval-results.spec";
+
+type SuiteRunner = (
+  browser: import("playwright").Browser,
+  baseUrl: string,
+  viewport: { width: number; height: number },
+) => Promise<string[]>;
+
+const SUITES: Record<string, SuiteRunner> = {
+  setup: runSetupScenarios,
+  results: runResultsScenarios,
+};
 
 const WEB_ROOT = new URL("..", import.meta.url).pathname;
 const DIST = join(WEB_ROOT, "dist");
@@ -92,14 +107,26 @@ async function main(): Promise<void> {
   const { server, origin } = await serveDist();
   console.log(`web:      ${origin}`);
 
+  const requested = process.argv[2];
+  const selected =
+    requested === undefined
+      ? Object.entries(SUITES)
+      : Object.entries(SUITES).filter(([name]) => name === requested);
+  if (selected.length === 0) {
+    throw new Error(`unknown suite "${requested}"; expected one of ${Object.keys(SUITES).join(", ")}`);
+  }
+
   const browser = await chromium.launch({ headless: true });
   const failures: string[] = [];
   try {
-    for (const viewport of [
-      { width: 1280, height: 900 },
-      { width: 375, height: 812 },
-    ]) {
-      failures.push(...(await runScenarios(browser, origin, viewport)));
+    for (const [name, runScenarios] of selected) {
+      for (const viewport of [
+        { width: 1280, height: 900 },
+        { width: 375, height: 812 },
+      ]) {
+        console.log(`\n${name} @ ${viewport.width}px`);
+        failures.push(...(await runScenarios(browser, origin, viewport)));
+      }
     }
   } finally {
     await browser.close();
