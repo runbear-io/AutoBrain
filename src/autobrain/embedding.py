@@ -323,8 +323,10 @@ def recommendation_eligibility_reason(
 
 def build_openai_embedding_upstream(
     config: EmbeddingBackendConfig,
+    *,
+    base_url: str | None = None,
 ) -> Callable[[dict[str, object]], dict[str, object]]:
-    """Build the explicit OpenAI semantic-embedding request boundary."""
+    """Build the explicit OpenAI-compatible semantic-embedding request boundary."""
     if not config.descriptor.openai_transport or config.api_key is None:
         raise ValueError("semantic OpenAI embedding backend is not ready")
     api_key = config.api_key.get_secret_value()
@@ -335,8 +337,9 @@ def build_openai_embedding_upstream(
             raise ValueError(
                 f"semantic embedding upstream requires model {_OPENAI_EMBEDDING_MODEL}"
             )
+        endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/embeddings"
         outgoing = urllib.request.Request(
-            "https://api.openai.com/v1/embeddings",
+            endpoint,
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {api_key}",

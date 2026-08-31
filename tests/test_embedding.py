@@ -497,6 +497,39 @@ class TestExistingBackendsUnchanged:
         with pytest.raises(ValueError, match="text-embedding-3-small"):
             upstream({"model": "wrong-model", "input": "text"})
 
+    def test_openai_upstream_accepts_custom_compatible_base_url(self) -> None:
+        config = EmbeddingBackendConfig.from_environ(
+            {"OPENAI_API_KEY": _OPENAI_KEY},
+            requested="openai",
+        )
+        upstream = build_openai_embedding_upstream(
+            config,
+            base_url="http://127.0.0.1:1234/v1/",
+        )
+
+        captured: list[object] = []
+
+        class _Response:
+            def __enter__(self) -> _Response:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                pass
+
+            def read(self) -> bytes:
+                return b'{"object":"list","data":[]}'
+
+        def fake_urlopen(request: object, timeout: float = 30) -> _Response:
+            del timeout
+            captured.append(request)
+            return _Response()
+
+        with patch("autobrain.embedding.urllib.request.urlopen", side_effect=fake_urlopen):
+            upstream({"model": "text-embedding-3-small", "input": "text"})
+
+        assert captured
+        assert captured[0].full_url == "http://127.0.0.1:1234/v1/embeddings"
+
     def test_default_backend_still_openai(self) -> None:
         config = EmbeddingBackendConfig.from_environ(
             {"OPENAI_API_KEY": _OPENAI_KEY},

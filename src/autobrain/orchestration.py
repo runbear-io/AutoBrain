@@ -767,7 +767,14 @@ class RunOrchestrator:
                 )
             subscription_identity = subscription_client.probe_identity()
             embedding_upstream = (
-                build_openai_embedding_upstream(embedding_config)
+                build_openai_embedding_upstream(
+                    embedding_config,
+                    base_url=(
+                        config.custom_provider.endpoint
+                        if config.custom_provider is not None
+                        else None
+                    ),
+                )
                 if embedding_config.descriptor.openai_transport
                 else build_gemini_embedding_upstream(embedding_config)
                 if embedding_config.descriptor.gemini_transport
