@@ -95,13 +95,17 @@ class ExperimentJobBoundary:
         run_root: Path | None = None,
         result_loader: ResultLoader | None = None,
         comparator: Comparator | None = None,
+        max_jobs: int = 32,
     ) -> None:
         selected_factory = factory or orchestrator_factory
         if selected_factory is None:
             raise ValueError("factory is required")
         if factory is not None and orchestrator_factory is not None:
             raise ValueError("factory and orchestrator_factory are mutually exclusive")
+        if max_jobs < 1:
+            raise ValueError("max_jobs must be positive")
         self._factory = selected_factory
+        self._max_jobs = max_jobs
         self._result_loader = result_loader or (
             result_loader_for_run_root(run_root) if run_root is not None else self._load_result
         )
@@ -113,10 +117,18 @@ class ExperimentJobBoundary:
 
     def create(self, request: ExperimentRequest) -> ExperimentLifecycle:
         with self._lock:
-            if request.experiment_id in self._jobs:
+            existing = self._jobs.get(request.experiment_id)
+            if existing is not None:
+                if existing.request == request:
+                    return existing.lifecycle
                 raise StableExperimentError(
                     StableExperimentErrorCode.INVALID_REQUEST,
-                    "experiment_id already exists",
+                    "experiment_id already exists with a different request",
+                )
+            if len(self._jobs) >= self._max_jobs:
+                raise StableExperimentError(
+                    StableExperimentErrorCode.INVALID_REQUEST,
+                    "local experiment job limit reached",
                 )
             job = _Job(
                 request=request,
@@ -143,7 +155,7 @@ class ExperimentJobBoundary:
         except Exception as exc:
             with self._lock:
                 job.lifecycle = job.lifecycle.transition(ExperimentLifecycleStatus.FAILED)
-                job.result = JobResult.failed(f"{type(exc).__name__}: {exc}")
+                job.result = JobResult.failed(redact_text(f"{type(exc).__name__}: {exc}"))
                 return job.lifecycle
         with self._lock:
             job.run = run
@@ -158,6 +170,8 @@ class ExperimentJobBoundary:
             job = self._job(experiment_id)
             if job.lifecycle.status is ExperimentLifecycleStatus.CREATED:
                 raise StableExperimentError(StableExperimentErrorCode.NOT_READY, "validate first")
+            if job.lifecycle.status is ExperimentLifecycleStatus.RUNNING:
+                return job.lifecycle
             if job.lifecycle.status is not ExperimentLifecycleStatus.READY:
                 raise StableExperimentError(
                     StableExperimentErrorCode.INVALID_TRANSITION,
@@ -191,14 +205,19 @@ class ExperimentJobBoundary:
                 ExperimentLifecycleStatus.CANCELLED,
             }:
                 return job.lifecycle
+            runner = job.run
             job.cancellation.cancel()
             if job.lifecycle.status in {
                 ExperimentLifecycleStatus.CREATED,
                 ExperimentLifecycleStatus.VALIDATING,
                 ExperimentLifecycleStatus.READY,
+                ExperimentLifecycleStatus.RUNNING,
             }:
                 job.lifecycle = job.lifecycle.transition(ExperimentLifecycleStatus.CANCELLED)
-            return job.lifecycle
+            lifecycle = job.lifecycle
+        if runner is not None:
+            runner.cancel()
+        return lifecycle
 
     def result(self, experiment_id: str) -> JobResult:
         with self._lock:
@@ -261,10 +280,12 @@ class ExperimentJobBoundary:
                     if loaded.status == "FAILED" or result_status in {"FAILED", "Status.FAILED"}
                     else ExperimentLifecycleStatus.SUCCEEDED
                 )
-                job.lifecycle = job.lifecycle.transition(target)
+                if job.lifecycle.status is not ExperimentLifecycleStatus.CANCELLED:
+                    job.lifecycle = job.lifecycle.transition(target)
         except RunCancelled:
             with self._lock:
-                job.lifecycle = job.lifecycle.transition(ExperimentLifecycleStatus.CANCELLED)
+                if job.lifecycle.status is not ExperimentLifecycleStatus.CANCELLED:
+                    job.lifecycle = job.lifecycle.transition(ExperimentLifecycleStatus.CANCELLED)
                 job.result = JobResult(status="CANCELLED")
         except Exception as exc:
             with self._lock:
@@ -273,12 +294,13 @@ class ExperimentJobBoundary:
                     if job.cancellation.cancelled
                     else ExperimentLifecycleStatus.FAILED
                 )
-                job.lifecycle = job.lifecycle.transition(target)
+                if job.lifecycle.status is not ExperimentLifecycleStatus.CANCELLED:
+                    job.lifecycle = job.lifecycle.transition(target)
                 job.result = JobResult(
                     status=target.value,
                     error=None
                     if target is ExperimentLifecycleStatus.CANCELLED
-                    else f"{type(exc).__name__}: {exc}",
+                    else redact_text(f"{type(exc).__name__}: {exc}"),
                 )
 
     def _publish(self, experiment_id: str) -> Callable[[Any], None]:
@@ -471,10 +493,10 @@ class _JobHandler(BaseHTTPRequestHandler):
                 else 400
             )
             self._json(code, {"error": error.code.value, "detail": redact_text(error.detail)})
-        elif isinstance(error, ValidationError):
+        elif isinstance(error, (ValidationError, json.JSONDecodeError, ValueError)):
             self._json(400, {"error": "INVALID_REQUEST", "detail": "request failed validation"})
         else:
-            self._json(400, {"error": "INVALID_REQUEST", "detail": redact_text(str(error))})
+            self._json(500, {"error": "RUN_FAILED", "detail": "local experiment boundary failed"})
 
     def _json(self, status: int, payload: object) -> None:
         body = json.dumps(payload, ensure_ascii=True).encode("utf-8")

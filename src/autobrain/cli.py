@@ -571,11 +571,35 @@ def serve_local_fixture(
         ):
             raise typer.Exit(1)
         return
-    with LocalRunServer(lambda: outcome_for_run_dir(target), port=port) as server:
-        typer.echo(f"AutoBrain local fixture (unauthenticated, loopback only): {server.base_url}")
-        typer.echo(f"projection: {server.base_url}{PROJECTION_PATH}")
-        typer.echo("Press Ctrl+C to stop.")
-        try:
-            server.wait_forever()
-        except KeyboardInterrupt:
-            typer.echo("stopped")
+    try:
+        with LocalRunServer(lambda: outcome_for_run_dir(target), port=port) as server:
+            if json_output:
+                typer.echo(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "status": "LISTENING",
+                            "base_url": server.base_url,
+                            "projection_url": f"{server.base_url}{PROJECTION_PATH}",
+                            "scope": "loopback",
+                        },
+                        sort_keys=True,
+                    )
+                )
+            else:
+                typer.echo(
+                    f"AutoBrain local fixture (unauthenticated, loopback only): {server.base_url}"
+                )
+                typer.echo(f"projection: {server.base_url}{PROJECTION_PATH}")
+                typer.echo("Press Ctrl+C to stop.")
+            try:
+                server.wait_forever()
+            except KeyboardInterrupt:
+                if json_output:
+                    typer.echo(
+                        json.dumps({"schema_version": 1, "status": "STOPPED"}, sort_keys=True)
+                    )
+                else:
+                    typer.echo("stopped")
+    except KeyboardInterrupt:
+        pass
