@@ -1,0 +1,14 @@
+{
+  "todo": 2,
+  "title": "Implement retrieval-only evaluation seam",
+  "status": "PASS",
+  "commands": [
+    "uv run pytest tests/test_retrieval_evaluation.py tests/test_task1_pipeline.py tests/test_benchmark.py -q",
+    "uv run ruff check tests/test_retrieval_evaluation.py"
+  ],
+  "results": {
+    "pytest": "25 passed in 0.47s",
+    "ruff": "All checks passed"
+  },
+  "artifacts": ["tests/test_retrieval_evaluation.py", "retrieval-evaluation.txt"]
+}

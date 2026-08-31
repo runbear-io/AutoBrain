@@ -1,0 +1,12 @@
+{
+  "todo": 6,
+  "title": "Add Web retrieval results and comparison views",
+  "status": "PASS_VERIFIED",
+  "commands": ["cd web && bun run e2e results"],
+  "results": {
+    "browser_e2e": "20 scenarios passed: 10 at 1280px and 10 at 375px",
+    "boundary": "real local Python ExperimentJobServer",
+    "coverage": ["completed metrics", "provenance", "confidence", "latency/cost", "comparison", "unknown", "failed", "cancelled", "mobile readability"]
+  },
+  "artifacts": ["results-e2e.txt"]
+}

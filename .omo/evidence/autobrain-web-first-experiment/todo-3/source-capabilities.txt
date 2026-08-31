@@ -1,0 +1,6 @@
+$ uv run pytest tests/test_source_capabilities.py tests/test_fixture.py tests/connectors/test_slack_export.py -q
+.......................                                                  [100%]
+23 passed in 0.54s
+
+$ uv run ruff check tests/test_source_capabilities.py
+All checks passed!

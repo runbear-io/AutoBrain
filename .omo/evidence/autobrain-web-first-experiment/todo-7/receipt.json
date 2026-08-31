@@ -1,0 +1,10 @@
+{
+  "todo": 7,
+  "title": "Preserve CLI and harden failure/retry behavior",
+  "status": "PASS",
+  "commands": [
+    "uv run pytest tests/test_experiment_job_hardening.py tests/test_secrets.py tests/e2e/test_serve_web_seam.py -q"
+  ],
+  "results": {"pytest": "13 passed in 2.21s"},
+  "artifacts": ["runtime-hardening.txt"]
+}

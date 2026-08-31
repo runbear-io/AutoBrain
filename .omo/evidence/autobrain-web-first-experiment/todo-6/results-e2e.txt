@@ -1,0 +1,39 @@
+$ cd web && bun run e2e results
+$ bun run e2e/run.ts results
+boundary: http://127.0.0.1:50155
+vite v7.3.3 building client environment for production...
+transforming...
+✓ 46 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.59 kB │ gzip:  0.38 kB
+dist/assets/index-M-9XuOu7.css   53.25 kB │ gzip:  9.28 kB
+dist/assets/index-C7YGb6bq.js   277.74 kB │ gzip: 83.78 kB
+✓ built in 685ms
+web:      http://127.0.0.1:50156
+
+results @ 1280px
+  PASS  1280px  a completed run shows per-Brain retrieval metrics read from the engine
+  PASS  1280px  provenance names the frozen corpus, benchmark, and run identity
+  PASS  1280px  the engine benchmark hash replaces the wizard placeholder
+  PASS  1280px  confidence is stated and recommendation-grade evidence is never claimed
+  PASS  1280px  latency and cost are reported per Brain, including unavailable values
+  PASS  1280px  a before/after comparison renders a per-Brain direction
+  PASS  1280px  an unknown experiment yields actionable guidance, never a raw code
+  PASS  1280px  a failed run shows recovery actions and no results table
+  PASS  1280px  a cancelled run states nothing was scored and offers a rerun
+  PASS  1280px  the results surface stays readable and scrollable at mobile width
+
+results @ 375px
+  PASS  375px  a completed run shows per-Brain retrieval metrics read from the engine
+  PASS  375px  provenance names the frozen corpus, benchmark, and run identity
+  PASS  375px  the engine benchmark hash replaces the wizard placeholder
+  PASS  375px  confidence is stated and recommendation-grade evidence is never claimed
+  PASS  375px  latency and cost are reported per Brain, including unavailable values
+  PASS  375px  a before/after comparison renders a per-Brain direction
+  PASS  375px  an unknown experiment yields actionable guidance, never a raw code
+  PASS  375px  a failed run shows recovery actions and no results table
+  PASS  375px  a cancelled run states nothing was scored and offers a rerun
+  PASS  375px  the results surface stays readable and scrollable at mobile width
+
+all browser scenarios passed

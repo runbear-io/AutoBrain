@@ -1,0 +1,10 @@
+$ uv run ruff check tests/test_retrieval_evaluation.py tests/test_source_capabilities.py
+All checks passed!
+
+$ uv run ruff format --check tests/test_retrieval_evaluation.py tests/test_source_capabilities.py
+2 files already formatted
+
+$ uv run basedpyright tests/test_retrieval_evaluation.py tests/test_source_capabilities.py
+0 errors, 0 warnings, 0 notes
+
+$ git diff --check -- tests/test_retrieval_evaluation.py tests/test_source_capabilities.py .omo/evidence/autobrain-web-first-experiment/todo-2 .omo/evidence/autobrain-web-first-experiment/todo-3 .omo/evidence/autobrain-web-first-experiment/todo-4 .omo/evidence/autobrain-web-first-experiment/todo-5 .omo/evidence/autobrain-web-first-experiment/todo-6 .omo/evidence/autobrain-web-first-experiment/todo-7 .omo/evidence/autobrain-web-first-experiment/todo-8

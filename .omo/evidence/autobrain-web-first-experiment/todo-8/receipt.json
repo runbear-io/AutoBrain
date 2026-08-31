@@ -1,0 +1,18 @@
+{
+  "todo": 8,
+  "title": "Run complete browser and package verification",
+  "status": "FOCUSED_PASS",
+  "commands": [
+    "uv run ruff check tests/test_retrieval_evaluation.py tests/test_source_capabilities.py",
+    "uv run ruff format --check tests/test_retrieval_evaluation.py tests/test_source_capabilities.py",
+    "uv run basedpyright tests/test_retrieval_evaluation.py tests/test_source_capabilities.py",
+    "git diff --check -- <current-task-artifacts>"
+  ],
+  "results": {
+    "ruff_check": "All checks passed",
+    "ruff_format": "2 files already formatted",
+    "basedpyright": "0 errors, 0 warnings, 0 notes",
+    "diff_check": "clean"
+  },
+  "scope_note": "This receipt records focused current-task gates only; no final-F1 report is claimed because unrelated pre-existing repository failures and the real installed/Slack+Notion QA remain open."
+}

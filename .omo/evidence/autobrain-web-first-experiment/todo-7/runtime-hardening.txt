@@ -1,0 +1,3 @@
+$ uv run pytest tests/test_experiment_job_hardening.py tests/test_secrets.py tests/e2e/test_serve_web_seam.py -q
+.............                                                            [100%]
+13 passed in 2.21s

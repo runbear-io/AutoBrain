@@ -1,0 +1,248 @@
+$ cd web && bun test
+bun test v1.4.0 (34cbb9a40)
+
+e2e/experiment-setup.spec.ts:
+
+e2e/retrieval-results.spec.ts:
+
+src/state/appState.test.ts:
+(pass) prototype state journey > diagnosis advances deterministically and caps at 100 percent [0.11ms]
+(pass) prototype state journey > source reconnect makes the quick start launchable [0.19ms]
+(pass) prototype state journey > optimization completes all trials and selects trial nine [0.10ms]
+
+src/live/experimentSetupRoute.test.tsx:
+(pass) experiment setup wizard reachability > the sidebar exposes a new experiment entry [22.04ms]
+(pass) experiment setup wizard reachability > opening it renders the wizard with the retrieval-only evaluator [11.35ms]
+(pass) experiment setup wizard reachability > the wizard states that it drives the local boundary, not a hosted service [11.97ms]
+(pass) experiment setup wizard reachability > the synthetic demo remains reachable and unchanged [13.13ms]
+(pass) configuring a preview without the CLI > submission is disabled until every requirement is satisfied [11.87ms]
+(pass) configuring a preview without the CLI > readiness lists human-readable blockers, never bare codes [4.42ms]
+(pass) configuring a preview without the CLI > a gated source blocks the run with its remediation on screen [7.59ms]
+(pass) configuring a preview without the CLI > malformed JSONL shows the offending line and blocks submission [7.58ms]
+(pass) configuring a preview without the CLI > a valid JSONL import reports its document count and unblocks submission [7.51ms]
+(pass) configuring a preview without the CLI > submitting a fixture preview drives create, validate, and start [9.96ms]
+(pass) configuring a preview without the CLI > a rejected submission shows recovery guidance instead of a raw code [6.72ms]
+(pass) configuring a preview without the CLI > a transport failure is reported without claiming the run started [10.28ms]
+
+src/live/httpIntegration.test.ts:
+(pass) real HTTP against a live local fixture > a succeeded run is read over the wire and summarized [1327.08ms]
+(pass) real HTTP against a live local fixture > a failed run is read over the wire without a projection [781.07ms]
+(pass) real HTTP against a live local fixture > a cancelled run is distinct from a failure over the wire [178.90ms]
+(pass) real HTTP against a live local fixture > a malformed projection is rejected rather than rendered [250.84ms]
+GET http://127.0.0.1:50127/index.html 404 (Not Found)
+(pass) real HTTP against a live local fixture > unknown paths 404 over real HTTP [2570.54ms]
+(pass) CORS grants only loopback dev origins > a vite dev origin is granted access [3323.45ms]
+(pass) CORS grants only loopback dev origins > the grant is never a wildcard and never credentialed [3053.46ms]
+(pass) CORS grants only loopback dev origins > a remote origin receives no CORS grant [2671.36ms]
+(pass) CORS grants only loopback dev origins > a browser preflight is answered for a dev origin [2426.57ms]
+(pass) runner url resolution > falls back to the documented loopback default [0.05ms]
+(pass) runner url resolution > accepts a loopback override and trims a trailing slash [0.09ms]
+(pass) runner url resolution > ignores a non-loopback override [0.03ms]
+(pass) runner url resolution > recognizes http://localhost:5173 as loopback [0.01ms]
+(pass) runner url resolution > recognizes http://127.0.0.1:8765 as loopback
+(pass) runner url resolution > recognizes https://localhost:5173 as loopback [0.01ms]
+(pass) runner url resolution > rejects https://evil.example as non-loopback [0.04ms]
+(pass) runner url resolution > rejects http://localhost.evil.example as non-loopback
+(pass) runner url resolution > rejects not-a-url as non-loopback [0.04ms]
+(pass) runner url resolution > rejects file:///tmp as non-loopback
+(pass) runner url resolution > rejects http://user:password@127.0.0.1:8765 as non-loopback [0.02ms]
+(pass) runner url resolution > rejects http://127.0.0.1:8765/path as non-loopback
+(pass) runner url resolution > rejects http://127.0.0.1:8765?token=secret as non-loopback
+
+src/live/experimentClient.test.ts:
+(pass) experiment job client > creates, validates, and starts through the documented job routes [0.81ms]
+(pass) experiment job client > stops at validation failure instead of starting a doomed run [0.10ms]
+(pass) experiment job client > surfaces a stable rejection as a typed error, not a fake lifecycle [0.14ms]
+(pass) experiment job client > rejects an unknown lifecycle status rather than rendering it [0.13ms]
+(pass) experiment job client > translates every stable error code into actionable guidance [0.07ms]
+(pass) experiment job client > an unrecognized code still yields guidance instead of a blank surface [0.02ms]
+
+src/live/localFixtureRoute.test.tsx:
+(pass) local fixture route reachability > the sidebar exposes a local runner entry [5.47ms]
+(pass) local fixture route reachability > clicking it renders the local runner panel [5.66ms]
+(pass) local fixture route reachability > the route is labeled as a local fixture and not hosted [7.51ms]
+(pass) local fixture route reachability > the panel shows the loopback origin it would read from [3.12ms]
+(pass) local fixture route reachability > no run has been read before the operator asks for one [2.23ms]
+(pass) local fixture route reachability > reading a run invokes fetchRunOutcome and renders the projection [5.46ms]
+(pass) local fixture route reachability > a cancelled run is reported as cancelled, not failed [4.27ms]
+(pass) local fixture route reachability > a malformed payload surfaces an error instead of a bogus summary [5.67ms]
+(pass) synthetic demo is preserved > the app still opens on the synthetic demo journey [1.42ms]
+(pass) synthetic demo is preserved > the synthetic demo routes remain reachable alongside the fixture [14.06ms]
+
+src/live/resultsClient.test.ts:
+(pass) reading an experiment result > requests the documented result route and parses the projection [0.34ms]
+(pass) reading an experiment result > percent-encodes the experiment id so a hostile id cannot escape the path [0.09ms]
+(pass) reading an experiment result > a failed result keeps its detail and carries no projection [0.06ms]
+(pass) reading an experiment result > a boundary rejection surfaces its stable code rather than an empty result [0.11ms]
+(pass) reading an experiment result > a succeeded result that carries no projection is refused, not rendered [0.03ms]
+(pass) waiting for a terminal result > polls the status route until the boundary reports a terminal state [0.37ms]
+(pass) waiting for a terminal result > gives up with a clear error when the run never reaches a terminal state [0.10ms]
+(pass) waiting for a terminal result > a run that ends CANCELLED resolves rather than throwing [0.06ms]
+
+src/live/sha256.test.ts:
+(pass) synchronous sha256 > matches the published vectors [0.23ms]
+(pass) synchronous sha256 > agrees with Web Crypto across block boundaries and unicode [1.18ms]
+
+src/live/resultsModel.test.ts:
+(pass) per-Brain retrieval rows > derive recall, precision, missing evidence and noise from scored cases [0.20ms]
+(pass) per-Brain retrieval rows > rank by retrieval recall and mark exactly one leader [0.07ms]
+(pass) per-Brain retrieval rows > never fabricate a rate when no case was scored [0.02ms]
+(pass) per-Brain retrieval rows > carry latency and cost through, including unavailable cost [0.02ms]
+(pass) per-Brain retrieval rows > flag a candidate whose engine status is not OK as not comparable [0.04ms]
+(pass) evidence confidence is always stated > a verdict naming a candidate is reported as an engine decision, not a recommendation [0.06ms]
+(pass) evidence confidence is always stated > NO_RECOMMENDATION is never dressed up as a winner [0.02ms]
+(pass) evidence confidence is always stated > an engine status that limits the run downgrades confidence and says why [0.01ms]
+(pass) evidence confidence is always stated > warnings from the engine are surfaced verbatim on the confidence notice [0.01ms]
+(pass) evidence confidence is always stated > no projection can ever be recommendation grade [0.05ms]
+(pass) before and after comparison > pairs candidates across two runs and reports the signed delta [0.17ms]
+(pass) before and after comparison > refuse to compare runs whose frozen corpus or benchmark differs [0.03ms]
+(pass) before and after comparison > a candidate present in only one run is reported rather than silently dropped [0.37ms]
+(pass) before and after comparison > an unchanged candidate reads as unchanged, not as an improvement [0.07ms]
+(pass) recovery actions for non-succeeded runs > a failed run offers a retry and names the engine detail [0.08ms]
+(pass) recovery actions for non-succeeded runs > a cancelled run states nothing was scored and offers a rerun [0.02ms]
+(pass) recovery actions for non-succeeded runs > a failed run with no detail still gives an actionable next step [0.01ms]
+(pass) recovery actions for non-succeeded runs > a succeeded run has no recovery banner [0.02ms]
+(pass) benchmark identity > the engine benchmark hash replaces the locally derived placeholder [0.04ms]
+(pass) benchmark identity > without an engine result the local derivation is labeled a placeholder [0.01ms]
+(pass) benchmark identity > no derivation and no result yields no benchmark rather than a fake one [0.01ms]
+(pass) benchmark identity > a failed run cannot promote a placeholder to an engine hash [0.01ms]
+
+src/live/setupModel.test.ts:
+(pass) experiment setup readiness > starts unknown with no source, candidate, or subscription chosen [0.06ms]
+(pass) experiment setup readiness > every blocker is human readable, not a bare machine code [0.11ms]
+(pass) experiment setup readiness > a fixture source with a candidate and subscription is ready [0.10ms]
+(pass) experiment setup readiness > a gated source is blocked with remediation and can never be ready [0.07ms]
+(pass) experiment setup readiness > JSONL selection requires a payload that parses into records [0.15ms]
+(pass) experiment setup readiness > malformed JSONL reports the offending line as guidance and stays blocked [0.13ms]
+(pass) experiment setup readiness > credential-shaped fields in an import are refused with guidance [0.12ms]
+(pass) experiment setup readiness > deselecting every candidate blocks the run [0.04ms]
+(pass) experiment setup readiness > answer-aware evaluation is not offered as the retrieval-only default [0.09ms]
+(pass) experiment request building > produces a schema-version-1 request the Python boundary accepts [0.08ms]
+(pass) experiment request building > refuses to build a request from a blocked configuration [0.27ms]
+(pass) experiment request building > the request carries no payload text or credential-shaped field [0.28ms]
+(pass) experiment request building > the corpus fingerprint changes when the imported records change [0.36ms]
+
+src/live/runClient.test.ts:
+(pass) local run client contract > parses a succeeded outcome and exposes the projection [0.07ms]
+(pass) local run client contract > parses failed and cancelled outcomes with no projection [0.03ms]
+(pass) local run client contract > rejects an unsupported projection schema version [0.08ms]
+(pass) local run client contract > rejects an unknown run status rather than guessing [0.03ms]
+(pass) local run client contract > rejects a succeeded outcome that carries no projection [0.03ms]
+(pass) local run client contract > all three terminal statuses are terminal [0.01ms]
+(pass) local run client contract > summarize reports the engine status distinctly from the run status [0.07ms]
+(pass) local run client contract > summarize describes cancellation without implying failure [0.06ms]
+(pass) local run client contract > fetchRunOutcome reads the versioned endpoint from the injected transport [0.14ms]
+
+src/live/validation.test.ts:
+(pass) projection payload validation > accepts a well-formed payload [0.15ms]
+(pass) projection payload validation > accepts nullable numeric fields when explicitly null [0.05ms]
+(pass) projection payload validation > rejects a projection missing required field run_id [0.09ms]
+(pass) projection payload validation > rejects a projection missing required field status [0.01ms]
+(pass) projection payload validation > rejects a projection missing required field verdict [0.02ms]
+(pass) projection payload validation > rejects a projection missing required field rationale [0.01ms]
+(pass) projection payload validation > rejects a projection missing required field corpus_hash
+(pass) projection payload validation > rejects a projection missing required field benchmark_hash [0.02ms]
+(pass) projection payload validation > rejects a projection missing required field candidates [0.02ms]
+(pass) projection payload validation > rejects a projection missing required field warnings [0.02ms]
+(pass) projection payload validation > rejects a candidate missing required field candidate [0.04ms]
+(pass) projection payload validation > rejects a candidate missing required field status [0.01ms]
+(pass) projection payload validation > rejects a candidate missing required field cost_status [0.02ms]
+(pass) projection payload validation > rejects a candidate missing required field quality_score [0.01ms]
+(pass) projection payload validation > rejects a candidate missing required field answer_success_rate [0.02ms]
+(pass) projection payload validation > rejects a candidate missing required field contradiction_count [0.02ms]
+(pass) projection payload validation > rejects a non-object projection [0.05ms]
+(pass) projection payload validation > rejects an unknown engine status [0.03ms]
+(pass) projection payload validation > rejects an unknown verdict [0.03ms]
+(pass) projection payload validation > rejects an unknown candidate id [0.03ms]
+(pass) projection payload validation > rejects an unknown cost status [0.03ms]
+(pass) projection payload validation > rejects a corpus hash with not-hex-at-all [0.04ms]
+(pass) projection payload validation > rejects a corpus hash with ABCDEFaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa [0.01ms]
+(pass) projection payload validation > rejects a corpus hash with aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+(pass) projection payload validation > rejects a corpus hash with aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+(pass) projection payload validation > rejects a benchmark hash that is not a sha256 [0.03ms]
+(pass) projection payload validation > rejects an empty run id [0.02ms]
+(pass) projection payload validation > rejects a non-string rationale [0.02ms]
+(pass) projection payload validation > rejects candidates that are not an array [0.02ms]
+(pass) projection payload validation > rejects an empty candidate list [0.03ms]
+(pass) projection payload validation > rejects a candidate that is not an object [0.02ms]
+(pass) projection payload validation > rejects warnings that are not an array of strings [0.08ms]
+(pass) projection payload validation > rejects quality_score outside its allowed range (-1) [0.05ms]
+(pass) projection payload validation > rejects quality_score outside its allowed range (100.5) [0.01ms]
+(pass) projection payload validation > rejects answer_success_rate outside its allowed range (-0.1) [0.01ms]
+(pass) projection payload validation > rejects answer_success_rate outside its allowed range (1.5)
+(pass) projection payload validation > rejects source_support_rate outside its allowed range (2) [0.02ms]
+(pass) projection payload validation > rejects contradiction_count outside its allowed range (-1)
+(pass) projection payload validation > rejects scored_cases outside its allowed range (-3) [0.01ms]
+(pass) projection payload validation > rejects answered_cases outside its allowed range (-1) [0.06ms]
+(pass) projection payload validation > rejects total_cost_usd outside its allowed range (-0.01) [0.03ms]
+(pass) projection payload validation > rejects query_p50_ms outside its allowed range (-5) [0.02ms]
+(pass) projection payload validation > rejects query_p95_ms outside its allowed range (-1) [0.03ms]
+(pass) projection payload validation > rejects operating_burden outside its allowed range (-2) [0.04ms]
+(pass) projection payload validation > rejects a non-integer count in contradiction_count [0.04ms]
+(pass) projection payload validation > rejects a non-integer count in scored_cases [0.01ms]
+(pass) projection payload validation > rejects a non-integer count in answered_cases
+(pass) projection payload validation > rejects a non-finite number in quality_score [0.05ms]
+(pass) projection payload validation > rejects a non-finite number in answer_success_rate [0.02ms]
+(pass) projection payload validation > rejects a non-finite number in total_cost_usd [0.02ms]
+(pass) projection payload validation > rejects a numeric field delivered as a numeric string [0.07ms]
+(pass) projection payload validation > rejects a non-nullable numeric field set to null [0.03ms]
+(pass) projection payload validation > reports the offending candidate by index [0.05ms]
+
+src/live/retrievalResultsRoute.test.tsx:
+(pass) retrieval results reachability > the sidebar exposes a results entry [2.85ms]
+(pass) retrieval results reachability > the route states it reads the local boundary, not a hosted service [4.05ms]
+(pass) retrieval results reachability > nothing is claimed before a result has been read [3.54ms]
+(pass) retrieval results reachability > without a submitted Preview the read is disabled and says why [7.26ms]
+(pass) retrieval results reachability > the synthetic demo remains reachable and unchanged [11.54ms]
+(pass) a completed run > shows a per-Brain retrieval row for every candidate [19.20ms]
+(pass) a completed run > reports recall, missing evidence, noise, latency, and cost per Brain [14.79ms]
+(pass) a completed run > marks the leading Brain by measured recall, not by claim [35.36ms]
+(pass) a completed run > labels confidence and never claims recommendation-grade evidence [10.69ms]
+(pass) a completed run > shows the frozen corpus and the engine benchmark as provenance [24.67ms]
+(pass) a completed run > the engine benchmark replaces the placeholder and says so [11.27ms]
+(pass) a completed run > a Brain the engine could not score is shown as not comparable, with a reason [30.86ms]
+(pass) a completed run > a NO_RECOMMENDATION verdict is never rendered as a winner [25.84ms]
+(pass) a completed run > engine warnings are shown rather than swallowed [26.70ms]
+(pass) before and after comparison > comparing a run against itself reports every Brain as unchanged [25.52ms]
+(pass) before and after comparison > an improved Brain reads as improved with a signed delta [16.65ms]
+(pass) before and after comparison > runs over a different benchmark are refused instead of compared [72.30ms]
+(pass) failed and cancelled recovery > a failed run shows the engine detail and actionable recovery steps [9.74ms]
+(pass) failed and cancelled recovery > a cancelled run says nothing was scored and offers a rerun [11.71ms]
+(pass) failed and cancelled recovery > a failed run never claims a recommendation or shows a leader [20.64ms]
+(pass) failed and cancelled recovery > a boundary rejection is shown as guidance, not a raw code [35.66ms]
+(pass) failed and cancelled recovery > an unreachable runner is reported without claiming a result [6.63ms]
+
+src/data/demoData.test.ts:
+(pass) synthetic evidence fixtures > GBrain wins the diagnosis by the declared policy [0.03ms]
+(pass) synthetic evidence fixtures > twelve trials produce the declared feasible winner [0.09ms]
+(pass) synthetic evidence fixtures > Pareto frontier excludes pruned and violating trials [0.18ms]
+
+src/data/experimentContracts.test.ts:
+(pass) experiment contract vocabulary > allows only the canonical lifecycle transitions [0.04ms]
+(pass) experiment contract vocabulary > uses stable machine-readable errors [0.03ms]
+(pass) experiment contract vocabulary > rejects readiness that contradicts its blockers [0.10ms]
+(pass) experiment contract vocabulary > rejects retrieval metrics that do not reconcile [0.05ms]
+
+src/data/sourceContracts.test.ts:
+(pass) source capability and import contracts > inventories fixture, Slack, Notion, and future gated read-only inputs [0.05ms]
+(pass) source capability and import contracts > parses a versioned JSON envelope and preserves normalized fields [0.10ms]
+(pass) source capability and import contracts > parses JSONL with blank lines and stable source identity [0.06ms]
+(pass) source capability and import contracts > rejects malformed envelopes, duplicate IDs, and credential-shaped fields [0.14ms]
+(pass) source capability and import contracts > accepts future connector-shaped data without making readiness ready [0.03ms]
+
+ 194 pass
+ 0 fail
+ 434 expect() calls
+Ran 194 tests across 17 files. [17.42s]
+
+$ cd web && bun run build
+$ tsc --noEmit && vite build
+vite v7.3.3 building client environment for production...
+transforming...
+✓ 46 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.62 kB │ gzip:  0.39 kB
+dist/assets/index-M-9XuOu7.css   53.25 kB │ gzip:  9.28 kB
+dist/assets/index-2AyPQfAI.js   277.71 kB │ gzip: 83.77 kB
+✓ built in 1.91s

@@ -1,0 +1,14 @@
+{
+  "todo": 5,
+  "title": "Implement Web experiment setup wizard",
+  "status": "PASS_VERIFIED",
+  "commands": [
+    "cd web && bun test",
+    "cd web && bun run build"
+  ],
+  "results": {
+    "web_tests": "194 pass, 0 fail; 17 files",
+    "web_build": "tsc --noEmit and vite build succeeded"
+  },
+  "artifacts": ["web-checks.txt"]
+}

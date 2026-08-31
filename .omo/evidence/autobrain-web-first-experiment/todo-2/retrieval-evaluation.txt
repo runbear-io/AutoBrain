@@ -1,0 +1,6 @@
+$ uv run pytest tests/test_retrieval_evaluation.py tests/test_task1_pipeline.py tests/test_benchmark.py -q
+.........................                                                [100%]
+25 passed in 0.47s
+
+$ uv run ruff check tests/test_retrieval_evaluation.py
+All checks passed!

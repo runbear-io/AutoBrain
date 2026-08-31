@@ -1,0 +1,15 @@
+{
+  "todo": 3,
+  "title": "Extend source capability and readiness inventory",
+  "status": "PASS_FOCUSED",
+  "commands": [
+    "uv run pytest tests/test_source_capabilities.py tests/test_fixture.py tests/connectors/test_slack_export.py -q",
+    "uv run ruff check tests/test_source_capabilities.py"
+  ],
+  "results": {
+    "pytest": "23 passed in 0.54s",
+    "ruff": "All checks passed"
+  },
+  "artifacts": ["tests/test_source_capabilities.py", "source-capabilities.txt"],
+  "broader_slice_note": "A separate broader run including tests/connectors/test_notion_snapshot.py produced 1 pre-existing failure in test_snapshot_allows_security_documentation_and_normalizes_placeholders; the two new tests were fixed and passed. No unrelated Notion production or test code was changed."
+}
