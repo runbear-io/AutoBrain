@@ -144,3 +144,55 @@ def test_unknown_job_is_stable_error() -> None:
     jobs = ExperimentJobBoundary(factory=lambda _request, _sink, _cancel: FakeRun(Path("/tmp")))
     with pytest.raises(Exception, match="NOT_FOUND"):
         jobs.status("missing")
+
+
+def test_browser_origin_can_reach_the_job_boundary(tmp_path: Path) -> None:
+    """The Web wizard runs in a browser, so loopback origins need a CORS grant.
+
+    Only loopback origins are granted, and a lookalike host is refused, so the
+    boundary stays reachable from a local dev server and from nowhere else.
+    """
+    jobs = ExperimentJobBoundary(
+        factory=lambda _request, _sink, _cancel: FakeRun(tmp_path / "runs"),
+        result_loader=lambda run_id: JobResult.success(run_id),
+    )
+    with ExperimentJobServer(jobs, port=0) as server:
+        connection = HTTPConnection(server.host, server.port, timeout=2)
+
+        connection.request(
+            "OPTIONS",
+            "/api/v1/experiments",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        preflight = connection.getresponse()
+        preflight.read()
+        assert preflight.status == 204
+        assert preflight.getheader("Access-Control-Allow-Origin") == "http://localhost:5173"
+        assert "POST" in (preflight.getheader("Access-Control-Allow-Methods") or "")
+        assert "Content-Type" in (preflight.getheader("Access-Control-Allow-Headers") or "")
+
+        connection.request(
+            "POST",
+            "/api/v1/experiments",
+            json.dumps(request_payload(experiment_id="exp-cors")).encode(),
+            {"Content-Type": "application/json", "Origin": "http://127.0.0.1:5173"},
+        )
+        created = connection.getresponse()
+        created.read()
+        assert created.status == 201
+        assert created.getheader("Access-Control-Allow-Origin") == "http://127.0.0.1:5173"
+        assert created.getheader("Vary") == "Origin"
+
+        connection.request(
+            "GET",
+            "/api/v1/experiments/exp-cors/status",
+            headers={"Origin": "http://localhost.evil.example"},
+        )
+        spoofed = connection.getresponse()
+        spoofed.read()
+        assert spoofed.status == 200
+        assert spoofed.getheader("Access-Control-Allow-Origin") is None
+        connection.close()

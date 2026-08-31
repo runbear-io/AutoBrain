@@ -27,6 +27,7 @@ from autobrain.experiment_contracts import (
     StableExperimentError,
     StableExperimentErrorCode,
 )
+from autobrain.local_server import is_allowed_origin
 from autobrain.models import StrictModel
 from autobrain.projection import RunProjection, project_comparison
 from autobrain.report import load_comparison, redact_text
@@ -395,7 +396,27 @@ class _JobHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Content-Length", "0")
+        self._send_cors_headers()
         self.end_headers()
+
+    def _send_cors_headers(self) -> None:
+        """Echo back only an allowed loopback origin.
+
+        The Web wizard is served from a local dev server, so it reaches this
+        boundary cross-origin. The grant is scoped to the exact loopback caller
+        rather than ``*``, and credentials are never allowed because this
+        boundary has no authentication to protect.
+        """
+        # The body is origin-independent but these headers are not, so caches
+        # must key on Origin.
+        self.send_header("Vary", "Origin")
+        origin = self.headers.get("Origin")
+        if origin is None or not is_allowed_origin(origin):
+            return
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Max-Age", "600")
 
     def do_GET(self) -> None:
         try:
@@ -461,6 +482,7 @@ class _JobHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(body)
 

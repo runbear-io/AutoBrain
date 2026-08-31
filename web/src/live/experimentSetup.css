@@ -1,0 +1,346 @@
+/*
+ * Experiment setup wizard.
+ *
+ * Styled exclusively against the semantic role tokens in styles/tokens.css and
+ * styles/themes.css, matching the local runner surface in live.css. No palette
+ * token, raw color, or magic pixel value appears here, so the wizard inherits
+ * both the light product surface and the dark observability surface.
+ */
+
+.wizard {
+  display: grid;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--bg-surface);
+  border: var(--border-hairline) solid var(--line-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.wizard__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.wizard__title {
+  font-family: var(--font-display);
+  font-size: var(--text-h2);
+  font-weight: var(--weight-regular);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+}
+
+.wizard__origin {
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--text-tertiary);
+}
+
+/* Honest scope label, identical in intent to the local runner panel. */
+.wizard__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-hairline) dashed var(--line-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------- steps */
+
+.wizard__steps {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+}
+
+.wizard-step {
+  display: grid;
+  grid-template-columns: var(--space-7) minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-0);
+  border-top: var(--border-hairline) solid var(--line-subtle);
+}
+
+.wizard-step:first-child {
+  border-top: none;
+  padding-top: var(--space-0);
+}
+
+.wizard-step__index {
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  color: var(--accent-primary);
+}
+
+.wizard-step__body {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.wizard-step__title {
+  font-size: var(--text-h3);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.wizard-step__hint {
+  max-width: var(--layout-reading);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+
+/* ----------------------------------------------------------------- options */
+
+.wizard-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-2);
+}
+
+.wizard-options--inline {
+  grid-template-columns: repeat(auto-fit, minmax(96px, max-content));
+}
+
+.wizard-option {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  background: var(--bg-surface);
+  border: var(--border-hairline) solid var(--line-default);
+  border-radius: var(--radius-md);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.wizard-option:hover {
+  background: var(--bg-hover);
+  border-color: var(--line-strong);
+}
+
+.wizard-option[aria-pressed="true"] {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary-soft);
+}
+
+.wizard-option__title {
+  font-size: var(--text-small);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.wizard-option__detail {
+  font-size: var(--text-caption);
+  line-height: var(--leading-snug);
+  color: var(--text-tertiary);
+}
+
+/* Non-ready sources say so on the control itself, not only in the blocker list. */
+.wizard-option__flag {
+  justify-self: start;
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-hairline) solid var(--status-warning-line);
+  border-radius: var(--radius-sm);
+  background: var(--status-warning-soft);
+  color: var(--status-warning);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-wide);
+}
+
+.wizard-option[data-readiness="GATED"] .wizard-option__flag {
+  border-color: var(--status-danger-line);
+  background: var(--status-danger-soft);
+  color: var(--status-danger);
+}
+
+/*
+ * A selected but unusable source must not read as a valid choice. Selecting it
+ * is still allowed so the operator can see why it is unavailable, but the
+ * chosen state is drawn with the danger role rather than the accent role.
+ */
+.wizard-option[data-readiness="GATED"][aria-pressed="true"] {
+  border-color: var(--status-danger-line);
+  background: var(--status-danger-soft);
+}
+
+/* ------------------------------------------------------------------ fields */
+
+.wizard-field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.wizard-field__label {
+  font-size: var(--text-small);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.wizard-field__hint {
+  font-size: var(--text-caption);
+  line-height: var(--leading-snug);
+  color: var(--text-tertiary);
+}
+
+.wizard-textarea {
+  width: 100%;
+  padding: var(--space-3);
+  background: var(--bg-sunken);
+  border: var(--border-hairline) solid var(--line-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+  resize: vertical;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.wizard-textarea:hover {
+  border-color: var(--line-strong);
+}
+
+/* --------------------------------------------------------------- readiness */
+
+.wizard__footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: var(--border-hairline) solid var(--line-subtle);
+}
+
+.wizard-readiness {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-4);
+  border: var(--border-hairline) solid var(--status-warning-line);
+  border-radius: var(--radius-md);
+  background: var(--status-warning-soft);
+}
+
+.wizard-readiness[data-state="READY"] {
+  border-color: var(--status-success-line);
+  background: var(--status-success-soft);
+}
+
+.wizard-readiness__ready {
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--status-success);
+}
+
+.wizard-readiness__list {
+  display: grid;
+  gap: var(--space-3);
+  list-style: none;
+}
+
+.wizard-readiness__list li {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.wizard-readiness__list strong {
+  font-size: var(--text-small);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.wizard-readiness__list span {
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+
+.wizard__submit {
+  padding: var(--space-3) var(--space-5);
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  font-size: var(--text-small);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.wizard__submit:hover:not(:disabled) {
+  background: var(--accent-primary-hover);
+}
+
+.wizard__submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------- outcome */
+
+.wizard-status {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: var(--border-hairline) solid var(--status-neutral-line);
+  border-radius: var(--radius-md);
+  background: var(--status-neutral-soft);
+}
+
+.wizard-status[data-tone="success"] {
+  border-color: var(--status-success-line);
+  background: var(--status-success-soft);
+}
+
+.wizard-status[data-tone="warning"] {
+  border-color: var(--status-warning-line);
+  background: var(--status-warning-soft);
+}
+
+.wizard-status[data-tone="danger"] {
+  border-color: var(--status-danger-line);
+  background: var(--status-danger-soft);
+}
+
+.wizard-status__headline {
+  font-size: var(--text-h3);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.wizard-status__detail {
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+
+@media (max-width: 639px) {
+  .wizard-step {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+
+  .wizard__footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .wizard__submit {
+    width: 100%;
+  }
+}
