@@ -91,7 +91,12 @@ class SecureAuthFiles:
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, dict):
             raise ValueError("stored OAuth state is malformed")
-        return cast(dict[str, dict[str, object]], value)
+        entries = cast(dict[object, object], value)
+        return {
+            key: cast(dict[str, object], entry)
+            for key, entry in entries.items()
+            if isinstance(key, str) and isinstance(entry, dict)
+        }
 
     def write_atomic(self, path: Path, value: object) -> None:
         self.ensure_root()

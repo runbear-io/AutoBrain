@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 from collections.abc import Callable
+from importlib.metadata import version
 from types import ModuleType
 
 import pytest
@@ -20,6 +21,14 @@ def test_bootstrap_imports_no_third_party_cli_dependencies() -> None:
     )
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_version_reports_installed_distribution_version(capsys: pytest.CaptureFixture[str]) -> None:
+    code = bootstrap.main(["--version"])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out == f"autobrain {version('autobrain')}\n"
+    assert captured.err == ""
 
 
 def test_python_314_fails_closed_as_typed_json(

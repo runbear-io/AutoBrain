@@ -3,6 +3,8 @@
 import json
 import sys
 from collections.abc import Sequence
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 
 _MINIMUM = "Python >=3.12 and <3.14.0a0"
 
@@ -40,9 +42,16 @@ def main(
 ) -> int:
     """Gate unsupported interpreters before importing Typer, Pydantic, or the CLI."""
     args = list(sys.argv[1:] if argv is None else argv)
-    version = version_info or sys.version_info[:3]
-    if _unsupported(version):
-        return _diagnostic(version, "--json" in args)
+    if args == ["--version"]:
+        try:
+            package_version = distribution_version("autobrain")
+        except PackageNotFoundError:
+            package_version = "unknown"
+        print(f"autobrain {package_version}")
+        return 0
+    interpreter_version = version_info or sys.version_info[:3]
+    if _unsupported(interpreter_version):
+        return _diagnostic(interpreter_version, "--json" in args)
     from autobrain.cli import app
 
     app()

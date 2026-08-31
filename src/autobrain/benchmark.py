@@ -610,17 +610,11 @@ def build_benchmark(
     # Benchmark roots and replies are evaluator-owned evidence. Remove every
     # benchmark record from the candidate corpus, including bot replies and
     # documents linked to those records.
-    benchmark_ids = {
-        identifier
-        for thread in selected
-        for identifier in _thread_ids(thread)
-    }
+    benchmark_ids = {identifier for thread in selected for identifier in _thread_ids(thread)}
     # Scan the pre-freeze source boundary as well: a non-holdout record can
     # accidentally quote a held-out root even though all benchmark roots are
     # later removed from the candidate corpus.
-    benchmark_reply_ids = {
-        reply.source_id for thread in selected for reply in thread.replies
-    }
+    benchmark_reply_ids = {reply.source_id for thread in selected for reply in thread.replies}
     source_boundary_payload = [
         json.dumps(document.model_dump(mode="json"), sort_keys=True)
         for document in candidate_documents
@@ -660,10 +654,14 @@ def build_benchmark(
             for claim in holdout.expected_claims
         ],
     )
-    candidate_payload = source_boundary_payload + [
-        json.dumps(document.model_dump(mode="json"), sort_keys=True)
-        for document in candidate_documents
-    ] + [json.dumps(case.model_dump(mode="json"), sort_keys=True) for case in candidate_cases]
+    candidate_payload = (
+        source_boundary_payload
+        + [
+            json.dumps(document.model_dump(mode="json"), sort_keys=True)
+            for document in candidate_documents
+        ]
+        + [json.dumps(case.model_dump(mode="json"), sort_keys=True) for case in candidate_cases]
+    )
     leakage = scan_benchmark_leakage(
         texts=candidate_payload,
         metadata={**dict(candidate_metadata or {}), "case_count": len(candidate_cases)},
