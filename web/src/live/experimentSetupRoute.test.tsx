@@ -73,10 +73,10 @@ function openWizard() {
   click(navButton("New experiment"));
 }
 
-/** Drive the wizard to a ready fixture configuration. */
-function configureFixturePreview() {
+/** Drive the wizard to a ready official-source configuration. */
+function configureOfficialPreview() {
   openWizard();
-  click(testId("source-option-fixture"));
+  click(testId("source-option-slack-export"));
   click(testId("candidate-option-gbrain"));
   click(testId("subscription-option-codex"));
 }
@@ -104,6 +104,12 @@ describe("experiment setup wizard reachability", () => {
     expect(container.textContent).toContain("Retrieval only");
   });
 
+  test("production setup does not present a fixture source choice", () => {
+    openWizard();
+    expect(container.querySelector('[data-testid="source-option-fixture"]')).toBeNull();
+    expect(container.querySelector('[data-testid="source-option-slack-export"]')).not.toBeNull();
+  });
+
   test("the wizard states that it drives the local boundary, not a hosted service", () => {
     openWizard();
     const scope = container.querySelector(".wizard__scope");
@@ -123,7 +129,7 @@ describe("configuring a preview without the CLI", () => {
   test("submission is disabled until every requirement is satisfied", () => {
     openWizard();
     expect((testId("submit-preview") as HTMLButtonElement).disabled).toBe(true);
-    configureFixturePreview();
+    configureOfficialPreview();
     expect((testId("submit-preview") as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -136,14 +142,14 @@ describe("configuring a preview without the CLI", () => {
   });
 
   test("a gated source blocks the run with its remediation on screen", () => {
-    configureFixturePreview();
+    configureOfficialPreview();
     click(testId("source-option-approved-read-only-connector"));
     expect((testId("submit-preview") as HTMLButtonElement).disabled).toBe(true);
     expect(testId("readiness-blockers").textContent?.toLowerCase()).toContain("approval");
   });
 
   test("malformed JSONL shows the offending line and blocks submission", () => {
-    configureFixturePreview();
+    configureOfficialPreview();
     click(testId("format-option-JSONL"));
     typeInto(testId("source-payload") as HTMLTextAreaElement, '{"source_id":"a"}\nnope');
     expect(testId("readiness-blockers").textContent).toContain("line 2");
@@ -151,14 +157,14 @@ describe("configuring a preview without the CLI", () => {
   });
 
   test("a valid JSONL import reports its document count and unblocks submission", () => {
-    configureFixturePreview();
+    configureOfficialPreview();
     click(testId("format-option-JSONL"));
     typeInto(testId("source-payload") as HTMLTextAreaElement, JSONL);
     expect(testId("corpus-summary").textContent).toContain("2");
     expect((testId("submit-preview") as HTMLButtonElement).disabled).toBe(false);
   });
 
-  test("submitting a fixture preview drives create, validate, and start", async () => {
+  test("submitting an official-source preview drives create, validate, and start", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -174,7 +180,7 @@ describe("configuring a preview without the CLI", () => {
       });
     }) as typeof fetch;
 
-    configureFixturePreview();
+    configureOfficialPreview();
     await clickAsync(testId("submit-preview"));
 
     expect(calls).toEqual([
@@ -192,7 +198,7 @@ describe("configuring a preview without the CLI", () => {
         { status: 409, headers: { "Content-Type": "application/json" } },
       )) as typeof fetch;
 
-    configureFixturePreview();
+    configureOfficialPreview();
     await clickAsync(testId("submit-preview"));
 
     const status = testId("submission-status");
@@ -206,7 +212,7 @@ describe("configuring a preview without the CLI", () => {
       throw new Error("connection refused");
     }) as typeof fetch;
 
-    configureFixturePreview();
+    configureOfficialPreview();
     await clickAsync(testId("submit-preview"));
 
     const status = testId("submission-status");

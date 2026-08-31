@@ -77,6 +77,11 @@ export const SOURCE_CAPABILITIES: readonly SourceCapabilityInventoryItem[] = [
   },
 ] as const;
 
+/** Sources that production/user setup may present as official inputs. */
+export const PUBLIC_SOURCE_CAPABILITIES = SOURCE_CAPABILITIES.filter(
+  (item) => item.id !== "fixture",
+);
+
 export type ImportSourceId = SourceCapabilityId;
 
 export interface SourceImportRecord {

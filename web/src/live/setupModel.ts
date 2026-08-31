@@ -161,11 +161,18 @@ export function setupReadiness(state: SetupState): SetupReadiness {
     blockers.push({
       code: "SOURCE_NOT_SELECTED",
       title: "No input source chosen",
-      guidance: "Choose a local fixture or paste a JSON/JSONL export to build the frozen corpus.",
+      guidance: "Choose an official export or approved read-only source to build the frozen corpus.",
     });
   } else {
     const capability = sourceCapability(state.source);
-    if (capability.readiness === "GATED") {
+    if (state.source === "fixture") {
+      source = "BLOCKED";
+      blockers.push({
+        code: "SOURCE_NOT_SUPPORTED",
+        title: "Local fixtures are not official input sources",
+        guidance: "Choose an official export or approved read-only source for a production Preview.",
+      });
+    } else if (capability.readiness === "GATED") {
       source = "BLOCKED";
       blockers.push({
         code: "SOURCE_GATED",

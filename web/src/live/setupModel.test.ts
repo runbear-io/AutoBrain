@@ -24,7 +24,7 @@ const JSONL_TWO_RECORDS = [
 /** A configuration that satisfies every readiness check. */
 function readySetup(): SetupState {
   let state = initialSetup();
-  state = reduceSetup(state, { type: "source/select", source: "fixture" });
+  state = reduceSetup(state, { type: "source/select", source: "slack-export" });
   state = reduceSetup(state, { type: "candidate/toggle", candidate: "gbrain" });
   state = reduceSetup(state, { type: "subscription/select", subscription: "codex" });
   return state;
@@ -48,13 +48,24 @@ describe("experiment setup readiness", () => {
     }
   });
 
-  test("a fixture source with a candidate and subscription is ready", () => {
+  test("an official Slack export with a candidate and subscription is ready", () => {
     const readiness = setupReadiness(readySetup());
     expect(readiness.state).toBe("READY");
     expect(readiness.blockers).toEqual([]);
     expect(readiness.checks.source).toBe("READY");
     expect(readiness.checks.candidates).toBe("READY");
     expect(readiness.checks.evaluator).toBe("READY");
+  });
+
+  test("a fixture source is blocked even if selected by an internal caller", () => {
+    let state = readySetup();
+    state = reduceSetup(state, { type: "source/select", source: "fixture" });
+    const readiness = setupReadiness(state);
+    expect(readiness.state).toBe("BLOCKED");
+    expect(readiness.checks.source).toBe("BLOCKED");
+    expect(readiness.blockers.find((item) => item.code === "SOURCE_NOT_SUPPORTED")?.guidance).toContain(
+      "official",
+    );
   });
 
   test("a gated source is blocked with remediation and can never be ready", () => {
@@ -69,7 +80,7 @@ describe("experiment setup readiness", () => {
 
   test("JSONL selection requires a payload that parses into records", () => {
     let state = readySetup();
-    state = reduceSetup(state, { type: "source/select", source: "fixture" });
+    state = reduceSetup(state, { type: "source/select", source: "slack-export" });
     state = reduceSetup(state, { type: "source/format", format: "JSONL" });
     expect(setupReadiness(state).state).toBe("BLOCKED");
 

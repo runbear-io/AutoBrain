@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  PUBLIC_SOURCE_CAPABILITIES,
   SOURCE_CAPABILITIES,
   parseSourceImport,
   sourceCapability,
@@ -7,9 +8,14 @@ import {
 } from "./sourceContracts";
 
 describe("source capability and import contracts", () => {
-  test("inventories fixture, Slack, Notion, and future gated read-only inputs", () => {
+  test("keeps fixture utilities in the internal inventory but out of public choices", () => {
     expect(SOURCE_CAPABILITIES.map((item) => item.id)).toEqual([
       "fixture",
+      "slack-export",
+      "notion-snapshot",
+      "approved-read-only-connector",
+    ]);
+    expect(PUBLIC_SOURCE_CAPABILITIES.map((item) => item.id)).toEqual([
       "slack-export",
       "notion-snapshot",
       "approved-read-only-connector",

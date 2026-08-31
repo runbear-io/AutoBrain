@@ -22,9 +22,9 @@ function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-/** Drive the wizard to a ready fixture configuration. */
-async function configureFixturePreview(page: Page): Promise<void> {
-  await page.getByTestId("source-option-fixture").click();
+/** Drive the wizard to a ready official-source configuration. */
+async function configureOfficialPreview(page: Page): Promise<void> {
+  await page.getByTestId("source-option-slack-export").click();
   await page.getByTestId("candidate-option-gbrain").click();
   await page.getByTestId("subscription-option-codex").click();
 }
@@ -37,12 +37,12 @@ async function openWizard(page: Page, baseUrl: string): Promise<void> {
 
 export const SCENARIOS: Scenario[] = [
   {
-    name: "a fixture Preview is configured and submitted without a CLI command",
+    name: "an official-source Preview is configured and submitted without a CLI command",
     run: async (page) => {
       const submit = page.getByTestId("submit-preview");
       assert(await submit.isDisabled(), "submit should start disabled");
 
-      await configureFixturePreview(page);
+      await configureOfficialPreview(page);
       assert(await submit.isEnabled(), "submit should enable once readiness is satisfied");
 
       // Wait for the start call the boundary answers with 202, so the
@@ -67,7 +67,7 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "a JSONL import reports its document count and unblocks submission",
     run: async (page) => {
-      await configureFixturePreview(page);
+      await configureOfficialPreview(page);
       await page.getByTestId("format-option-JSONL").click();
       await page.getByTestId("source-payload").fill(
         [
@@ -87,7 +87,7 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "malformed JSONL is refused with the offending line named on screen",
     run: async (page) => {
-      await configureFixturePreview(page);
+      await configureOfficialPreview(page);
       await page.getByTestId("format-option-JSONL").click();
       await page.getByTestId("source-payload").fill('{"source_id":"doc-1"}\nnot json');
 
@@ -102,7 +102,7 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "a gated source is blocked with its remediation, never runnable",
     run: async (page) => {
-      await configureFixturePreview(page);
+      await configureOfficialPreview(page);
       await page.getByTestId("source-option-approved-read-only-connector").click();
 
       const blockers = (await page.getByTestId("readiness-blockers").textContent()) ?? "";

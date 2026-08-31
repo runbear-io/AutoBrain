@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useMemo, useReducer, useState } from "react";
-import { SOURCE_CAPABILITIES, type SourceImportFormat } from "../data/sourceContracts";
+import { PUBLIC_SOURCE_CAPABILITIES, type SourceImportFormat } from "../data/sourceContracts";
 import type { CandidateId } from "../data/experimentContracts";
 import {
   ExperimentBoundaryError,
@@ -135,7 +135,7 @@ export function ExperimentSetupPanel({
               it on your machine.
             </p>
             <div className="wizard-options">
-              {SOURCE_CAPABILITIES.map((capability) => (
+              {PUBLIC_SOURCE_CAPABILITIES.map((capability) => (
                 <button
                   key={capability.id}
                   type="button"

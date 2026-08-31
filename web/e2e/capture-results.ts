@@ -86,7 +86,7 @@ function serveDist(): Promise<{ server: Server; origin: string }> {
 async function submitPreview(page: Page): Promise<void> {
   await page.getByRole("button", { name: "New experiment" }).click();
   await page.locator(".wizard").waitFor({ state: "visible" });
-  await page.getByTestId("source-option-fixture").click();
+  await page.getByTestId("source-option-slack-export").click();
   await page.getByTestId("candidate-option-gbrain").click();
   await page.getByTestId("subscription-option-codex").click();
   const started = page.waitForResponse((r) => r.url().endsWith("/start"));

@@ -24,7 +24,7 @@ function assert(condition: boolean, message: string): asserts condition {
 }
 
 /**
- * Submit a fixture Preview through the wizard.
+ * Submit an official-source Preview through the wizard.
  *
  * The results route reads whatever experiment the wizard last submitted, so
  * every scenario below starts from a genuinely submitted run rather than an
@@ -33,7 +33,7 @@ function assert(condition: boolean, message: string): asserts condition {
 async function submitPreview(page: Page): Promise<void> {
   await page.getByRole("button", { name: "New experiment" }).click();
   await page.locator(".wizard").waitFor({ state: "visible" });
-  await page.getByTestId("source-option-fixture").click();
+  await page.getByTestId("source-option-slack-export").click();
   await page.getByTestId("candidate-option-gbrain").click();
   await page.getByTestId("subscription-option-codex").click();
 
