@@ -48,7 +48,7 @@ class ConnectionManager:
         except OAuthError:
             return None
         for key, value in sorted(entries.items()):
-            if not isinstance(value, dict) or value.get("provider") != provider.value:
+            if value.get("provider") != provider.value:
                 continue
             try:
                 token = self.store.get(key)
@@ -63,11 +63,7 @@ class ConnectionManager:
         if not index.exists():
             return 0
         entries = self.store.files.read_mapping(index)
-        keys = [
-            key
-            for key, value in entries.items()
-            if isinstance(value, dict) and value.get("provider") == provider.value
-        ]
+        keys = [key for key, value in entries.items() if value.get("provider") == provider.value]
         for key in keys:
             self.store.delete(key)
         return len(keys)

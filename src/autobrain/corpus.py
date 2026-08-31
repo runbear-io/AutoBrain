@@ -179,36 +179,6 @@ def freeze_corpus(
     )
 
 
-def canonical_corpus_identity(
-    documents: Sequence[NormalizedDocument | Mapping[str, Any]],
-    *,
-    cache: RunCache | None = None,
-) -> CorpusIdentity:
-    """Return the one canonical corpus digest used by every run boundary."""
-    normalized = normalize_raw_items(
-        [
-            document if isinstance(document, NormalizedDocument) else dict(document)
-            for document in documents
-        ],
-        cache=cache,
-    )
-    payload = "".join(
-        (
-            cache.serialize(document)
-            if cache is not None
-            else json.dumps(
-                document.model_dump(mode="json"),
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        )
-        + "\\n"
-        for document in normalized
-    ).encode("utf-8")
-    digest = cache.hash_bytes(payload) if cache is not None else hashlib.sha256(payload).hexdigest()
-    return CorpusIdentity(sha256=digest, document_count=len(normalized))
-
-
 class FreezeResult:
     def __init__(
         self, *, manifest_hash: str, document_count: int, identity: CorpusIdentity

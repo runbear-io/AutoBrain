@@ -610,11 +610,7 @@ def build_benchmark(
     # Keep benchmark roots as candidate-visible provenance, but remove every
     # benchmark reply from the candidate corpus. The replies belong only to
     # evaluator artifacts; selected holdout roots are removed as well.
-    benchmark_reply_ids = {
-        reply.source_id
-        for thread in selected
-        for reply in thread.replies
-    }
+    benchmark_reply_ids = {reply.source_id for thread in selected for reply in thread.replies}
     candidate_documents = _remove_holdouts(
         candidate_documents,
         selected_holdout_ids | benchmark_reply_ids,

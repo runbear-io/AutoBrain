@@ -111,11 +111,15 @@ class LocalCallback:
         finally:
             self.close()
 
+    def shutdown(self) -> None:
+        """Stop accepting callback requests."""
+        self._server.shutdown()
+
     def close(self) -> None:
         with self._close_lock:
             if self._closed:
                 return
             self._closed = True
-            self._server.shutdown()
+            self.shutdown()
             self._server.server_close()
         self._thread.join(timeout=2)

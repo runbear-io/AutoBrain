@@ -178,14 +178,14 @@ def test_callback_wait_does_not_shutdown_during_response(
 
     monkeypatch.setattr(BaseHTTPRequestHandler, "finish", blocked_finish)
 
-    original_shutdown = callback._server.shutdown
+    original_shutdown = callback.shutdown
 
     def shutdown() -> None:
         nonlocal shutdown_started_before_response
         shutdown_started_before_response = not response_finished.is_set()
         original_shutdown()
 
-    monkeypatch.setattr(callback._server, "shutdown", shutdown)
+    monkeypatch.setattr(callback, "shutdown", shutdown)
 
     def request() -> None:
         with urllib.request.urlopen(
