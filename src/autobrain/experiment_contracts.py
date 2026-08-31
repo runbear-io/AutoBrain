@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal, cast
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from autobrain.models import CandidateId, CostStatus, ExperimentIdentity, StrictModel
 
@@ -83,6 +83,16 @@ class ExperimentRequest(StrictModel):
     candidates: list[CandidateId] = Field(min_length=1)
     evaluation_mode: Literal["retrieval_only", "answer_aware"] = "retrieval_only"
 
+    @field_validator("candidates", mode="before")
+    @classmethod
+    def parse_candidate_ids(cls, value: object) -> object:
+        if isinstance(value, list):
+            parsed: list[CandidateId | object] = []
+            for item in cast(list[Any], value):
+                parsed.append(CandidateId(item) if isinstance(item, str) else item)
+            return parsed
+        return value
+
     @model_validator(mode="after")
     def candidates_are_unique(self) -> ExperimentRequest:
         if len(self.candidates) != len(set(self.candidates)):
@@ -133,10 +143,26 @@ class RetrievalResult(StrictModel):
 
 
 _ALLOWED_TRANSITIONS: dict[ExperimentLifecycleStatus, frozenset[ExperimentLifecycleStatus]] = {
-    ExperimentLifecycleStatus.CREATED: frozenset({ExperimentLifecycleStatus.VALIDATING, ExperimentLifecycleStatus.CANCELLED}),
-    ExperimentLifecycleStatus.VALIDATING: frozenset({ExperimentLifecycleStatus.READY, ExperimentLifecycleStatus.FAILED, ExperimentLifecycleStatus.CANCELLED}),
-    ExperimentLifecycleStatus.READY: frozenset({ExperimentLifecycleStatus.RUNNING, ExperimentLifecycleStatus.CANCELLED}),
-    ExperimentLifecycleStatus.RUNNING: frozenset({ExperimentLifecycleStatus.SUCCEEDED, ExperimentLifecycleStatus.FAILED, ExperimentLifecycleStatus.CANCELLED}),
+    ExperimentLifecycleStatus.CREATED: frozenset(
+        {ExperimentLifecycleStatus.VALIDATING, ExperimentLifecycleStatus.CANCELLED}
+    ),
+    ExperimentLifecycleStatus.VALIDATING: frozenset(
+        {
+            ExperimentLifecycleStatus.READY,
+            ExperimentLifecycleStatus.FAILED,
+            ExperimentLifecycleStatus.CANCELLED,
+        }
+    ),
+    ExperimentLifecycleStatus.READY: frozenset(
+        {ExperimentLifecycleStatus.RUNNING, ExperimentLifecycleStatus.CANCELLED}
+    ),
+    ExperimentLifecycleStatus.RUNNING: frozenset(
+        {
+            ExperimentLifecycleStatus.SUCCEEDED,
+            ExperimentLifecycleStatus.FAILED,
+            ExperimentLifecycleStatus.CANCELLED,
+        }
+    ),
     ExperimentLifecycleStatus.SUCCEEDED: frozenset(),
     ExperimentLifecycleStatus.FAILED: frozenset(),
     ExperimentLifecycleStatus.CANCELLED: frozenset(),
