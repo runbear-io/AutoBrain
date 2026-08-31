@@ -4,8 +4,10 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tomllib
+import zipfile
 from importlib import resources
 from pathlib import Path
 
@@ -140,6 +142,28 @@ def test_candidate_pins_are_an_importable_package_resource() -> None:
     pins = resources.files("autobrain").joinpath("candidate-pins.json")
     assert pins.is_file()
     assert '"schema_version": 1' in pins.read_text(encoding="utf-8")
+
+
+def test_wheel_contains_all_runtime_modules(tmp_path: Path) -> None:
+    subprocess.run(
+        [os.environ.get("AUTOBRAIN_TEST_UV", "uv"), "build", "--wheel", "--out-dir", str(tmp_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheel = next(tmp_path.glob("autobrain-*.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        members = set(archive.namelist())
+
+    assert "autobrain/performance.py" in members
+    subprocess.run(
+        [sys.executable, "-c", "import autobrain.cli, autobrain.performance"],
+        check=True,
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(wheel)},
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_sdist_configuration_force_includes_only_current_evidence_allowlist() -> None:

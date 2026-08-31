@@ -7,12 +7,14 @@ import json
 import re
 import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from autobrain.models import CoverageCompleteness, NormalizedDocument, SourceKind
+from autobrain.models import CorpusIdentity, CoverageCompleteness, NormalizedDocument, SourceKind
+from autobrain.performance import RunCache
+from autobrain.secrets import contains_secret
 
 
 class CorpusBoundaryError(ValueError):
@@ -23,11 +25,6 @@ class DirtyCorpusError(FileExistsError):
     """A freeze destination contains prior output and cannot be overwritten."""
 
 
-_SECRET = re.compile(
-    r"(?:bearer\s+(?!(?:tokens?|authentication|credentials?)\b)[A-Za-z0-9._~+/=-]+|"
-    r"(?:sk|xox[baprs])-[A-Za-z0-9._-]{8,})",
-    re.IGNORECASE,
-)
 _PROTECTED_MARKER = re.compile(r"\b(?:oracle|holdout|reference[_ -]?answer)\b", re.IGNORECASE)
 _PROMPT_LIKE = re.compile(
     r"\b(ignore|disregard|override|system prompt|call a (?:write|tool))\b",
@@ -37,8 +34,12 @@ _PROMPT_LIKE = re.compile(
 
 def normalize_raw_items(
     items: Sequence[NormalizedDocument | dict[str, Any]],
+    *,
+    cache: RunCache | None = None,
 ) -> list[NormalizedDocument]:
     """Convert connector records into whole documents and exact-deduplicate content."""
+    if cache is not None:
+        return list(cache.normalized_documents(items))
     prepared: list[NormalizedDocument] = []
     for item in items:
         document = item if isinstance(item, NormalizedDocument) else _from_raw(item)
@@ -90,6 +91,36 @@ def normalize_raw_items(
     return sorted(by_content.values(), key=lambda document: document.source_id)
 
 
+def canonical_corpus_identity(
+    documents: Sequence[NormalizedDocument | Mapping[str, Any]],
+    *,
+    cache: RunCache | None = None,
+) -> CorpusIdentity:
+    """Return the one canonical corpus digest used by every run boundary."""
+    normalized = normalize_raw_items(
+        [
+            document if isinstance(document, NormalizedDocument) else dict(document)
+            for document in documents
+        ],
+        cache=cache,
+    )
+    payload = "".join(
+        (
+            cache.serialize(document)
+            if cache is not None
+            else json.dumps(
+                document.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        + "\n"
+        for document in normalized
+    ).encode("utf-8")
+    digest = cache.hash_bytes(payload) if cache is not None else hashlib.sha256(payload).hexdigest()
+    return CorpusIdentity(sha256=digest, document_count=len(normalized))
+
+
 def freeze_corpus(
     documents: list[NormalizedDocument],
     output_dir: Path,
@@ -118,6 +149,10 @@ def freeze_corpus(
         "documents_sha256": hashlib.sha256(documents_jsonl.encode("utf-8")).hexdigest(),
         "coverage": _json_value(coverage),
     }
+    identity = canonical_corpus_identity(normalized)
+    manifest_payload["corpus_identity"] = identity.model_dump(mode="json")
+    manifest_payload["provenance"] = {"normalization": "autobrain.corpus.canonical.v1"}
+    manifest_payload["immutable"] = True
     manifest_hash = _hash_json(manifest_payload)
     manifest = {**manifest_payload, "manifest_hash": manifest_hash}
 
@@ -137,13 +172,50 @@ def freeze_corpus(
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
-    return FreezeResult(manifest_hash=manifest_hash, document_count=len(normalized))
+    return FreezeResult(
+        manifest_hash=manifest_hash,
+        document_count=len(normalized),
+        identity=identity,
+    )
+
+
+def canonical_corpus_identity(
+    documents: Sequence[NormalizedDocument | Mapping[str, Any]],
+    *,
+    cache: RunCache | None = None,
+) -> CorpusIdentity:
+    """Return the one canonical corpus digest used by every run boundary."""
+    normalized = normalize_raw_items(
+        [
+            document if isinstance(document, NormalizedDocument) else dict(document)
+            for document in documents
+        ],
+        cache=cache,
+    )
+    payload = "".join(
+        (
+            cache.serialize(document)
+            if cache is not None
+            else json.dumps(
+                document.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        + "\\n"
+        for document in normalized
+    ).encode("utf-8")
+    digest = cache.hash_bytes(payload) if cache is not None else hashlib.sha256(payload).hexdigest()
+    return CorpusIdentity(sha256=digest, document_count=len(normalized))
 
 
 class FreezeResult:
-    def __init__(self, *, manifest_hash: str, document_count: int) -> None:
+    def __init__(
+        self, *, manifest_hash: str, document_count: int, identity: CorpusIdentity
+    ) -> None:
         self.manifest_hash = manifest_hash
         self.document_count = document_count
+        self.identity = identity
 
 
 def _from_raw(item: dict[str, Any]) -> NormalizedDocument:
@@ -239,7 +311,7 @@ def _parse_datetime(value: object) -> datetime | None:
 
 def _reject_boundary(document: NormalizedDocument) -> None:
     serialized = json.dumps(document.model_dump(mode="json"), sort_keys=True)
-    if _SECRET.search(serialized):
+    if contains_secret(serialized):
         raise CorpusBoundaryError(f"secret-like value in corpus record {document.source_id}")
     if _PROTECTED_MARKER.search(document.text) or _PROTECTED_MARKER.search(document.title):
         raise CorpusBoundaryError(f"evaluator-only marker in corpus record {document.source_id}")

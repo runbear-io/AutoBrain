@@ -32,6 +32,24 @@ def validate_state_root(root: Path, *, explicit: bool = False) -> None:
             raise PathConfinementError(f"state root is not a directory: {root}")
 
 
+def resolve_run_root(root: Path | None = None) -> Path:
+    """Resolve the run root shared by run inspection commands.
+
+    An explicit root wins, followed by the legacy ``AUTOBRAIN_RUN_ROOT``
+    setting, and finally the normal AutoBrain state root.  Explicit roots may
+    be absent (``runs list`` then reports an empty inventory), but existing
+    roots must be real directories and never symlinks.
+    """
+    configured = root if root is not None else os.environ.get("AUTOBRAIN_RUN_ROOT")
+    resolved = Path(configured).expanduser() if configured else AutoBrainPaths.from_home().runs
+    AutoBrainPaths.validate_output_root(resolved)
+    if resolved.is_symlink():
+        raise PathConfinementError(f"runs root cannot be a symlink: {resolved}")
+    if resolved.exists() and not resolved.is_dir():
+        raise PathConfinementError(f"runs root is not a directory: {resolved}")
+    return resolved
+
+
 @dataclass(frozen=True)
 class AutoBrainPaths:
     root: Path
