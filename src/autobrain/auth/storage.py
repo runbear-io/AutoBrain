@@ -169,6 +169,8 @@ class TokenStore:
         entries = self.files.read_mapping(self.index)
         result: list[ConnectionStatus] = []
         for key, value in sorted(entries.items()):
+            if not isinstance(value, dict):
+                continue
             provider_raw = value.get("provider")
             if not isinstance(provider_raw, str) or provider_raw not in {
                 item.value for item in Provider
