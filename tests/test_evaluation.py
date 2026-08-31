@@ -1,7 +1,14 @@
 from datetime import UTC, datetime
 
 from autobrain.evaluate import evaluate_candidate, evaluate_case
-from autobrain.models import BenchmarkCase, CandidateId, NormalizedDocument, SourceKind, Status
+from autobrain.models import (
+    BenchmarkCase,
+    CandidateId,
+    EvaluationMode,
+    NormalizedDocument,
+    SourceKind,
+    Status,
+)
 from autobrain.retrieval_ids import document_slug, provenance_map, resolve_retrieved_source_ids
 
 
@@ -15,25 +22,50 @@ def case() -> BenchmarkCase:
     )
 
 
-def test_quality_is_recall_of_gold_source_ids() -> None:
+def test_quality_scores_expected_answer_claims_even_when_citation_matches() -> None:
     result = evaluate_case(
         case(),
-        answer="ignored generation text",
+        answer="The launch is Tuesday.",
         cited_source_ids=["slack:launch"],
+        mode=EvaluationMode.ANSWER_AWARE,
     )
     assert result.status == Status.OK
     assert result.score == 100.0
     assert result.components.retrieval_recall == 100.0
+    assert result.required_claims == 1
+    assert result.covered_claims == 1
 
 
-def test_missing_gold_source_is_zero_recall_even_with_a_fluent_answer() -> None:
+def test_wrong_answer_scores_lower_than_correct_answer_with_same_citation() -> None:
+    correct = evaluate_case(
+        case(),
+        answer="The launch is Tuesday.",
+        cited_source_ids=["slack:launch"],
+        mode=EvaluationMode.ANSWER_AWARE,
+    )
+    wrong = evaluate_case(
+        case(),
+        answer="The launch is Friday.",
+        cited_source_ids=["slack:launch"],
+        mode=EvaluationMode.ANSWER_AWARE,
+    )
+    assert correct.score == 100.0
+    assert wrong.score < correct.score
+    assert wrong.covered_claims == 0
+    assert wrong.forbidden_matches == 1
+    assert wrong.components.retrieval_recall == correct.components.retrieval_recall
+
+
+def test_missing_gold_source_keeps_answer_score_but_has_no_citation_support() -> None:
     result = evaluate_case(
         case(),
         answer="The launch is Tuesday.",
         cited_source_ids=["slack:other"],
+        mode=EvaluationMode.ANSWER_AWARE,
     )
-    assert result.score == 0.0
+    assert result.score == 75.0
     assert result.components.retrieval_recall == 0.0
+    assert result.cited_claims == 0
 
 
 def test_partial_recall_is_the_fraction_of_gold_sources_retrieved() -> None:
@@ -42,10 +74,12 @@ def test_partial_recall_is_the_fraction_of_gold_sources_retrieved() -> None:
         multi,
         answer="",
         cited_source_ids=["slack:launch", "slack:noise"],
+        mode=EvaluationMode.ANSWER_AWARE,
     )
-    assert result.score == 50.0
-    assert result.cited_claims == 1
-    assert result.required_claims == 2
+    assert result.score == 20.0
+    assert result.components.retrieval_recall == 50.0
+    assert result.cited_claims == 0
+    assert result.required_claims == 1
 
 
 def test_failed_retrieval_stays_zero() -> None:
@@ -65,7 +99,7 @@ def test_candidate_aggregation_averages_recall_and_keeps_failures() -> None:
     aggregate = evaluate_candidate(
         CandidateId.MEM0,
         [
-            (case(), "ignored", ["slack:launch"], 1.0, 10),
+            (case(), "The launch is Tuesday.", ["slack:launch"], 1.0, 10),
             (
                 case().model_copy(update={"case_id": "case-002", "generated": True}),
                 "",
@@ -78,6 +112,7 @@ def test_candidate_aggregation_averages_recall_and_keeps_failures() -> None:
         ],
         total_cost_usd=0.12,
         cost_status="COST_COMPLETE",
+        mode=EvaluationMode.ANSWER_AWARE,
     )
     assert aggregate.scored_cases == 2
     assert aggregate.answered_cases == 1
@@ -85,6 +120,65 @@ def test_candidate_aggregation_averages_recall_and_keeps_failures() -> None:
     assert aggregate.status == Status.OK
     assert aggregate.quality_score == 50.0
     assert aggregate.source_support_rate == 0.5
+
+
+def test_retrieval_only_is_default_and_does_not_require_answer_generation() -> None:
+    retrieval_case = case().model_copy(update={"expected_claims": []})
+
+    result = evaluate_case(
+        retrieval_case,
+        answer="",
+        cited_source_ids=["slack:launch"],
+    )
+
+    assert result.evaluation_mode is EvaluationMode.RETRIEVAL_ONLY
+    assert result.score == 100.0
+    assert result.retrieval_recall == 100.0
+    assert result.required_claims == 0
+    assert result.covered_claims == 0
+
+
+def test_retrieval_only_metrics_are_comparable_across_fixture_candidates() -> None:
+    retrieval_case = case().model_copy(update={"expected_claims": []})
+    cases = [
+        (retrieval_case, "", ["slack:launch"], 1.0, 10),
+        (
+            retrieval_case.model_copy(
+                update={"case_id": "case-002", "source_ids": ["notion:policy"]}
+            ),
+            "",
+            [],
+            1.0,
+            12,
+        ),
+    ]
+
+    evaluations = [
+        evaluate_candidate(
+            candidate,
+            cases,
+            total_cost_usd=1.0,
+            cost_status="COST_COMPLETE",
+        )
+        for candidate in CandidateId
+    ]
+
+    assert [item.quality_score for item in evaluations] == [50.0] * 3
+    assert [item.source_support_rate for item in evaluations] == [0.5] * 3
+    assert [item.answer_success_rate for item in evaluations] == [1.0] * 3
+
+
+def test_answer_evaluation_remains_explicitly_separate() -> None:
+    result = evaluate_case(
+        case(),
+        answer="The launch is Friday.",
+        cited_source_ids=["slack:launch"],
+        mode=EvaluationMode.ANSWER_AWARE,
+    )
+
+    assert result.evaluation_mode is EvaluationMode.ANSWER_AWARE
+    assert result.score == 10.0
+    assert result.forbidden_matches == 1
 
 
 def test_retrieved_slugs_map_back_to_gold_source_ids() -> None:

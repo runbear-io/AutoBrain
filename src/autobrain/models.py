@@ -82,6 +82,8 @@ class StrictModel(BaseModel):
 
 class Status(StrEnum):
     OK = "OK"
+    NOT_PROBED = "NOT_PROBED"
+    UNAVAILABLE = "UNAVAILABLE"
     ENV_UNAVAILABLE = "ENV_UNAVAILABLE"
     MISSING_PROVIDER = "MISSING_PROVIDER"
     UNSUPPORTED = "UNSUPPORTED"
@@ -94,6 +96,9 @@ class Status(StrEnum):
     CANCELLED = "CANCELLED"
     NO_DECISION = "NO_DECISION"
     NO_RECOMMENDATION = "NO_RECOMMENDATION"
+    SNAPSHOT_CHANGED = "SNAPSHOT_CHANGED"
+    INVALID_CONFIG = "INVALID_CONFIG"
+    UNVERIFIABLE = "UNVERIFIABLE"
 
 
 class QACapabilityStatus(StrEnum):
@@ -187,9 +192,16 @@ class BenchmarkCase(StrictModel):
     case_id: str = Field(pattern=r"^case-[A-Za-z0-9_-]+$")
     question: str = Field(min_length=1)
     source_ids: list[SourceId] = Field(min_length=1)
-    expected_claims: list[str] = Field(min_length=1)
+    expected_claims: list[str] = Field(default_factory=list)
     forbidden_contradictions: list[str] = Field(default_factory=list)
     generated: bool = False
+
+
+class EvaluationMode(StrEnum):
+    """Which independently measured quality surface is being evaluated."""
+
+    RETRIEVAL_ONLY = "retrieval_only"
+    ANSWER_AWARE = "answer_aware"
 
 
 class CandidateQuery(StrictModel):
@@ -248,6 +260,7 @@ class UsageSource(StrEnum):
 
 class SourceMutability(StrEnum):
     FROZEN_EXPORT = "frozen_export"
+    IMPORTED_SNAPSHOT = "imported_snapshot"
     LIVE_MCP_CAPTURED = "live_mcp_captured"
 
 
@@ -275,6 +288,10 @@ class EmbeddingProvenance(StrictModel):
 class SourceProvenance(StrictModel):
     source: str = Field(min_length=1)
     mutability: SourceMutability
+    snapshot_sha256: Sha256 | None = None
+    fetched_at: datetime | None = None
+    transport_mode: str | None = Field(default=None, min_length=1)
+    partial_coverage_reason: str | None = Field(default=None, min_length=1)
 
 
 class BackendIdentity(StrictModel):
@@ -286,6 +303,19 @@ class BackendIdentity(StrictModel):
 class CorpusIdentity(StrictModel):
     sha256: Sha256
     document_count: int = Field(ge=0)
+
+
+class ExperimentIdentity(StrictModel):
+    """Immutable identity shared by persisted runs and Web comparisons."""
+
+    corpus: CorpusIdentity
+    benchmark_sha256: Sha256
+    protocol: str = Field(min_length=1)
+    evaluator: str = "retrieval"
+    provider: str | None = Field(default=None, min_length=1)
+    model: str | None = Field(default=None, min_length=1)
+    configuration_hash: Sha256 | None = None
+    code_version: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
 
 
 class NativeCandidateResult(StrictModel):
@@ -426,6 +456,7 @@ class RunManifest(BaseModel):
 
     schema_version: Literal[1, 2]
     run_id: str = Field(min_length=1)
+    experiment_identity: ExperimentIdentity | None = None
     created_at: datetime | None = None
     status: Status | None = None
     verdict: str | None = None
@@ -445,13 +476,20 @@ class QualityComponents(StrictModel):
 
     @property
     def total(self) -> float:
-        return round(self.retrieval_recall, 4)
+        return round(
+            self.required_claim_coverage
+            + self.cited_source_support
+            + self.contradiction_safety
+            + self.supplementary_style,
+            4,
+        )
 
 
 class CaseEvaluation(StrictModel):
     candidate: CandidateId
     case_id: str
     status: Status
+    evaluation_mode: EvaluationMode = EvaluationMode.RETRIEVAL_ONLY
     score: float = Field(ge=0, le=100)
     components: QualityComponents
     required_claims: int = Field(ge=0)
@@ -568,6 +606,7 @@ class DecisionResult(StrictModel):
 class ComparisonArtifact(StrictModel):
     schema_version: Literal[2]
     run_id: str = Field(min_length=1)
+    experiment_identity: ExperimentIdentity | None = None
     status: Status = Status.OK
     corpus_hash: Sha256
     benchmark_hash: Sha256
@@ -612,6 +651,7 @@ class CheckResult(StrictModel):
     detail: str
     version: str | None = None
     path: str | None = None
+    remediation: str | None = None
 
 
 class DoctorPaths(StrictModel):

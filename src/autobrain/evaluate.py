@@ -1,7 +1,8 @@
-"""Recall-based retrieval evaluation over gold source IDs."""
+"""Deterministic answer-aware evaluation for offline benchmark cases."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from statistics import quantiles
 from typing import Any
@@ -12,10 +13,24 @@ from autobrain.models import (
     CandidateId,
     CaseEvaluation,
     CostStatus,
+    EvaluationMode,
     QualityComponents,
     Status,
     UsageSource,
 )
+from autobrain.performance import RunCache
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _tokens(value: str) -> set[str]:
+    return set(_WORD.findall(value.casefold()))
+
+
+def _claim_present(claim: str, answer: str, *, cache: RunCache | None = None) -> bool:
+    claim_tokens = _tokens(claim)
+    answer_tokens = cache.answer_tokens(answer, _tokens) if cache is not None else _tokens(answer)
+    return bool(claim_tokens) and claim_tokens <= answer_tokens
 
 
 def _percentile(values: Sequence[int], percentile: float) -> float | None:
@@ -36,27 +51,65 @@ def evaluate_case(
     failure_detail: str = "",
     latency_ms: int = 0,
     candidate: CandidateId = CandidateId.MEM0,
+    mode: EvaluationMode = EvaluationMode.RETRIEVAL_ONLY,
+    cache: RunCache | None = None,
 ) -> CaseEvaluation:
-    """Score retrieval recall against the case gold source IDs."""
-    del answer
+    """Score one answer with deterministic, measured offline components.
+
+    Claim matching is intentionally lexical and conservative: every normalized
+    token in an expected claim must occur in the answer. This is not a semantic
+    judge and requires no provider or network access. Retrieval-only is the
+    default and scores only source recall; answer-aware scoring is explicit.
+    """
     if not 0 <= reference_confidence <= 1:
         raise ValueError("reference_confidence must be between 0 and 1")
     gold = set(case.source_ids)
     retrieved = set(cited_source_ids)
-    hits = len(gold & retrieved)
-    recall = hits / len(gold) if gold else 0.0
-    score = 0.0 if status != Status.OK else round(100 * recall, 4)
-    components = QualityComponents(retrieval_recall=score)
+    source_hits = len(gold & retrieved)
+    retrieval_recall = source_hits / len(gold) if gold else 0.0
+    if status != Status.OK:
+        components = QualityComponents(retrieval_recall=0.0)
+        covered = cited = forbidden_matches = 0
+    elif mode is EvaluationMode.RETRIEVAL_ONLY:
+        components = QualityComponents(retrieval_recall=round(100 * retrieval_recall, 4))
+        covered = cited = forbidden_matches = 0
+    else:
+        covered = sum(_claim_present(claim, answer, cache=cache) for claim in case.expected_claims)
+        has_supporting_source = bool(gold & retrieved)
+        cited = sum(
+            _claim_present(claim, answer, cache=cache) and has_supporting_source
+            for claim in case.expected_claims
+        )
+        forbidden_matches = sum(
+            _claim_present(claim, answer, cache=cache) for claim in case.forbidden_contradictions
+        )
+        required_score = 45 * covered / len(case.expected_claims) if case.expected_claims else 0.0
+        cited_score = (
+            25 * cited / len(case.expected_claims) * reference_confidence
+            if case.expected_claims
+            else 0.0
+        )
+        components = QualityComponents(
+            retrieval_recall=round(100 * retrieval_recall, 4),
+            required_claim_coverage=round(required_score, 4),
+            cited_source_support=round(cited_score, 4),
+            contradiction_safety=0.0 if forbidden_matches else 20.0,
+            supplementary_style=10.0 if answer.strip() and cited_source_ids else 0.0,
+        )
+    score = (
+        components.retrieval_recall if mode is EvaluationMode.RETRIEVAL_ONLY else components.total
+    )
     return CaseEvaluation(
         candidate=candidate,
         case_id=case.case_id,
         status=status if status != Status.OK else Status.OK,
+        evaluation_mode=mode,
         score=score,
         components=components,
-        required_claims=len(gold),
-        covered_claims=hits if status == Status.OK else 0,
-        cited_claims=hits if status == Status.OK else 0,
-        forbidden_matches=0,
+        required_claims=(len(case.expected_claims) if mode is EvaluationMode.ANSWER_AWARE else 0),
+        covered_claims=covered,
+        cited_claims=cited,
+        forbidden_matches=forbidden_matches,
         source_ids=list(cited_source_ids),
         generated=case.generated,
         reference_confidence=reference_confidence,
@@ -81,6 +134,8 @@ def evaluate_candidate(
     query_wall_time_ms: int = 0,
     workspace_bytes: int | None = None,
     operating_burden: float | None = None,
+    cache: RunCache | None = None,
+    mode: EvaluationMode = EvaluationMode.RETRIEVAL_ONLY,
 ) -> CandidateEvaluation:
     """Aggregate typed case results while retaining partial failures."""
     evaluated: list[CaseEvaluation] = []
@@ -102,11 +157,22 @@ def evaluate_candidate(
                 failure_detail=failure_detail,
                 latency_ms=latency,
                 candidate=candidate,
+                mode=mode,
+                cache=cache,
             )
         )
     scored = len(evaluated)
     answered = sum(result.status == Status.OK for result in evaluated)
     quality = sum(result.score for result in evaluated) / scored if scored else 0.0
+    required = sum(result.required_claims for result in evaluated)
+    cited = sum(result.cited_claims for result in evaluated)
+    source_support = (
+        sum(result.retrieval_recall for result in evaluated) / (100 * scored)
+        if mode is EvaluationMode.RETRIEVAL_ONLY and scored
+        else cited / required
+        if required
+        else 0.0
+    )
     latencies = [
         result.latency_ms
         for result in evaluated
@@ -119,7 +185,7 @@ def evaluate_candidate(
         answered_cases=answered,
         quality_score=round(quality, 4),
         answer_success_rate=answered / scored if scored else 0.0,
-        source_support_rate=quality / 100 if scored else 0.0,
+        source_support_rate=source_support,
         contradiction_count=sum(result.forbidden_matches for result in evaluated),
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
