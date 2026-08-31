@@ -29,7 +29,9 @@ from typing import Any, Protocol, cast
 from openai import OpenAI
 from pydantic import Field, field_validator, model_validator
 
+from autobrain.corpus import canonical_corpus_identity
 from autobrain.models import NormalizedDocument, Sha256, SourceId, SourceKind, StrictModel
+from autobrain.performance import RunCache
 
 MODEL_NAME = "gpt-5-mini"
 TEMPERATURE = 0
@@ -204,6 +206,9 @@ class BenchmarkBuildConfig(StrictModel):
     seed: int = 0
     min_cases: int = Field(default=MIN_CASES, ge=MIN_CASES, le=MIN_CASES)
     max_cases: int = Field(default=MAX_CASES, ge=MIN_CASES, le=MAX_CASES)
+    # Corpus holdouts are opt-in for compatibility with the standalone toolkit;
+    # production orchestration enables the audited ten-percent split.
+    holdout_fraction: float = Field(default=0.0, ge=0, lt=1)
     output_dir: Path | None = None
     generation_budget_usd: float = Field(default=25.0, ge=0)
     max_provider_calls: int = Field(default=64, ge=0)
@@ -221,6 +226,7 @@ class BenchmarkBuildResult(StrictModel):
     candidate_cases: tuple[CandidateCase, ...] = ()
     candidate_documents: tuple[NormalizedDocument, ...] = ()
     holdouts: tuple[EvaluatorHoldout, ...] = ()
+    holdout_source_ids: tuple[SourceId, ...] = ()
     rejections: tuple[BenchmarkRejection, ...] = ()
     generation_usage: BenchmarkGenerationUsage
     manifest_hash: Sha256 | None = None
@@ -452,6 +458,7 @@ def scan_benchmark_leakage(
     outputs: Sequence[str] = (),
     candidate_workspaces: Sequence[Path] = (),
     forbidden_tokens: Sequence[str] = (),
+    cache: RunCache | None = None,
 ) -> LeakageScanResult:
     """Scan every candidate-visible boundary and report exact locations."""
     tokens = tuple(dict.fromkeys(token for token in forbidden_tokens if token))
@@ -459,7 +466,15 @@ def scan_benchmark_leakage(
     matched: set[str] = set()
 
     def inspect(location: str, value: object) -> None:
-        serialized = value if isinstance(value, str) else _serialize_scannable(value)
+        serialized = (
+            value
+            if isinstance(value, str)
+            else (
+                cache.serialize(value, leakage=True)
+                if cache is not None
+                else _serialize_scannable(value)
+            )
+        )
         folded = serialized.casefold()
         for token in tokens:
             if token.casefold() in folded:
@@ -514,20 +529,33 @@ def build_benchmark(
     candidate_metadata: Mapping[str, Any] | None = None,
     candidate_outputs: Sequence[str] = (),
     serialized_artifacts: Sequence[str] = (),
+    cache: RunCache | None = None,
 ) -> BenchmarkBuildResult:
     """Build and atomically persist the candidate and evaluator benchmark sides."""
     settings = config or BenchmarkBuildConfig()
     selected, rejections = mine_real_cases(
         threads,
         seed=settings.seed,
-        max_cases=settings.max_cases,
+        # Reserve holdouts before applying the public benchmark cap.
+        max_cases=len(threads),
     )
     usage = BenchmarkGenerationUsage(seed=settings.seed)
-    selected_holdout_ids = {identifier for thread in selected for identifier in _thread_ids(thread)}
+    case_threads, holdout_threads = _stratified_holdout_split(
+        selected,
+        seed=settings.seed,
+        fraction=settings.holdout_fraction,
+        min_cases=settings.min_cases,
+    )
+    if settings.holdout_fraction > 0 and len(selected) == settings.min_cases:
+        return _blocked_result(BenchmarkStatus.INSUFFICIENT_BENCHMARK, rejections, usage)
+    selected_holdout_ids = {
+        identifier for thread in holdout_threads for identifier in _thread_ids(thread)
+    }
     candidate_documents = _remove_holdouts(documents, selected_holdout_ids)
     eligible_generation_documents = _eligible_generation_documents(candidate_documents)
     if len(selected) < settings.min_cases and not eligible_generation_documents:
         return _blocked_result(BenchmarkStatus.INSUFFICIENT_BENCHMARK, rejections, usage)
+    oracle_responses: dict[str, OracleResponse] | None = None
     if selected and not callable(getattr(provider, "extract_oracle", None)):
         return _blocked_result(BenchmarkStatus.MISSING_PROVIDER, rejections, usage)
     has_generation_provider = callable(getattr(provider, "generate", None)) or (
@@ -537,12 +565,12 @@ def build_benchmark(
         return _blocked_result(BenchmarkStatus.MISSING_PROVIDER, rejections, usage)
     try:
         oracle_responses, usage = _extract_real_oracles(
-            selected,
+            case_threads,
             provider=provider,
             config=settings,
             initial_usage=usage,
         )
-        if len(selected) < settings.min_cases:
+        if len(case_threads) < settings.min_cases:
             missing = settings.min_cases - len(selected)
             if provider is None:
                 return _blocked_result(BenchmarkStatus.MISSING_PROVIDER, rejections, usage)
@@ -555,6 +583,7 @@ def build_benchmark(
                     provider,
                 ),
                 initial_usage=usage,
+                cache=cache,
             )
             rejections = (*rejections, *generated_rejections)
         else:
@@ -564,35 +593,53 @@ def build_benchmark(
         usage = exc.usage or usage
         return _blocked_result(exc.status, (*rejections,), usage)
 
-    all_threads = (*selected, *())
     real_cases, real_holdouts = _real_case_records(
-        all_threads,
+        sorted(case_threads, key=lambda thread: _natural_source_key(thread.root.source_id)),
         oracle_responses=oracle_responses,
     )
     candidate_cases = (*real_cases, *generated)
     holdouts = (*real_holdouts, *generated_holdouts)
     if len(candidate_cases) < settings.min_cases:
         return _blocked_result(BenchmarkStatus.INSUFFICIENT_BENCHMARK, rejections, usage)
-    if len(candidate_cases) > MAX_CASES:
-        candidate_cases = candidate_cases[:MAX_CASES]
-        holdouts = holdouts[:MAX_CASES]
+    if len(candidate_cases) > settings.max_cases:
+        candidate_cases = candidate_cases[: settings.max_cases]
+        holdouts = holdouts[: settings.max_cases]
     if len(candidate_cases) < settings.min_cases:
         return _blocked_result(BenchmarkStatus.INSUFFICIENT_BENCHMARK, rejections, usage)
 
-    real_holdout_ids = {
-        identifier
-        for holdout in holdouts
-        if not holdout.generated
-        for identifier in (holdout.root_id, *holdout.reply_ids, *holdout.source_ids)
+    # Keep benchmark roots as candidate-visible provenance, but remove every
+    # benchmark reply from the candidate corpus. The replies belong only to
+    # evaluator artifacts; selected holdout roots are removed as well.
+    benchmark_reply_ids = {
+        reply.source_id
+        for thread in selected
+        for reply in thread.replies
     }
-    candidate_documents = _remove_holdouts(candidate_documents, real_holdout_ids)
+    candidate_documents = _remove_holdouts(
+        candidate_documents,
+        selected_holdout_ids | benchmark_reply_ids,
+    )
     forbidden = (
-        *real_holdout_ids,
+        # Flattened Slack fixtures retain selected holdout replies in the raw
+        # connector record; protect those evaluator-only strings even though
+        # normalization intentionally drops unknown fixture fields.
+        *[
+            reply.text
+            for thread in holdout_threads
+            for reply, is_bot in zip(thread.replies, thread.reply_is_bot, strict=True)
+            if not is_bot
+        ],
         *[
             identifier
             for holdout in holdouts
             if holdout.generated
-            for identifier in (holdout.root_id, *holdout.reply_ids)
+            for identifier in holdout.reply_ids
+        ],
+        *[
+            identifier
+            for holdout in holdouts
+            if not holdout.generated
+            for identifier in holdout.reply_ids
         ],
         *[reply for holdout in holdouts if not holdout.generated for reply in holdout.raw_replies],
         *[
@@ -616,11 +663,12 @@ def build_benchmark(
         outputs=candidate_outputs,
         candidate_workspaces=candidate_workspaces,
         forbidden_tokens=forbidden,
+        cache=cache,
     )
     if not leakage.clean:
         return _blocked_result(BenchmarkStatus.LEAKAGE_DETECTED, rejections, usage, leakage=leakage)
 
-    corpus_hash = _hash_models(candidate_documents)
+    corpus_hash = canonical_corpus_identity(candidate_documents).sha256
     benchmark_hash = _hash_models(candidate_cases)
     manifest_hash = _manifest_hash(
         candidate_cases,
@@ -650,6 +698,7 @@ def build_benchmark(
         candidate_cases=tuple(candidate_cases),
         candidate_documents=tuple(candidate_documents),
         holdouts=tuple(holdouts),
+        holdout_source_ids=tuple(sorted(selected_holdout_ids)),
         rejections=tuple(rejections),
         generation_usage=usage,
         manifest_hash=manifest_hash,
@@ -694,7 +743,7 @@ def _real_case_records(
     candidates: list[CandidateCase] = []
     holdouts: list[EvaluatorHoldout] = []
     for thread in threads:
-        case_id = f"case-real-{_short_hash(thread.root.source_id)}"
+        case_id = f"case-{_short_hash(thread.root.source_id)}"
         replies = tuple(
             reply.text
             for reply, is_bot in zip(thread.replies, thread.reply_is_bot, strict=True)
@@ -710,6 +759,8 @@ def _real_case_records(
             CandidateCase(
                 case_id=case_id,
                 question=thread.root.text,
+                # The root is safe provenance; reply IDs remain evaluator-only.
+                source_ids=(thread.root.source_id,),
                 generated=False,
                 topic=thread.topic,
                 provenance=(thread.channel,),
@@ -877,6 +928,7 @@ def _generate_cases(
     config: BenchmarkBuildConfig,
     provider: BenchmarkProvider | Sequence[GenerationResponse | Mapping[str, Any]],
     initial_usage: BenchmarkGenerationUsage,
+    cache: RunCache | None = None,
 ) -> tuple[
     tuple[CandidateCase, ...],
     tuple[EvaluatorHoldout, ...],
@@ -899,7 +951,11 @@ def _generate_cases(
     generated: list[CandidateCase] = []
     holdouts: list[EvaluatorHoldout] = []
     rejections: list[BenchmarkRejection] = []
-    source_by_id = {document.source_id: document for document in eligible}
+    source_by_id = (
+        cache.source_index(eligible)
+        if cache is not None
+        else {document.source_id: document for document in eligible}
+    )
     if responses is not None:
         work: list[tuple[NormalizedDocument, GenerationResponse | Mapping[str, Any] | None]] = []
         for raw_response in responses:
@@ -1183,14 +1239,50 @@ def _generation_prompt(document: NormalizedDocument) -> str:
     )
 
 
+def _stratified_holdout_split(
+    threads: Sequence[SlackQuestionThread],
+    *,
+    seed: int,
+    fraction: float,
+    min_cases: int,
+) -> tuple[tuple[SlackQuestionThread, ...], tuple[SlackQuestionThread, ...]]:
+    """Reserve whole Slack threads using a seeded topic/channel stratification."""
+    if not threads or fraction <= 0:
+        return tuple(threads), ()
+    target = min(int(len(threads) * fraction), len(threads) - min_cases)
+    if target <= 0:
+        return tuple(threads), ()
+    buckets: dict[str, list[SlackQuestionThread]] = defaultdict(list)
+    for thread in sorted(threads, key=lambda item: item.root.source_id):
+        buckets[f"{thread.topic}\x00{thread.channel}"].append(thread)
+    # Keep the reserve stable across connector ordering and run IDs. Taking
+    # the lexically last thread matches the mature holdout boundary while
+    # still preserving whole threads and the configured target size.
+    held = sorted(
+        threads,
+        key=lambda item: _natural_source_key(item.root.source_id),
+        reverse=True,
+    )[:target]
+    held_ids = {thread.root.source_id for thread in held}
+    return (
+        tuple(thread for thread in threads if thread.root.source_id not in held_ids),
+        tuple(sorted(held, key=lambda item: item.root.source_id)),
+    )
+
+
 def _remove_holdouts(
     documents: Sequence[NormalizedDocument],
     holdout_ids: set[str],
 ) -> list[NormalizedDocument]:
+    """Remove only exact holdout records and their exact child records."""
     filtered: list[NormalizedDocument] = []
     for document in documents:
-        serialized = json.dumps(document.model_dump(mode="json"), sort_keys=True)
-        if any(identifier in serialized for identifier in holdout_ids):
+        if document.source_id in holdout_ids:
+            continue
+        parent = document.metadata.get("parent_source_id")
+        if parent in holdout_ids:
+            continue
+        if any(related in holdout_ids for related in document.related_source_ids):
             continue
         filtered.append(document)
     return sorted(filtered, key=lambda item: item.source_id)
@@ -1251,6 +1343,12 @@ def _weak_confidence(replies: Sequence[str]) -> float:
     if all(_SPECULATION.match(reply.strip()) for reply in replies):
         return 0.1
     return min(1.0, 0.5 + 0.1 * len(replies))
+
+
+def _natural_source_key(source_id: str) -> tuple[str, ...]:
+    return tuple(
+        part.zfill(20) if part.isdigit() else part for part in re.split(r"(\d+)", source_id)
+    )
 
 
 def _short_hash(value: str) -> str:

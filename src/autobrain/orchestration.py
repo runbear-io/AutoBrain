@@ -24,10 +24,19 @@ from typing import Any, Protocol, cast
 
 from autobrain.auth.models import Provider
 from autobrain.auth.service import ConnectionManager
-from autobrain.benchmark import LeakageScanResult, scan_benchmark_leakage
+from autobrain.benchmark import (
+    BenchmarkBuildConfig,
+    BenchmarkBuildResult,
+    BenchmarkStatus,
+    LeakageScanResult,
+    OracleResponse,
+    SlackQuestionThread,
+    build_benchmark,
+    scan_benchmark_leakage,
+)
 from autobrain.cancellation import RunCancellation, RunCancelled
 from autobrain.candidates.gbrain_config import GBrainExecutionConfig
-from autobrain.corpus import normalize_raw_items
+from autobrain.corpus import canonical_corpus_identity, normalize_raw_items
 from autobrain.decision import eligibility_reasons, select_winner
 from autobrain.embedding import (
     EmbeddingBackend,
@@ -54,6 +63,7 @@ from autobrain.models import (
     CoverageCompleteness,
     CoverageRecord,
     DecisionResult,
+    ExperimentIdentity,
     LatencySpan,
     LatencySpanKind,
     NativeCandidateResult,
@@ -65,7 +75,8 @@ from autobrain.models import (
     Verdict,
     normalize_safe_source_url,
 )
-from autobrain.paths import AutoBrainPaths, OccupiedRunError
+from autobrain.paths import AutoBrainPaths, OccupiedRunError, resolve_run_root
+from autobrain.performance import RunCache
 from autobrain.preflight_support import candidate_pin_matches, load_candidate_pins
 from autobrain.report import build_comparison, load_comparison, write_artifacts
 from autobrain.secrets import redact
@@ -153,6 +164,148 @@ class Candidate(Protocol):
     def run(self, context: CandidateContext) -> CandidateOutcome: ...
 
     def cleanup(self) -> CleanupReceipt | None: ...
+
+
+class _LocalBenchmarkProvider:
+    """Deterministic oracle adapter used when no benchmark LLM is configured."""
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        temperature: int,
+        seed: int,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        del model, temperature, seed, timeout_seconds
+        match = re.search(r"Source ID: ([^.]*)\. Document: (.*)$", prompt, re.DOTALL)
+        if match is None:
+            raise ValueError("unable to parse generation prompt")
+        source_id, text = match.groups()
+        return {
+            "question": f"What does source {source_id} say?",
+            "source_ids": [source_id],
+            "expected_claims": [text],
+            "forbidden_contradictions": [],
+            "reference_text": text,
+        }
+
+    def extract_oracle(
+        self,
+        *,
+        thread: SlackQuestionThread,
+        model: str,
+        temperature: int,
+        seed: int,
+        timeout_seconds: float,
+    ) -> OracleResponse:
+        del model, temperature, seed, timeout_seconds
+        replies = tuple(
+            reply.text
+            for reply, is_bot in zip(thread.replies, thread.reply_is_bot, strict=True)
+            if not is_bot
+        )
+        claims = tuple(
+            sentence
+            for reply in replies
+            for sentence in re.split(r"(?<=[.!?])\\s+", reply.strip())
+            if sentence
+        )
+        return OracleResponse(
+            expected_claims=list(dict.fromkeys(claims or replies)),
+            weak_human_confidence=0.8,
+        )
+
+
+def _slack_benchmark_threads(
+    documents: Sequence[Mapping[str, Any]],
+) -> tuple[SlackQuestionThread, ...]:
+    """Parse connector records into whole Slack question threads."""
+    slack = [
+        document
+        for document in documents
+        if str(document.get("source_kind", "")).casefold()
+        in {"slack_message", "slack_thread", "sourcekind.slack_message", "sourcekind.slack_thread"}
+        or str(document.get("source_id", "")).startswith("slack:")
+    ]
+    by_id = {str(document.get("source_id")): document for document in slack}
+    replies: dict[str, list[Mapping[str, Any]]] = {}
+    roots: list[Mapping[str, Any]] = []
+    for document in slack:
+        source_id = str(document.get("source_id", ""))
+        # Search-discovered Slack fixtures may carry a flattened reply field
+        # rather than a separate child record; parse it into the same typed
+        # thread boundary instead of falling back to the shadow miner.
+        flat_reply = document.get("evidence_reply")
+        if (
+            isinstance(flat_reply, str)
+            and flat_reply.strip()
+            and not document.get("parent_source_id")
+        ):
+            reply_id = f"{source_id}:reply"
+            synthetic = dict(document)
+            synthetic.pop("question", None)
+            synthetic.pop("evidence_reply", None)
+            synthetic["source_id"] = reply_id
+            synthetic["text"] = flat_reply
+            synthetic["canonical_url"] = (
+                f"{document.get('canonical_url', 'https://example.invalid')}/reply"
+            )
+            synthetic["parent_source_id"] = source_id
+            by_id[reply_id] = synthetic
+            replies.setdefault(source_id, []).append(synthetic)
+        parent: object = document.get("parent_source_id")
+        if not isinstance(parent, str) or not parent:
+            provenance = document.get("crawl_provenance")
+            if isinstance(provenance, Mapping):
+                typed_provenance = cast(Mapping[str, Any], provenance)
+                parent = typed_provenance.get("parent_source_id")
+        if isinstance(parent, str) and parent in by_id:
+            replies.setdefault(parent, []).append(document)
+        else:
+            roots.append(document)
+    threads: list[SlackQuestionThread] = []
+    for root in sorted(roots, key=lambda item: str(item.get("source_id", ""))):
+        children = sorted(
+            replies.get(str(root.get("source_id", "")), []),
+            key=lambda item: str(item.get("source_id", "")),
+        )
+        if not children:
+            continue
+        try:
+            normalized = normalize_raw_items([dict(item) for item in [root, *children]])
+            normalized_root = next(
+                item for item in normalized if item.source_id == str(root["source_id"])
+            )
+            # Search fixtures may expose the question separately from the
+            # normalized document text. The benchmark thread needs the
+            # question for substantive-question filtering, while the original
+            # document remains unchanged for candidate visibility and leakage
+            # scanning.
+            raw_question = root.get("question")
+            if isinstance(raw_question, str) and raw_question.strip():
+                normalized_root = normalized_root.model_copy(update={"text": raw_question.strip()})
+            reply_docs = tuple(
+                item for item in normalized if item.source_id != normalized_root.source_id
+            )
+            channel = str(root.get("channel_name") or root.get("channel_id") or "unknown")
+            topic = str(root.get("topic") or root.get("metadata", {}).get("topic") or channel)
+            threads.append(
+                SlackQuestionThread(
+                    root=normalized_root,
+                    replies=tuple(reply_docs),
+                    root_is_bot=str(root.get("bot", "false")).casefold() == "true",
+                    reply_is_bot=tuple(
+                        str(item.get("bot", "false")).casefold() == "true" for item in children
+                    ),
+                    channel=channel,
+                    topic=topic,
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return tuple(threads)
 
 
 def retain_selected_candidates(
@@ -437,11 +590,20 @@ class RunOrchestrator:
         self._cleanup_attempted: set[str] = set()
         self._cleanup_errors: list[str] = []
         self._started = 0.0
+        self._cache = RunCache()
         self._known_secrets = tuple(
             secret
-            for secret in (self._provider_key, *os.environ.values())
-            if secret and len(secret) >= 8
+            for name, secret in os.environ.items()
+            if re.search(
+                r"(?:secret|token|password|api[_-]?key|authorization|credential)",
+                name,
+                re.IGNORECASE,
+            )
+            and secret
+            and len(secret) >= 8
         )
+        if self._provider_key and len(self._provider_key) >= 8:
+            self._known_secrets += (self._provider_key,)
 
     @classmethod
     def local(
@@ -802,8 +964,12 @@ class RunOrchestrator:
                 }
             )
             report_artifacts = write_artifacts(artifact, result.run_dir)
+            self._manifest["comparison"] = {
+                "path": "comparison.json",
+                "sha256": report_artifacts.comparison_sha256,
+            }
             self._manifest["report"] = {
-                "path": str(report_artifacts.report_html),
+                "path": "report.html",
                 "sha256": report_artifacts.report_sha256,
             }
         cleanup_status = (
@@ -936,44 +1102,41 @@ class RunOrchestrator:
                     },
                 }
             self._stage(run_dir, "coverage", Status.OK, f"{len(documents)} documents")
-            cases, holdout_ids = self._build_benchmark(documents, self.config.max_questions)
-            normalized_candidate_documents = normalize_raw_items(
-                self._candidate_documents(documents, cases, holdout_ids)
+            benchmark = self._build_mature_benchmark(documents, run_dir)
+            self._manifest["performance"] = vars(self._cache.counters).copy()
+            self._persist(run_dir)
+            cases = [case.model_dump(mode="json") for case in benchmark.candidate_cases]
+            holdout_ids = set(benchmark.holdout_source_ids)
+            candidate_documents = tuple(
+                document.model_dump(mode="json") for document in benchmark.candidate_documents
             )
-            corpus = CorpusBoundary(
-                candidate_documents=tuple(
-                    document.model_dump(mode="json") for document in normalized_candidate_documents
-                ),
-                evaluator_cases=self._evaluator_cases(documents, cases),
-            )
-            candidate_documents = corpus.candidate_documents
-            evaluator_cases = corpus.evaluator_cases
+            evaluator_cases = self._benchmark_evaluator_cases(benchmark)
             self._manifest["benchmark"] = {
                 "case_count": len(cases),
                 "holdout_count": len(holdout_ids),
-                "provenance": "local Slack thread questions with document fallback",
+                "provenance": "mature autobrain.benchmark production pipeline",
                 "same_model_judge": "gpt-5-mini",
                 "generated_case_count": sum(1 for case in cases if bool(case.get("generated"))),
+                "status": benchmark.status.value,
             }
-            benchmark_sha = self._hash_json(cases)
+            benchmark_sha = benchmark.benchmark_hash or self._hash_json(cases)
             self._manifest["hashes"]["benchmark_sha256"] = benchmark_sha
             self._stage(run_dir, "benchmark-holdout", Status.OK, f"{len(cases)} cases")
-            if len(cases) < MIN_BENCHMARK_CASES:
-                final_status = Status.INSUFFICIENT_BENCHMARK
+            if benchmark.status is not BenchmarkStatus.OK or not benchmark.candidate_start_allowed:
+                final_status = Status(benchmark.status.value)
                 self._stage(
                     run_dir,
                     "benchmark-gate",
                     final_status,
-                    f"need {MIN_BENCHMARK_CASES}, found {len(cases)}",
+                    (
+                        f"benchmark status {benchmark.status.value}; "
+                        f"need {MIN_BENCHMARK_CASES} usable cases"
+                    ),
                 )
                 return RunResult(run_id, run_dir, final_status, None, (), verdict)
 
             holdout_markers = self._holdout_markers(documents, holdout_ids)
-            leakage = self._scan_candidate_leakage(
-                candidate_documents,
-                cases,
-                holdout_markers,
-            )
+            leakage = benchmark.leakage
             if not leakage.clean:
                 final_status = Status.LEAKAGE_DETECTED
                 self._stage(
@@ -985,8 +1148,13 @@ class RunOrchestrator:
                 )
                 return RunResult(run_id, run_dir, final_status, None, (), verdict)
             self._stage(run_dir, "leakage-gate", Status.OK, "candidate input is holdout-clean")
-            corpus_sha = self._hash_json(candidate_documents)
+            corpus_sha = benchmark.corpus_hash or self._hash_json(candidate_documents)
             self._manifest["hashes"]["corpus_sha256"] = corpus_sha
+            self._manifest["experiment_identity"] = ExperimentIdentity(
+                corpus=canonical_corpus_identity(benchmark.candidate_documents),
+                benchmark_sha256=benchmark_sha,
+                protocol="retrieval-recall-v1",
+            ).model_dump(mode="json")
             corpus_path = run_dir / "corpus-freeze.json"
             self._write_json(
                 corpus_path,
@@ -1073,6 +1241,8 @@ class RunOrchestrator:
                 evaluator_cases,
                 corpus_sha,
             )
+            self._manifest["performance"] = vars(self._cache.counters).copy()
+            self._persist(run_dir)
             provenance = self.benchmark_provenance(evaluations)
             coverage_reasons = self.coverage_eligibility_reasons()
             evaluations = [
@@ -1139,8 +1309,12 @@ class RunOrchestrator:
                 evaluations=evaluations,
                 status=final_status,
             )
+            self._manifest["comparison"] = {
+                "path": "comparison.json",
+                "sha256": self._sha256(run_dir / "comparison.json"),
+            }
             self._manifest["report"] = {
-                "path": str(report_path),
+                "path": "report.html",
                 "sha256": self._sha256(report_path),
             }
             self._stage(run_dir, "report", Status.OK, str(report_path))
@@ -1332,6 +1506,67 @@ class RunOrchestrator:
             )
         self._stage(run_dir, "crawl", Status.OK, "Slack and Notion read-only MCP crawl")
         return snapshots
+
+    def _build_mature_benchmark(
+        self,
+        documents: Sequence[Mapping[str, Any]],
+        run_dir: Path,
+    ) -> BenchmarkBuildResult:
+        """Build the production benchmark through the canonical benchmark module."""
+        threads = _slack_benchmark_threads(documents)
+        provider: object = _LocalBenchmarkProvider()
+        if self._provider_key and self.config.provider_mode == "api":
+            from autobrain.benchmark import OpenAICompatibleBenchmarkProvider
+
+            provider = OpenAICompatibleBenchmarkProvider.from_api_key(self._provider_key)
+        normalized = self._cache.normalized_documents([dict(document) for document in documents])
+        return build_benchmark(
+            threads=threads,
+            documents=tuple(normalized),
+            config=BenchmarkBuildConfig(
+                seed=int(
+                    hashlib.sha256((self.config.run_id or "default").encode()).hexdigest()[:8],
+                    16,
+                ),
+                max_cases=self.config.max_questions,
+                output_dir=run_dir / "benchmark",
+                holdout_fraction=0.1,
+            ),
+            provider=provider,
+            candidate_workspaces=(run_dir / "native", run_dir / "candidates"),
+            candidate_prompts=(),
+            candidate_argv=(),
+            candidate_environment={},
+            candidate_metadata=self._manifest.get("config", {}),
+            cache=self._cache,
+        )
+
+    @staticmethod
+    def _benchmark_evaluator_cases(
+        benchmark: BenchmarkBuildResult,
+    ) -> tuple[EvaluatorCaseRecord, ...]:
+        holdouts_by_case = {holdout.case_id: holdout for holdout in benchmark.holdouts}
+        records: list[EvaluatorCaseRecord] = []
+        for case in benchmark.candidate_cases:
+            holdout = holdouts_by_case.get(case.case_id)
+            if holdout is None:
+                continue
+            records.append(
+                EvaluatorCaseRecord(
+                    case=BenchmarkCase(
+                        case_id=case.case_id,
+                        question=case.question,
+                        source_ids=list(case.source_ids),
+                        expected_claims=list(holdout.expected_claims),
+                        forbidden_contradictions=list(holdout.forbidden_contradictions),
+                        generated=case.generated,
+                    ),
+                    reference_text=" ".join(holdout.raw_replies),
+                    reply_texts=holdout.raw_replies,
+                    reference_confidence=holdout.weak_human_confidence,
+                )
+            )
+        return tuple(records)
 
     @staticmethod
     def _build_benchmark(
@@ -1706,20 +1941,17 @@ class RunOrchestrator:
             or _SPECULATION.match(evidence)
         )
 
-    @staticmethod
     def _scan_candidate_leakage(
+        self,
         documents: Sequence[Mapping[str, Any]],
         cases: Sequence[Mapping[str, Any]],
         forbidden_tokens: set[str],
     ) -> LeakageScanResult:
-        payload = [
-            json.dumps(value, sort_keys=True, separators=(",", ":"))
-            for value in (*documents, *cases)
-        ]
+        payload = [self._cache.serialize(value, leakage=True) for value in (*documents, *cases)]
         return scan_benchmark_leakage(
             texts=payload,
-            serialized_artifacts=payload,
             forbidden_tokens=tuple(sorted(forbidden_tokens)),
+            cache=self._cache,
         )
 
     @staticmethod
@@ -1813,6 +2045,7 @@ class RunOrchestrator:
                 query_wall_time_ms=sum(
                     observation.latency_ms for observation in outcome.observations
                 ),
+                cache=self._cache,
             )
             execution_config = outcome.artifact.get("execution_config")
             keyword_only = (
@@ -1961,6 +2194,13 @@ class RunOrchestrator:
             status=status,
             corpus_hash=corpus_sha,
             benchmark_hash=benchmark_sha,
+            experiment_identity=ExperimentIdentity(
+                corpus=canonical_corpus_identity(
+                    normalize_raw_items([dict(document) for document in candidate_documents])
+                ),
+                benchmark_sha256=benchmark_sha,
+                protocol="retrieval-recall-v1",
+            ),
             coverage=coverage,
             candidates=list(evaluations),
             decision=decision,
@@ -1981,7 +2221,16 @@ class RunOrchestrator:
                 canonical_run_dir
             ):
                 raise ValueError(f"report artifact escapes run directory: {artifact_path}")
-        return write_artifacts(artifact, run_dir).report_html
+        artifacts = write_artifacts(artifact, run_dir)
+        self._manifest["comparison"] = {
+            "path": "comparison.json",
+            "sha256": artifacts.comparison_sha256,
+        }
+        self._manifest["report"] = {
+            "path": "report.html",
+            "sha256": artifacts.report_sha256,
+        }
+        return artifacts.report_html
 
     def _write_terminal_artifacts(
         self,
@@ -2043,8 +2292,12 @@ class RunOrchestrator:
             price_sheet_version="local-metering-v1",
         )
         artifacts = write_artifacts(artifact, run_dir)
+        self._manifest["comparison"] = {
+            "path": "comparison.json",
+            "sha256": artifacts.comparison_sha256,
+        }
         self._manifest["report"] = {
-            "path": str(artifacts.report_html),
+            "path": "report.html",
             "sha256": artifacts.report_sha256,
         }
         return artifacts.report_html
@@ -2070,17 +2323,36 @@ class RunOrchestrator:
                 auth_kind="consumer_subscription" if subscription else "api_key",
             )
         embedding = self._embedding_descriptor.provenance
-        sources = [
-            SourceProvenance(
-                source=provider.value,
-                mutability=(
-                    SourceMutability.FROZEN_EXPORT
-                    if provider is Provider.SLACK and self.config.slack_export_path is not None
-                    else SourceMutability.LIVE_MCP_CAPTURED
-                ),
-            )
-            for provider in self.config.selected_sources
-        ]
+        sources: list[SourceProvenance] = []
+        for provider in self.config.selected_sources:
+            if provider is Provider.SLACK and self.config.slack_export_path is not None:
+                sources.append(
+                    SourceProvenance(
+                        source=provider.value, mutability=SourceMutability.FROZEN_EXPORT
+                    )
+                )
+            elif provider is Provider.NOTION and self.config.notion_snapshot_path is not None:
+                from autobrain.connectors.notion_snapshot import NotionSnapshotStore
+
+                snapshot_status = NotionSnapshotStore(
+                    self.config.notion_snapshot_path.parent
+                ).status()
+                sources.append(
+                    SourceProvenance(
+                        source=provider.value,
+                        mutability=SourceMutability.IMPORTED_SNAPSHOT,
+                        snapshot_sha256=snapshot_status.snapshot_sha256,
+                        fetched_at=snapshot_status.fetched_at,
+                        transport_mode="imported_snapshot",
+                        partial_coverage_reason="snapshot coverage is partial and non-final",
+                    )
+                )
+            else:
+                sources.append(
+                    SourceProvenance(
+                        source=provider.value, mutability=SourceMutability.LIVE_MCP_CAPTURED
+                    )
+                )
         spans = [
             span
             for outcome in getattr(self, "_candidate_outcomes", ())
@@ -2284,8 +2556,7 @@ class RunOrchestrator:
         self._persist(run_dir)
 
     def _create_run_dir(self, run_id: str) -> Path:
-        root = self.config.output or AutoBrainPaths.from_home().runs
-        AutoBrainPaths.validate_output_root(root)
+        root = resolve_run_root(self.config.output)
         if root.is_symlink():
             raise ValueError(f"output root cannot be a symlink: {root}")
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
