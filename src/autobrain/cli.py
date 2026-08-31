@@ -11,12 +11,18 @@ from autobrain.candidates.gbrain_config import (
     GBrainExecutionConfig,
 )
 from autobrain.connectors.notion_snapshot import NotionSnapshotStore
+from autobrain.custom_provider import (
+    CustomProviderConfig,
+    CustomProviderError,
+    CustomProviderRegistry,
+)
 from autobrain.embedding import EmbeddingBackend, production_embedding_registry
 from autobrain.fixture import (
     FixtureValidationError,
     fixture_candidates,
     fixture_connectors,
     load_fixture,
+    write_fixture,
 )
 from autobrain.local_server import (
     DEFAULT_LOCAL_PORT,
@@ -34,9 +40,21 @@ from autobrain.orchestration import (
     StageEvent,
     locate_run,
 )
-from autobrain.paths import AutoBrainPaths, PathConfinementError
+from autobrain.paths import (
+    AutoBrainPaths,
+    PathConfinementError,
+    is_valid_run_id,
+    resolve_run_root,
+)
 from autobrain.preflight import Preflight
-from autobrain.runs import RunInspectionError, compare_runs, list_runs
+from autobrain.runs import (
+    RunInspectionError,
+    RunVerificationStatus,
+    compare_runs,
+    explain_run,
+    list_runs,
+    verify_run,
+)
 from autobrain.secrets import RuntimeEnvironment, RuntimeSettings
 from autobrain.source_cli import auth_app, source_app
 from autobrain.source_store import SlackSourceStore
@@ -59,9 +77,38 @@ app = typer.Typer(
 app.add_typer(auth_app, name="auth")
 subscription_app = typer.Typer(help="Use an explicitly selected local consumer subscription CLI.")
 app.add_typer(subscription_app, name="subscription")
+provider_app = typer.Typer(help="Manage local OpenAI-compatible provider registrations.")
+app.add_typer(provider_app, name="provider")
 app.add_typer(source_app, name="source")
 runs_app = typer.Typer(help="Inspect and compare immutable evaluation runs.")
 app.add_typer(runs_app, name="runs")
+fixture_app = typer.Typer(help="Create local, deterministic test fixtures.")
+app.add_typer(fixture_app, name="fixture")
+
+
+@fixture_app.command("generate")
+def fixture_generate(
+    seed: Annotated[int, typer.Option("--seed", help="Deterministic fixture seed.")],
+    output: Annotated[Path, typer.Option("--output", help="Output JSON path.")] = Path(
+        "fixture.json"
+    ),
+) -> None:
+    """Generate a schema-v1 fixture; available only in explicit test mode."""
+    if os.environ.get("AUTOBRAIN_ALLOW_TEST_FIXTURE") != "1":
+        typer.echo(
+            "MCP_AUTH_UNAVAILABLE: fixture generation requires AUTOBRAIN_ALLOW_TEST_FIXTURE=1",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        path = write_fixture(output, seed=seed)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"FAILED: {exc}", err=True)
+        raise typer.Exit(1) from None
+    spec = load_fixture(path)
+    typer.echo(f"fixture-id: {spec.fixture_id}")
+    typer.echo(f"fixture-sha256: {spec.fixture_sha256}")
+    typer.echo(f"fixture-path: {path}")
 
 
 @app.callback(invoke_without_command=True)
@@ -93,6 +140,96 @@ def setup(
     except RuntimeError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from None
+
+
+@provider_app.command("add")
+def provider_add(
+    provider_id: Annotated[str, typer.Argument(help="Unique local provider name.")],
+    endpoint: Annotated[str, typer.Option("--endpoint", help="Provider HTTP(S) base URL.")],
+    model: Annotated[str, typer.Option("--model", help="Default chat model.")],
+    api_key_env: Annotated[
+        str, typer.Option("--api-key-env", help="Environment fallback variable.")
+    ],
+    api_key: Annotated[str | None, typer.Option("--api-key", hidden=True)] = None,
+) -> None:
+    """Register a provider locally; its API key is stored in the OS keychain."""
+    try:
+        config = CustomProviderConfig(
+            provider_id=provider_id,
+            name=provider_id,
+            endpoint=endpoint,
+            model=model,
+            api_key_env=api_key_env,
+        )
+        secret = api_key or typer.prompt("API key", hide_input=True)
+        CustomProviderRegistry(AutoBrainPaths.from_home().root).add(config, secret)
+    except (CustomProviderError, ValueError, OSError) as exc:
+        typer.echo(f"FAILED: {exc}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"custom provider registered: {config.provider_id}")
+
+
+@provider_app.command("status")
+def provider_status(
+    provider_id: Annotated[str | None, typer.Argument(help="Provider name; omit for all.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit JSON status.")] = False,
+) -> None:
+    """Show local registration and whether a key is available (never the key)."""
+    try:
+        registry = CustomProviderRegistry(AutoBrainPaths.from_home().root)
+        statuses = (
+            [registry.status(provider_id, dict(os.environ))]
+            if provider_id
+            else [registry.status(item.provider_id, dict(os.environ)) for item in registry.list()]
+        )
+    except (CustomProviderError, ValueError, OSError) as exc:
+        typer.echo(f"FAILED: {exc}", err=True)
+        raise typer.Exit(1) from None
+    if json_output:
+        typer.echo(json.dumps([item.model_dump(mode="json") for item in statuses], indent=2))
+        return
+    for item in statuses:
+        typer.echo(f"{item.status}: {item.provider_id} ({item.endpoint}, {item.model})")
+        if item.detail:
+            typer.echo(item.detail)
+
+
+@provider_app.command("verify")
+def provider_verify(
+    provider_id: Annotated[str, typer.Argument(help="Provider name to verify.")],
+    json_output: Annotated[bool, typer.Option("--json", help="Emit JSON status.")] = False,
+) -> None:
+    """Verify the configured endpoint using the locally stored API key."""
+    try:
+        result = CustomProviderRegistry(AutoBrainPaths.from_home().root).verify(
+            provider_id, dict(os.environ)
+        )
+    except (CustomProviderError, ValueError, OSError) as exc:
+        typer.echo(f"FAILED: {exc}", err=True)
+        raise typer.Exit(1) from None
+    if json_output:
+        typer.echo(result.model_dump_json(indent=2))
+    else:
+        typer.echo(f"{result.status}: {result.provider_id}")
+        typer.echo(result.detail)
+    if result.status != "READY":
+        raise typer.Exit(1)
+
+
+@provider_app.command("remove")
+def provider_remove(
+    provider_id: Annotated[str, typer.Argument(help="Provider name to remove.")],
+    yes: Annotated[bool, typer.Option("--yes", help="Do not prompt for confirmation.")] = False,
+) -> None:
+    """Remove a local provider registration and its stored API key."""
+    if not yes and not typer.confirm(f"Remove custom provider {provider_id!r}?", default=False):
+        raise typer.Abort()
+    try:
+        CustomProviderRegistry(AutoBrainPaths.from_home().root).remove(provider_id)
+    except (CustomProviderError, ValueError, OSError) as exc:
+        typer.echo(f"FAILED: {exc}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"custom provider removed: {provider_id.casefold()}")
 
 
 @subscription_app.command("status")
@@ -216,6 +353,16 @@ def doctor(
         bool,
         typer.Option("--json", help="Emit the typed doctor report as JSON."),
     ] = False,
+    offline: Annotated[
+        bool,
+        typer.Option(
+            "--offline",
+            help=(
+                "Inspect only local config, filesystem, and executable availability; "
+                "never probe providers."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Check local runtimes, credentials, paths, pins, and callback capabilities."""
     settings = RuntimeSettings.from_environ(os.environ)
@@ -226,7 +373,7 @@ def doctor(
         callback_port_error=settings.callback_port_error,
         subscription_provider=provider,
         embedding_environ=os.environ,
-    ).run()
+    ).run(offline=offline)
     if json_output:
         typer.echo(report.model_dump_json(indent=2))
         return
@@ -331,6 +478,9 @@ def run_comparison(
             embedding_registry = embedding_registry.with_test_semantic_backend()
         if notion_only and not notion_snapshot_status.ready:
             raise ValueError("SOURCE_AUTH_UNAVAILABLE: --notion-only requires an imported snapshot")
+        custom_provider = None
+        if provider.casefold().startswith("custom:"):
+            custom_provider = CustomProviderRegistry(paths.root).get(provider.split(":", 1)[1])
         gbrain_config = (
             GBrainExecutionConfig.quick_start()
             if gbrain_provider is GBrainEmbeddingProvider.KEYWORD_ONLY
@@ -379,6 +529,7 @@ def run_comparison(
                 notion_snapshot_status.snapshot_path if notion_snapshot_status.ready else None
             ),
             gbrain_config=gbrain_config,
+            custom_provider=custom_provider,
             selected_sources=(
                 (Provider.NOTION,) if notion_only else (Provider.SLACK, Provider.NOTION)
             ),
@@ -425,7 +576,9 @@ def run_comparison(
         raise typer.Exit(1) from None
     typer.echo(f"run-id: {result.run_id}")
     typer.echo(f"status: {result.status.value}")
+    typer.echo(f"run-root: {result.run_dir.parent}")
     typer.echo(f"run-dir: {result.run_dir}")
+    typer.echo(f"inspect: autobrain runs list --run-root {result.run_dir.parent}")
     if result.report_path is not None:
         typer.echo(f"report: {result.report_path}")
     for diagnostic in result.event_sink_errors:
@@ -445,6 +598,10 @@ def _emit_run_error(error: RunInspectionError | PathConfinementError) -> NoRetur
 
 @runs_app.command("list")
 def runs_list(
+    run_root: Annotated[
+        Path | None,
+        typer.Option("--run-root", help="Run output root; defaults to ~/.autobrain/runs."),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit the validated run inventory as JSON."),
@@ -452,23 +609,105 @@ def runs_list(
 ) -> None:
     """List immutable local evaluations, including failed and incomplete runs."""
     try:
-        inventory = list_runs(AutoBrainPaths.from_home().runs)
+        inventory = list_runs(resolve_run_root(run_root))
+    except (RunInspectionError, PathConfinementError) as error:
+        _emit_run_error(error)
+    exit_after_output = inventory.status != "OK"
+    if json_output:
+        typer.echo(inventory.model_dump_json(indent=2))
+    else:
+        typer.echo(f"run-root: {resolve_run_root(run_root)}")
+        if not inventory.runs:
+            typer.echo("No immutable runs found.")
+        else:
+            for run in inventory.runs:
+                detail = f"  {run.detail}" if run.detail else ""
+                typer.echo(f"{run.run_id}  {run.status}  {run.artifact_status}{detail}")
+    if exit_after_output:
+        raise typer.Exit(1)
+
+
+@runs_app.command("explain")
+def runs_explain(
+    run_id: Annotated[str, typer.Argument(help="Immutable run ID to explain.")],
+    run_root: Annotated[
+        Path | None,
+        typer.Option("--run-root", help="Run output root; defaults to ~/.autobrain/runs."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the persisted eligibility explanation as JSON."),
+    ] = False,
+) -> None:
+    """Explain why each persisted candidate was or was not eligible."""
+    try:
+        explanation = explain_run(resolve_run_root(run_root), run_id)
     except (RunInspectionError, PathConfinementError) as error:
         _emit_run_error(error)
     if json_output:
-        typer.echo(inventory.model_dump_json(indent=2))
+        typer.echo(explanation.model_dump_json(indent=2))
         return
-    if not inventory.runs:
-        typer.echo("No immutable runs found.")
-        return
-    for run in inventory.runs:
-        typer.echo(f"{run.run_id}  {run.status}  {run.artifact_status}")
+    typer.echo(f"run-id: {explanation.run_id}")
+    typer.echo(f"status: {explanation.run_status}")
+    typer.echo(f"verdict: {explanation.verdict}")
+    typer.echo(f"decision-status: {explanation.decision_status}")
+    typer.echo(f"rationale: {explanation.rationale}")
+    for candidate in explanation.candidates:
+        candidate_id = candidate.candidate
+        reasons = candidate.eligibility_reasons
+        if candidate.eligible:
+            typer.echo(f"{candidate_id}: eligible")
+        else:
+            typer.echo(f"{candidate_id}: ineligible")
+            for reason in reasons:
+                typer.echo(f"  - {reason}")
+
+
+@runs_app.command("verify")
+def runs_verify(
+    run_id: Annotated[str, typer.Argument(help="Immutable run ID to verify.")],
+    run_root: Annotated[
+        Path | None,
+        typer.Option("--run-root", help="Run output root; defaults to ~/.autobrain/runs."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the typed verification as JSON."),
+    ] = False,
+) -> None:
+    """Verify recorded immutable run artifact hashes and cross-artifact integrity."""
+    try:
+        verification = verify_run(resolve_run_root(run_root), run_id)
+    except (RunInspectionError, PathConfinementError) as error:
+        _emit_run_error(error)
+    if json_output:
+        typer.echo(verification.model_dump_json(indent=2))
+    else:
+        typer.echo(f"status: {verification.status.value}")
+        typer.echo(f"run-id: {verification.run_id}")
+        if verification.detail:
+            typer.echo(verification.detail)
+        for artifact in verification.artifacts:
+            state = (
+                "NOT_RECORDED"
+                if artifact.matches is None
+                else "MATCH"
+                if artifact.matches
+                else "MISMATCH"
+            )
+            typer.echo(f"{artifact.path}: {state}")
+    if verification.status is not RunVerificationStatus.VALID:
+        raise typer.Exit(1)
 
 
 @runs_app.command("compare")
 def runs_compare(
     left_run_id: Annotated[str, typer.Argument(help="First immutable run ID.")],
     right_run_id: Annotated[str, typer.Argument(help="Second immutable run ID.")],
+    run_root: Annotated[
+        Path | None,
+        typer.Option("--run-root", help="Run output root; defaults to ~/.autobrain/runs."),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit the typed comparison as JSON."),
@@ -484,7 +723,7 @@ def runs_compare(
     """Compare provenance, hashes, metrics, eligibility, and verdict."""
     try:
         comparison = compare_runs(
-            AutoBrainPaths.from_home().runs,
+            resolve_run_root(run_root),
             left_run_id,
             right_run_id,
             allow_different_corpus=allow_different_corpus,
@@ -504,18 +743,21 @@ def runs_compare(
 @app.command("report")
 def reopen_report(
     run_id: Annotated[str, typer.Argument(help="Immutable run ID to reopen.")],
+    run_root: Annotated[
+        Path | None,
+        typer.Option("--run-root", help="Run output root; defaults to ~/.autobrain/runs."),
+    ] = None,
     no_open: Annotated[
         bool,
         typer.Option("--no-open", help="Print the report path without opening it."),
     ] = False,
 ) -> None:
     """Reopen a local report by run ID without rerunning or changing evidence."""
-    paths = AutoBrainPaths.from_home()
-    roots = [paths.runs]
-    configured_root = os.environ.get("AUTOBRAIN_RUN_ROOT")
-    if configured_root:
-        roots.insert(0, Path(configured_root))
-    run_dir = locate_run(run_id, roots=roots)
+    try:
+        root = resolve_run_root(run_root)
+    except PathConfinementError as error:
+        _emit_run_error(error)
+    run_dir = locate_run(run_id, roots=[root])
     if run_dir is None:
         typer.echo(f"FAILED: run not found: {run_id}", err=True)
         raise typer.Exit(1)
@@ -530,15 +772,15 @@ def reopen_report(
     typer.echo(f"report: {report_path}")
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command("serve")
 def serve_local_fixture(
     run_dir: Annotated[
         Path | None,
         typer.Option("--run-dir", help="Directory holding the comparison.json to publish."),
+    ] = None,
+    run_root: Annotated[
+        Path | None,
+        typer.Option("--run-root", help="Run output root; defaults to ~/.autobrain/runs."),
     ] = None,
     port: Annotated[
         int,
@@ -559,7 +801,29 @@ def serve_local_fixture(
     is never exposed to a network, and is not a hosted deployment. Only browser
     origins on localhost or 127.0.0.1 are granted CORS access.
     """
-    target = run_dir if run_dir is not None else AutoBrainPaths.from_home().runs
+    try:
+        configured_root = run_root is not None or os.environ.get("AUTOBRAIN_RUN_ROOT") is not None
+        if run_dir is None:
+            target = resolve_run_root(run_root)
+        else:
+            target = run_dir
+            if target.is_symlink():
+                raise PathConfinementError(f"run directory cannot be a symlink: {target}")
+            if configured_root:
+                root = resolve_run_root(run_root)
+                canonical_root = root.resolve()
+                canonical_target = target.resolve(strict=False)
+                if (
+                    not target.is_dir()
+                    or not is_valid_run_id(target.name)
+                    or target.resolve().parent != canonical_root
+                    or not canonical_target.is_relative_to(canonical_root)
+                ):
+                    raise PathConfinementError(
+                        f"run directory is not a valid run under configured root: {target}"
+                    )
+    except PathConfinementError as error:
+        _emit_run_error(error)
     outcome = outcome_for_run_dir(target)
     if check:
         if json_output:
@@ -603,3 +867,7 @@ def serve_local_fixture(
                     typer.echo("stopped")
     except KeyboardInterrupt:
         pass
+
+
+if __name__ == "__main__":
+    app()

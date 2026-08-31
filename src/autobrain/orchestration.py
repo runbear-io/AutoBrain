@@ -37,6 +37,7 @@ from autobrain.benchmark import (
 from autobrain.cancellation import RunCancellation, RunCancelled
 from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.corpus import canonical_corpus_identity, normalize_raw_items
+from autobrain.custom_provider import CustomProviderConfig, CustomProviderRegistry
 from autobrain.decision import eligibility_reasons, select_winner
 from autobrain.embedding import (
     EmbeddingBackend,
@@ -428,6 +429,7 @@ class RunConfig:
     gbrain_config: GBrainExecutionConfig = field(
         default_factory=GBrainExecutionConfig.quick_start, repr=False
     )
+    custom_provider: CustomProviderConfig | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.budget_usd <= 0:
@@ -439,10 +441,17 @@ class RunConfig:
         if self.output is not None:
             AutoBrainPaths.validate_output_root(self.output)
         subscription_modes = {f"{provider.value}-subscription" for provider in ProviderId}
-        if self.provider_mode not in {"api", *subscription_modes}:
-            raise ValueError("provider_mode must be api or <codex|claude|kimi|grok>-subscription")
+        custom_mode = self.provider_mode.casefold().startswith("custom:")
+        if self.provider_mode not in {"api", *subscription_modes} and not custom_mode:
+            raise ValueError(
+                "provider_mode must be api, custom:<id>, or <codex|claude|kimi|grok>-subscription"
+            )
+        if custom_mode and self.custom_provider is None:
+            raise ValueError("custom provider mode requires custom_provider configuration")
         requested_embedding = self.embedding_backend or (
-            EmbeddingBackend.OPENAI if self.provider_mode == "api" else EmbeddingBackend.LOCAL_HASH
+            EmbeddingBackend.OPENAI
+            if self.provider_mode == "api" or custom_mode
+            else EmbeddingBackend.LOCAL_HASH
         )
         embedding = EmbeddingBackendConfig.from_environ(
             {},
@@ -450,8 +459,10 @@ class RunConfig:
             registry=self.embedding_registry,
         )
         object.__setattr__(self, "embedding_backend", embedding.backend)
-        if self.provider_mode == "api" and embedding.backend != EmbeddingBackend.OPENAI.value:
-            raise ValueError("api provider mode requires embedding_backend=openai")
+        if (
+            self.provider_mode == "api" or custom_mode
+        ) and embedding.backend != EmbeddingBackend.OPENAI.value:
+            raise ValueError("requires embedding_backend=openai for api and custom provider modes")
         if not self.selected_sources:
             raise ValueError("selected_sources must include Slack or Notion")
         if len(set(self.selected_sources)) != len(self.selected_sources):
@@ -526,6 +537,8 @@ def _default_candidate_builder(
     api_key: str,
     budget_usd: float,
     provider_upstream: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    base_url: str | None = None,
+    provider_model: str | None = None,
     candidate_ids: tuple[CandidateId, ...] = tuple(CandidateId),
     gbrain_config: GBrainExecutionConfig | None = None,
 ) -> Sequence[Candidate]:
@@ -536,6 +549,8 @@ def _default_candidate_builder(
         api_key=api_key,
         budget_usd=budget_usd,
         provider_upstream=provider_upstream,
+        base_url=base_url,
+        provider_model=provider_model,
         candidate_ids=candidate_ids,
         gbrain_config=gbrain_config,
     )
@@ -653,7 +668,12 @@ class RunOrchestrator:
                 cancellation=cancellation,
             )
 
+        custom_provider = config.custom_provider
         resolved_api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
+        if custom_provider is not None and api_key is None:
+            resolved_api_key = CustomProviderRegistry(state_root).credential(
+                custom_provider.provider_id, dict(os.environ)
+            )
         embedding_config = config.embedding_config(
             environ=os.environ,
             api_key=(
@@ -798,6 +818,14 @@ class RunOrchestrator:
                     api_key,
                     budget_usd,
                     provider_upstream=subscription_upstream,
+                    base_url=(
+                        config.custom_provider.endpoint
+                        if config.custom_provider is not None
+                        else None
+                    ),
+                    provider_model=(
+                        config.custom_provider.model if config.custom_provider is not None else None
+                    ),
                     candidate_ids=config.selected_candidates,
                     gbrain_config=config.gbrain_config,
                 )
@@ -1022,6 +1050,11 @@ class RunOrchestrator:
                 "include_dms": self.config.include_dms,
                 "open_report": self.config.open_report,
                 "provider_mode": self.config.provider_mode,
+                "custom_provider": (
+                    self.config.custom_provider.safe_metadata()
+                    if self.config.custom_provider is not None
+                    else None
+                ),
                 "embedding_backend": self._embedding_descriptor.selector,
                 "selected_sources": [provider.value for provider in self.config.selected_sources],
                 "selected_candidates": [
@@ -1542,12 +1575,27 @@ class RunOrchestrator:
         provider: object = _LocalBenchmarkProvider()
         if (
             self._provider_key
-            and self.config.provider_mode == "api"
+            and (
+                self.config.provider_mode == "api"
+                or self.config.provider_mode.casefold().startswith("custom:")
+            )
             and self._candidate_builder is None
         ):
             from autobrain.benchmark import OpenAICompatibleBenchmarkProvider
 
-            provider = OpenAICompatibleBenchmarkProvider.from_api_key(self._provider_key)
+            provider = OpenAICompatibleBenchmarkProvider.from_api_key(
+                self._provider_key,
+                base_url=(
+                    self.config.custom_provider.endpoint
+                    if self.config.custom_provider is not None
+                    else None
+                ),
+                model_name=(
+                    self.config.custom_provider.model
+                    if self.config.custom_provider is not None
+                    else "gpt-5-mini"
+                ),
+            )
         normalized = self._cache.normalized_documents([dict(document) for document in documents])
         return build_benchmark(
             threads=threads,

@@ -283,12 +283,14 @@ class OpenAICompatibleBenchmarkProvider:
         client: _OpenAICompatibleClient,
         input_usd_per_million: float = 0.25,
         output_usd_per_million: float = 2.0,
+        model_name: str = MODEL_NAME,
     ) -> None:
         if input_usd_per_million < 0 or output_usd_per_million < 0:
             raise ValueError("generation prices cannot be negative")
         self.client = client
         self.input_usd_per_million = input_usd_per_million
         self.output_usd_per_million = output_usd_per_million
+        self.model_name = model_name
 
     @classmethod
     def from_api_key(
@@ -297,6 +299,7 @@ class OpenAICompatibleBenchmarkProvider:
         *,
         base_url: str | None = None,
         timeout_seconds: float = 60.0,
+        model_name: str = MODEL_NAME,
     ) -> OpenAICompatibleBenchmarkProvider:
         """Construct the same run-local OpenAI-compatible client used by candidates."""
         if not api_key:
@@ -307,7 +310,7 @@ class OpenAICompatibleBenchmarkProvider:
         kwargs: dict[str, Any] = {"api_key": api_key, "timeout": timeout_seconds}
         if base_url is not None:
             kwargs["base_url"] = base_url
-        return cls(client=cast(_OpenAICompatibleClient, OpenAI(**kwargs)))
+        return cls(client=cast(_OpenAICompatibleClient, OpenAI(**kwargs)), model_name=model_name)
 
     def generate(
         self,
@@ -319,10 +322,10 @@ class OpenAICompatibleBenchmarkProvider:
         timeout_seconds: float,
     ) -> GenerationResponse:
         """Generate one bounded JSON case and attach raw token/cost evidence."""
-        if model != MODEL_NAME or temperature != TEMPERATURE:
+        if model != self.model_name or temperature != TEMPERATURE:
             raise BenchmarkProviderError("provider model and temperature are fixed by Task 5")
         response = self.client.chat.completions.create(
-            model=MODEL_NAME,
+            model=self.model_name,
             temperature=TEMPERATURE,
             seed=seed,
             timeout=timeout_seconds,

@@ -8,7 +8,6 @@ adapters into the orchestration protocol.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -40,6 +39,7 @@ from autobrain.candidates.mem0 import (
 )
 from autobrain.connectors.notion_snapshot import NotionSnapshotConnector
 from autobrain.connectors.slack_export import SlackExportConnector, SlackExportCrawlResult
+from autobrain.corpus import canonical_corpus_identity
 from autobrain.lifecycle import CleanupReceipt
 from autobrain.mcp.transport import StreamableHttpConnection
 from autobrain.metering import (
@@ -80,16 +80,20 @@ def _required_resource(provider: Provider) -> str:
 def _provider_upstream(
     api_key: str,
     base_url: str | None,
+    provider_model: str | None = None,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     root = (base_url or "https://api.openai.com/v1").rstrip("/")
 
     def request(payload: dict[str, Any]) -> dict[str, Any]:
-        model = str(payload.get("model", ""))
+        outgoing_payload = dict(payload)
+        model = str(outgoing_payload.get("model", ""))
+        if provider_model is not None and not model.startswith("text-embedding"):
+            outgoing_payload["model"] = provider_model
         suffix = "/embeddings" if model.startswith("text-embedding") else "/chat/completions"
         endpoint = root + suffix if root.endswith("/v1") else root + "/v1" + suffix
         outgoing = urllib.request.Request(
             endpoint,
-            data=json.dumps(payload).encode("utf-8"),
+            data=json.dumps(outgoing_payload).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -142,11 +146,7 @@ def _provider_spans(
 
 
 def _native_corpus(context: CandidateContext) -> CorpusIdentity:
-    payload = [document.model_dump(mode="json") for document in context.normalized_documents]
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    return CorpusIdentity(sha256=digest, document_count=len(payload))
+    return canonical_corpus_identity(context.normalized_documents)
 
 
 def _native_result(
@@ -813,6 +813,7 @@ def build_production_candidates(
     base_url: str | None = None,
     budget_usd: float = 25.0,
     provider_upstream: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    provider_model: str | None = None,
     candidate_ids: Sequence[CandidateId] = tuple(CandidateId),
     gbrain_config: GBrainExecutionConfig | None = None,
 ) -> tuple[Candidate, ...]:
@@ -822,7 +823,7 @@ def build_production_candidates(
     native_root = run_dir / "native"
     price_sheet = load_price_sheet()
     budget = MeteringBudget(budget_usd, price_sheet)
-    upstream = provider_upstream or _provider_upstream(api_key, base_url)
+    upstream = provider_upstream or _provider_upstream(api_key, base_url, provider_model)
     proxies = {
         candidate_id: LoopbackMeteringProxy(
             upstream,
