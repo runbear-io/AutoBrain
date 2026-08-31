@@ -145,6 +145,55 @@ case. Measurements unavailable from a candidate remain explicitly incomplete.
 
 ## Start here
 
+### Web-first local experiment
+
+For a credential-free trial in the browser, start the local experiment job
+boundary and the Web app. The boundary binds `127.0.0.1` only, is
+unauthenticated, and prints its base URL as JSON:
+
+```bash
+uv run python web/e2e/serve_boundary.py   # prints {"base_url": "http://127.0.0.1:<port>"}
+cd web && bun install
+VITE_LOCAL_RUNNER_URL=http://127.0.0.1:<port> bun run dev
+```
+
+Open the URL shown by Vite (`http://127.0.0.1:5173/autobrain-demo/`) and go to
+**New experiment**. Choose a subscription, import a fixture, Slack export, or
+Notion snapshot source in JSON or JSONL, and select Brain candidates. The
+Preview button stays disabled until every readiness check reports READY, the
+same rule the Python contract enforces. A submitted Preview drives the real
+create, validate, and start lifecycle; the **Results** route then shows
+per-Brain retrieval metrics and provenance, and can compare two Previews that
+share the same corpus and benchmark identity. Source content and provider
+credentials never leave your machine.
+
+Be clear about what this trial is: the harness runs the shipped job boundary
+classes with a deterministic fixture runner, so Preview metrics exercise the
+contract rather than score your corpus. Slack exports, Notion snapshots, and
+live provider execution still require their respective readiness and
+authorization, and unmet requirements surface as visible blockers.
+
+To preview a real evaluation in the browser, produce one with the CLI first
+and publish it through the local run server:
+
+```bash
+autobrain run --no-open
+autobrain runs list
+autobrain serve --run-dir ~/.autobrain/runs/<run-id>
+```
+
+Then open the **Local runner** route and choose **Read local run**. `autobrain
+serve` publishes exactly one run directory at `http://127.0.0.1:8765` and
+serves a single redacted endpoint, `/api/v1/run`; a missing or unreadable run
+is reported as an explicit failure instead of a rendered result. Use
+`autobrain serve --run-dir <run-dir> --check` to see what would be published
+without starting the server.
+
+The remaining steps below install the CLI and connect real sources; the
+[terminal cockpit](#terminal-cockpit) and [headless `autobrain run`
+interface](#headless-automation) are the advanced path and remain the
+authoritative surface for real evaluations and run comparisons.
+
 ### 1. Install AutoBrain once
 
 ```bash
@@ -392,6 +441,31 @@ not the file binaries. Private channels and DMs depend on the Slack plan and
 approved export permissions. Read the
 [Slack export guide](docs/slack-export-guide.md) before handling a team archive.
 
+### Credential-free readiness and local safety
+
+AutoBrain can validate local readiness before credentials are attached:
+
+```bash
+autobrain doctor --offline --json
+```
+
+Offline doctor checks local directories, installed executable presence, candidate
+pins, and the registered local source transport. It does **not** probe provider
+credentials, network services, callback binding, browser availability, or model
+versions; a `NOT_PROBED` result is intentional and normal-mode `autobrain doctor`
+is required for live readiness.
+
+Provider subprocess output is captured in bounded temporary files and returned
+with a fixed size limit, so unusually verbose subscription tools cannot grow
+memory without bound. Diagnostics remain sanitized and bounded; credentials are
+not persisted by this capture path.
+
+Slack export parsing also hashes the archive before and after a complete read.
+If the ZIP is replaced or modified while it is being inspected, AutoBrain stops
+with a typed source-changed error instead of producing a partial or misleading
+source result. A configured archive must still pass the normal SHA-256 status
+check before a run.
+
 ### Notion
 
 Notion uses the hosted read-only Notion MCP server with dynamic client
@@ -558,6 +632,7 @@ autobrain subscription setup             Start user-driven ChatGPT login
 autobrain subscription status            Check local subscription capability
 autobrain subscription ask               Run one read-only subscription prompt
 autobrain run                            Execute a new evaluation run
+autobrain serve --run-dir <dir>          Publish one run projection on loopback
 autobrain report                         Reopen an existing report
 ```
 
@@ -652,6 +727,16 @@ uv run pytest -q
 uv build --offline
 ```
 
+The Web app under `web/` uses Bun, Vite, and TypeScript:
+
+```bash
+cd web
+bun install
+bun run typecheck
+bun test
+bun run e2e   # boots the real loopback job boundary and drives Chromium
+```
+
 The current validated baseline is:
 
 ```text
@@ -691,6 +776,11 @@ knowledge platform. In particular:
    universal ranking of knowledge systems.
 7. The interactive cockpit requires a TTY with at least `60x23` terminal
    cells; non-interactive environments should use `autobrain run`.
+8. The Web app is an internal preview. Its dashboard screens use deterministic
+   synthetic data, the local run server is an unauthenticated loopback
+   fixture, and the experiment Preview boundary currently scores through a
+   deterministic fixture runner started by the development harness rather
+   than the real candidate pipeline.
 
 If one of these limitations changes, the report contract and README should
 change with it.
