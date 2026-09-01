@@ -6,10 +6,10 @@
   "license": "MIT",
   "source": {
     "version": "0.1.2",
-    "status": "prepared",
-    "url": "https://github.com/runbear-io/AutoBrain/releases/download/UNAPPROVED/autobrain-0.1.2.tar.gz",
-    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "reviewed_commit": null,
+    "status": "approved",
+    "url": "https://github.com/runbear-io/AutoBrain/releases/download/v0.1.2/autobrain-0.1.2.tar.gz",
+    "sha256": "a38109e593864430812063c6bbca60337cfd18a2a6a3e779d187ba3b581cb6bc",
+    "reviewed_commit": "95c3336e06e40dd033a22a5d620cf05ee0be0860",
     "tree_sha256": "f9b3ac8355703cfb58ea1386ecac37d8238bc4fefb25a79e2e440acbc6f7cb93"
   },
   "head": {
