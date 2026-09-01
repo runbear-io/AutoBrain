@@ -134,7 +134,7 @@ async function submitPreview() {
   }) as typeof fetch;
 
   click(navButton("New experiment"));
-  click(testId("source-option-slack-export"));
+  click(testId("source-option-notion-snapshot"));
   click(testId("candidate-option-gbrain"));
   click(testId("subscription-option-codex"));
   await clickAsync(testId("submit-preview"));

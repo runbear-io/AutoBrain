@@ -76,7 +76,7 @@ function openWizard() {
 /** Drive the wizard to a ready official-source configuration. */
 function configureOfficialPreview() {
   openWizard();
-  click(testId("source-option-slack-export"));
+  click(testId("source-option-notion-snapshot"));
   click(testId("candidate-option-gbrain"));
   click(testId("subscription-option-codex"));
 }
@@ -108,7 +108,8 @@ describe("experiment setup wizard reachability", () => {
     openWizard();
     expect(container.querySelector('[data-testid="source-option-fixture"]')).toBeNull();
     expect(container.querySelector('[data-testid="source-option-local-file"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="source-option-slack-export"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="source-option-notion-snapshot"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="source-option-slack-export"]')).toBeNull();
   });
 
   test("the wizard states that it drives the local boundary, not a hosted service", () => {
@@ -178,11 +179,12 @@ describe("configuring a preview without the CLI", () => {
     }
   });
 
-  test("a gated source blocks the run with its remediation on screen", () => {
-    configureOfficialPreview();
-    click(testId("source-option-approved-read-only-connector"));
-    expect((testId("submit-preview") as HTMLButtonElement).disabled).toBe(true);
-    expect(testId("readiness-blockers").textContent?.toLowerCase()).toContain("approval");
+  test("gated sources are omitted from official setup", () => {
+    openWizard();
+    expect(container.querySelector('[data-testid="source-option-slack-export"]')).toBeNull();
+    expect(
+      container.querySelector('[data-testid="source-option-approved-read-only-connector"]'),
+    ).toBeNull();
   });
 
   test("malformed JSONL shows the offending line and blocks submission", () => {
