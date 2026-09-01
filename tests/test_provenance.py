@@ -615,8 +615,12 @@ def test_orchestration_uses_runtime_subscription_identity_for_provenance(tmp_pat
     assert manifest["provenance"]["chat"] == runtime_chat.model_dump(mode="json")
 
 
-def test_existing_schema_v1_manifest_reopens_read_only() -> None:
-    path = Path("/Users/kimbwook/.autobrain/runs/20260819T011402Z-d1c62299/manifest.json")
+def test_existing_schema_v1_manifest_reopens_read_only(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text(
+        json.dumps({"schema_version": 1, "run_id": "20260819T011402Z-d1c62299"}),
+        encoding="utf-8",
+    )
     before = path.read_bytes()
 
     loaded = load_manifest(path)
