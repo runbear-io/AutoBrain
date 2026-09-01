@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import cast
 from unittest.mock import patch
+from urllib.request import Request
 
 import pytest
 
@@ -507,7 +508,7 @@ class TestExistingBackendsUnchanged:
             base_url="http://127.0.0.1:1234/v1/",
         )
 
-        captured: list[object] = []
+        captured: list[Request] = []
 
         class _Response:
             def __enter__(self) -> _Response:
@@ -519,7 +520,7 @@ class TestExistingBackendsUnchanged:
             def read(self) -> bytes:
                 return b'{"object":"list","data":[]}'
 
-        def fake_urlopen(request: object, timeout: float = 30) -> _Response:
+        def fake_urlopen(request: Request, timeout: float = 30) -> _Response:
             del timeout
             captured.append(request)
             return _Response()
