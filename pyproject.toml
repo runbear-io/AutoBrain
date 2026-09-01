@@ -32,7 +32,7 @@ autobrain-verify-formula = "autobrain.release_formula:main"
 [dependency-groups]
 dev = [
   "basedpyright>=1.31,<2",
-  "pytest>=8.4,<9",
+  "pytest>=8.4,<10",
   "ruff>=0.12,<1",
 ]
 
