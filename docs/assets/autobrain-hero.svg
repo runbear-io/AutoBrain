@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300"
+     role="img" aria-labelledby="hero-title hero-desc" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Helvetica Neue', Helvetica, sans-serif">
+  <title id="hero-title">AutoBrain: compare three candidate Brains on one frozen corpus</title>
+  <desc id="hero-desc">AutoBrain freezes one corpus from your Notion snapshot and local files, asks every candidate Brain the same grounded questions, and reports quality, latency and cost side by side. Three candidate columns are shown: LLM Wiki, Mem0 OSS and GBrain, each with a quality, latency and cost readout. The numbers are an illustrative layout, not a benchmark result: GBrain's cost reads &#8220;unknown&#8221; rather than $0, because telemetry a candidate does not expose is never treated as zero. Evidence gates can withhold a recommendation entirely.</desc>
+
+  <style>
+    /* AutoBrain design tokens (mirrors web/src/styles/tokens.css + themes.css).
+       Light role bindings are the default; the dark surface re-points the same
+       semantic roles so the asset stays readable on GitHub's dark theme. */
+    :root {
+      --palette-ink-900: #10131c; --palette-ink-600: #384057; --palette-ink-500: #5a6480;
+      --palette-ink-400: #808aa6; --palette-ink-300: #a8b0c6; --palette-ink-200: #cbd1e0;
+      --palette-ink-100: #e4e8f1; --palette-ink-050: #f1f3f8; --palette-ink-025: #f8f9fc;
+      --palette-white: #ffffff;
+      --palette-violet-500: #7c4dee; --palette-violet-400: #9d79f5;
+      --palette-cyan-600: #0a7f9c;  --palette-cyan-400: #46c5e2;
+      --palette-amber-500: #d08908; --palette-amber-400: #efb43c;
+      --palette-blue-500: #3b6ef0;  --palette-blue-400: #6d95f7;
+      --palette-green-600: #177a4d; --palette-green-400: #45c489;
+
+      /* semantic roles - light */
+      --bg-canvas: var(--palette-ink-025);
+      --bg-surface: var(--palette-white);
+      --bg-sunken: var(--palette-ink-050);
+      --text-primary: var(--palette-ink-900);
+      --text-secondary: var(--palette-ink-600);
+      --text-tertiary: var(--palette-ink-500);
+      --line-subtle: var(--palette-ink-100);
+      --line-default: var(--palette-ink-200);
+      --accent-primary: var(--palette-blue-500);
+      --status-success: var(--palette-green-600);
+      --candidate-llm-wiki: var(--palette-cyan-600);
+      --candidate-mem0: var(--palette-amber-500);
+      --candidate-gbrain: var(--palette-violet-500);
+      --track: var(--palette-ink-100);
+
+      /* type scale */
+      --text-h1: 34px; --text-h3: 18px; --text-body: 15px;
+      --text-small: 13px; --text-caption: 12px; --text-micro: 11px;
+      --weight-regular: 400; --weight-medium: 500; --weight-semibold: 600; --weight-bold: 700;
+      --tracking-tight: -0.02em; --tracking-caps: 0.09em;
+      --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-canvas: #0a0c12;
+        --bg-surface: #151926;
+        --bg-sunken: #1b2030;
+        --text-primary: #eef1f8;
+        --text-secondary: var(--palette-ink-300);
+        --text-tertiary: var(--palette-ink-400);
+        --line-subtle: #1b2030;
+        --line-default: #262d42;
+        --accent-primary: var(--palette-blue-400);
+        --status-success: var(--palette-green-400);
+        --candidate-llm-wiki: var(--palette-cyan-400);
+        --candidate-mem0: var(--palette-amber-400);
+        --candidate-gbrain: var(--palette-violet-400);
+        --track: #262d42;
+      }
+    }
+
+    .canvas   { fill: var(--bg-canvas); }
+    .card     { fill: var(--bg-surface); stroke: var(--line-default); stroke-width: 1; }
+    .inset    { fill: var(--bg-sunken); stroke: var(--line-subtle); stroke-width: 1; }
+    .rule     { stroke: var(--line-default); stroke-width: 1; }
+    .track    { fill: var(--track); }
+
+    .h1       { fill: var(--text-primary); font-size: var(--text-h1); font-weight: var(--weight-bold); letter-spacing: var(--tracking-tight); }
+    .lede     { fill: var(--text-secondary); font-size: var(--text-body); font-weight: var(--weight-regular); }
+    .name     { fill: var(--text-primary); font-size: var(--text-h3); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-tight); }
+    .label    { fill: var(--text-tertiary); font-size: var(--text-micro); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-caps); }
+    .metric   { fill: var(--text-primary); font-size: var(--text-small); font-weight: var(--weight-semibold); font-family: var(--font-mono); }
+    .unit     { fill: var(--text-tertiary); font-size: var(--text-caption); font-family: var(--font-mono); }
+    .note     { fill: var(--text-tertiary); font-size: var(--text-caption); }
+    .gate     { fill: var(--status-success); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+  </style>
+
+  <rect class="canvas" width="960" height="300" rx="10" />
+
+  <!-- ── left: proposition ─────────────────────────────────────────── -->
+  <g transform="translate(40 40)">
+    <text class="label" x="0" y="12">ONE FROZEN CORPUS &#183; THREE CANDIDATES</text>
+    <text class="h1" x="0" y="56">Which Brain should</text>
+    <text class="h1" x="0" y="94">you build on?</text>
+    <text class="lede" x="0" y="130">Same corpus. Same grounded questions.</text>
+    <text class="lede" x="0" y="152">Measured quality, latency and cost.</text>
+
+    <g transform="translate(0 180)">
+      <rect class="inset" x="0" y="0" width="322" height="40" rx="6" />
+      <circle cx="20" cy="20" r="4" fill="var(--status-success)" />
+      <text class="gate" x="34" y="17">Evidence gates decide eligibility</text>
+      <text class="note" x="34" y="32">A weak run returns NO_RECOMMENDATION.</text>
+    </g>
+  </g>
+
+  <line class="rule" x1="408" y1="40" x2="408" y2="260" />
+
+  <!-- ── right: candidate scorecards ───────────────────────────────── -->
+  <g transform="translate(448 40)">
+    <text class="label" x="0" y="12">CANDIDATE SCORECARDS</text>
+
+    <!-- LLM Wiki -->
+    <g transform="translate(0 28)">
+      <rect class="card" x="0" y="0" width="472" height="60" rx="6" />
+      <rect x="0" y="0" width="3" height="60" rx="1.5" fill="var(--candidate-llm-wiki)" />
+      <text class="name" x="18" y="26">LLM Wiki</text>
+      <text class="label" x="18" y="45">QUALITY</text>
+      <rect class="track" x="76" y="38" width="120" height="6" rx="3" />
+      <rect x="76" y="38" width="88" height="6" rx="3" fill="var(--candidate-llm-wiki)" />
+      <text class="metric" x="206" y="45">82</text>
+      <text class="unit" x="228" y="45">/100</text>
+      <text class="label" x="296" y="26">P95</text>
+      <text class="metric" x="296" y="45">1.4</text>
+      <text class="unit" x="320" y="45">s</text>
+      <text class="label" x="386" y="26">COST</text>
+      <text class="metric" x="386" y="45">$2.10</text>
+    </g>
+
+    <!-- Mem0 OSS -->
+    <g transform="translate(0 100)">
+      <rect class="card" x="0" y="0" width="472" height="60" rx="6" />
+      <rect x="0" y="0" width="3" height="60" rx="1.5" fill="var(--candidate-mem0)" />
+      <text class="name" x="18" y="26">Mem0 OSS</text>
+      <text class="label" x="18" y="45">QUALITY</text>
+      <rect class="track" x="76" y="38" width="120" height="6" rx="3" />
+      <rect x="76" y="38" width="94" height="6" rx="3" fill="var(--candidate-mem0)" />
+      <text class="metric" x="206" y="45">78</text>
+      <text class="unit" x="228" y="45">/100</text>
+      <text class="label" x="296" y="26">P95</text>
+      <text class="metric" x="296" y="45">0.9</text>
+      <text class="unit" x="320" y="45">s</text>
+      <text class="label" x="386" y="26">COST</text>
+      <text class="metric" x="386" y="45">$1.40</text>
+    </g>
+
+    <!-- GBrain -->
+    <g transform="translate(0 172)">
+      <rect class="card" x="0" y="0" width="472" height="60" rx="6" />
+      <rect x="0" y="0" width="3" height="60" rx="1.5" fill="var(--candidate-gbrain)" />
+      <text class="name" x="18" y="26">GBrain</text>
+      <text class="label" x="18" y="45">QUALITY</text>
+      <rect class="track" x="76" y="38" width="120" height="6" rx="3" />
+      <rect x="76" y="38" width="71" height="6" rx="3" fill="var(--candidate-gbrain)" />
+      <text class="metric" x="206" y="45">64</text>
+      <text class="unit" x="228" y="45">/100</text>
+      <text class="label" x="296" y="26">P95</text>
+      <text class="metric" x="296" y="45">2.2</text>
+      <text class="unit" x="320" y="45">s</text>
+      <text class="label" x="386" y="26">COST</text>
+      <text class="unit" x="386" y="45">unknown</text>
+    </g>
+  </g>
+
+  <text class="note" x="448" y="286">Illustrative layout, not a benchmark result. Unavailable telemetry stays &#8220;unknown&#8221;.</text>
+</svg>

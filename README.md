@@ -21,6 +21,11 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="docs/assets/autobrain-hero.svg" width="960"
+       alt="AutoBrain compares three candidate Brains on one frozen corpus. Illustrative scorecards for LLM Wiki, Mem0 OSS, and GBrain show quality out of 100, p95 latency, and measured cost side by side; GBrain's cost reads &quot;unknown&quot; rather than $0. Evidence gates decide eligibility, and a weak run returns NO_RECOMMENDATION." />
+</p>
+
 Your company wants an AI Brain: a knowledge and memory architecture that can
 answer questions from the information your team already has. But which one
 should you actually build on?
@@ -29,12 +34,17 @@ should you actually build on?
 - **Mem0 OSS**
 - **GBrain**
 
-AutoBrain is an **automatic evaluation and best-Brain selection tool** for that
-decision. It tests the candidates with the same company data and grounded
-questions, compares the three core outcomes—**quality, latency, and cost**—then
-recommends the strongest eligible Brain. Evidence support and reliability act
-as safety gates, and AutoBrain honestly returns `NO_RECOMMENDATION` when the
-evidence is not good enough.
+AutoBrain is a **local evaluation harness** for that decision. It tests the
+candidates with the same company data and grounded questions, then compares the
+three core outcomes—**quality, latency, and cost**—so you can see which
+candidate performed best on your own knowledge. Evidence support and
+reliability act as safety gates, and AutoBrain returns `NO_RECOMMENDATION`
+whenever the evidence is not good enough to separate the candidates.
+
+Treat the result as measured evidence for the corpus and questions in that
+specific run, not as a general ranking of knowledge systems. AutoBrain is an
+experimental local retrieval diagnostic, not a hosted, recommendation-grade
+service.
 
 ## Input → evaluation → output
 
@@ -86,7 +96,7 @@ EVIDENCE
 ```
 
 The output is not a generic vendor ranking. It answers which candidate
-performed best for the frozen Slack and Notion knowledge in that specific run.
+performed best for the knowledge frozen in that specific run.
 Secondary telemetry that a candidate does not expose remains `unknown`; it is
 never guessed or silently treated as zero.
 
@@ -145,6 +155,15 @@ size, source coverage, candidate failures, and the evidence behind each scored
 case. Measurements unavailable from a candidate remain explicitly incomplete.
 
 ## Start here
+
+<p align="center">
+  <img src="docs/assets/autobrain-user-journey.svg" width="960"
+       alt="The AutoBrain user journey in five stages. 1, Install with brew on Apple Silicon macOS. 2, Connect the ChatGPT subscription that writes and scores the grounded questions. 3, Add knowledge: a Notion snapshot, JSON or JSONL records, or one Markdown, TXT, or HTML file. 4, Run, which freezes one corpus, keeps evaluator holdouts apart, and drives three native candidate lifecycles. 5, Read the report for quality, latency, cost, and per-case evidence, or NO_RECOMMENDATION. A separate gated branch notes that the Slack export ZIP and live Slack MCP remain advanced/future functionality outside public v1. Every run writes a new immutable run directory, and a failed run stays inspectable." />
+</p>
+
+The five stages below follow that path. The Notion snapshot and local
+JSON/JSONL/Markdown/TXT/HTML inputs are the public v1 sources; Slack is not
+part of this setup and stays behind an explicit advanced/future gate.
 
 ### Web-first local experiment
 
@@ -214,29 +233,24 @@ The ChatGPT subscription is required for grounded question generation and
 isolated evaluation. This command opens an explicit user-driven authorization
 flow. An OpenAI API key is not required.
 
-### 3. Download your Slack export
+### 3. Add your knowledge
 
-In Slack, open:
-
-```text
-Admin -> Workspace settings -> Security -> Import & export data -> Export
-```
-
-Choose a date range, start the export, and download the ZIP when Slack emails
-you. Keep the file zipped. See the
-[friendly Slack export guide](docs/slack-export-guide.md) for permissions,
-plan limitations, and troubleshooting.
-
-### 4. Give AutoBrain the ZIP
+Check that a bounded local document is readable before a run. This inspects
+readiness only; it does not upload or copy the file:
 
 ```bash
-autobrain source slack --export ~/Downloads/slack-export.zip
+autobrain source local-file ~/Documents/handbook.md --json
+autobrain source status --json
 ```
 
-AutoBrain validates the archive and stores only its local path, SHA-256, and a
-non-sensitive summary. It does not create a second permanent copy.
+One Markdown, TXT, or HTML file is read in place. Normalized JSON/JSONL records
+carry `source_id`, `title`, and `text`, and JSON also accepts the version-1
+`{schema_version, records}` envelope; those records are selected through the
+[web setup flow](#web-first-local-experiment) or the cockpit's **Local sources**
+step. A runnable experiment needs at least one knowledge source and at least two
+candidates.
 
-### 5. Optionally connect Notion
+### 4. Connect Notion
 
 Use the existing live OAuth connector:
 
@@ -263,7 +277,7 @@ warning. Snapshot coverage is always reported as partial/non-final. A Notion-onl
 run truthfully records Slack as absent and cannot produce a final recommendation.
 The existing Notion OAuth behavior is unchanged when no snapshot is configured.
 
-### 6. Run the comparison
+### 5. Run the comparison
 
 ```bash
 autobrain
@@ -295,7 +309,7 @@ AutoBrain is designed around the opposite defaults:
 
 ```mermaid
 flowchart LR
-    A[Slack + Notion] --> B[Scoped corpus]
+    A["Notion snapshot + local files"] --> B[Scoped corpus]
     B --> C[Benchmark cases]
     B --> D[Evaluator holdout]
     C --> E[LLM Wiki]

@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="268" viewBox="0 0 960 268"
+     role="img" aria-labelledby="journey-title journey-desc" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Helvetica Neue', Helvetica, sans-serif">
+  <title id="journey-title">The AutoBrain user journey, from install to an evidence-backed result</title>
+  <desc id="journey-desc">Five sequential stages. Stage 1, Install: brew install, then autobrain. Stage 2, Connect: authorize the ChatGPT subscription used for grounded questions and isolated scoring. Stage 3, Add knowledge: import a Notion snapshot, normalized JSON or JSONL records, or one Markdown, TXT or HTML file. Stage 4, Run: AutoBrain freezes one corpus, separates evaluator holdouts, and runs LLM Wiki, Mem0 OSS and GBrain through their native lifecycles. Stage 5, Read the report: an HTML report with per-candidate quality, latency and cost, plus the evidence behind every scored case; when the evidence gates fail the result is NO_RECOMMENDATION. A separate gated branch below stage 3 notes that Slack export and live Slack MCP are advanced or future functionality and are not part of public v1 setup.</desc>
+
+  <style>
+    /* AutoBrain design tokens (mirrors web/src/styles/tokens.css + themes.css). */
+    :root {
+      --palette-ink-900: #10131c; --palette-ink-600: #384057; --palette-ink-500: #5a6480;
+      --palette-ink-400: #808aa6; --palette-ink-300: #a8b0c6; --palette-ink-200: #cbd1e0;
+      --palette-ink-100: #e4e8f1; --palette-ink-050: #f1f3f8; --palette-ink-025: #f8f9fc;
+      --palette-white: #ffffff;
+      --palette-blue-600: #2450c8;  --palette-blue-500: #3b6ef0;  --palette-blue-400: #6d95f7;
+      --palette-violet-500: #7c4dee; --palette-violet-400: #9d79f5;
+      --palette-cyan-600: #0a7f9c;  --palette-cyan-400: #46c5e2;
+      --palette-green-600: #177a4d; --palette-green-400: #45c489;
+      /* amber-700 extends the shipped ramp so the caps label clears WCAG AA
+         (4.5:1) on the light sunken surface; amber-600 measures only 4.02:1. */
+      --palette-amber-700: #8a5705; --palette-amber-600: #a76a06; --palette-amber-400: #efb43c;
+
+      /* semantic roles - light */
+      --bg-canvas: var(--palette-ink-025);
+      --bg-surface: var(--palette-white);
+      --bg-sunken: var(--palette-ink-050);
+      --text-primary: var(--palette-ink-900);
+      --text-secondary: var(--palette-ink-600);
+      --text-tertiary: var(--palette-ink-500);
+      --line-subtle: var(--palette-ink-100);
+      --line-default: var(--palette-ink-200);
+      --line-strong: var(--palette-ink-300);
+      --accent-primary: var(--palette-blue-600);
+      --accent-data: var(--palette-cyan-600);
+      --accent-secondary: var(--palette-violet-500);
+      --status-success: var(--palette-green-600);
+      --status-warning: var(--palette-amber-700);
+      --step-ink: var(--palette-white);
+
+      --text-h3: 15px; --text-body: 13px; --text-caption: 12px; --text-micro: 11px;
+      --weight-medium: 500; --weight-semibold: 600; --weight-bold: 700;
+      --tracking-tight: -0.02em; --tracking-caps: 0.09em;
+      --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-canvas: #0a0c12;
+        --bg-surface: #151926;
+        --bg-sunken: #1b2030;
+        --text-primary: #eef1f8;
+        --text-secondary: var(--palette-ink-300);
+        --text-tertiary: var(--palette-ink-400);
+        --line-subtle: #1b2030;
+        --line-default: #262d42;
+        --line-strong: #384057;
+        --accent-primary: var(--palette-blue-400);
+        --accent-data: var(--palette-cyan-400);
+        --accent-secondary: var(--palette-violet-400);
+        --status-success: var(--palette-green-400);
+        --status-warning: var(--palette-amber-400);
+        --step-ink: #0a0c12;
+      }
+    }
+
+    .canvas  { fill: var(--bg-canvas); }
+    .card    { fill: var(--bg-surface); stroke: var(--line-default); stroke-width: 1; }
+    .gated   { fill: var(--bg-sunken); stroke: var(--line-default); stroke-width: 1; stroke-dasharray: 4 3; }
+    .flow    { stroke: var(--line-strong); stroke-width: 1.5; fill: none; }
+    .branch  { stroke: var(--line-default); stroke-width: 1.5; fill: none; stroke-dasharray: 4 3; }
+
+    .eyebrow { fill: var(--text-tertiary); font-size: var(--text-micro); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-caps); }
+    .step    { fill: var(--step-ink); font-size: var(--text-micro); font-weight: var(--weight-bold); }
+    .title   { fill: var(--text-primary); font-size: var(--text-h3); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-tight); }
+    .body    { fill: var(--text-secondary); font-size: var(--text-caption); }
+    .code    { fill: var(--text-secondary); font-size: var(--text-micro); font-family: var(--font-mono); }
+    .muted   { fill: var(--text-tertiary); font-size: var(--text-caption); }
+    .warnlbl { fill: var(--status-warning); font-size: var(--text-micro); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-caps); }
+    .okay    { fill: var(--status-success); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+  </style>
+
+  <rect class="canvas" width="960" height="268" rx="10" />
+
+  <text class="eyebrow" x="24" y="30">THE RUN, END TO END</text>
+
+  <!-- connectors between stages -->
+  <g class="flow">
+    <path d="M188 96 H 208" /><path d="M368 96 H 388" />
+    <path d="M548 96 H 568" /><path d="M728 96 H 748" />
+  </g>
+  <g fill="var(--line-strong)">
+    <path d="M208 96 l -6 -3.5 v 7 z" /><path d="M388 96 l -6 -3.5 v 7 z" />
+    <path d="M568 96 l -6 -3.5 v 7 z" /><path d="M748 96 l -6 -3.5 v 7 z" />
+  </g>
+
+  <!-- 1 Install -->
+  <g transform="translate(24 48)">
+    <rect class="card" width="164" height="96" rx="6" />
+    <circle cx="20" cy="22" r="9" fill="var(--accent-primary)" />
+    <text class="step" x="20" y="26" text-anchor="middle">1</text>
+    <text class="title" x="38" y="27">Install</text>
+    <text class="code" x="16" y="54">brew install \</text>
+    <text class="code" x="16" y="69">  runbear-io/autobrain</text>
+    <text class="muted" x="16" y="85">Apple Silicon macOS</text>
+  </g>
+
+  <!-- 2 Connect -->
+  <g transform="translate(204 48)">
+    <rect class="card" width="164" height="96" rx="6" />
+    <circle cx="20" cy="22" r="9" fill="var(--accent-primary)" />
+    <text class="step" x="20" y="26" text-anchor="middle">2</text>
+    <text class="title" x="38" y="27">Connect</text>
+    <text class="code" x="16" y="54">autobrain</text>
+    <text class="code" x="16" y="69">  subscription</text>
+    <text class="body" x="16" y="87">Grounded Q&#38;A, scored.</text>
+  </g>
+
+  <!-- 3 Add knowledge -->
+  <g transform="translate(384 48)">
+    <rect class="card" width="164" height="96" rx="6" />
+    <circle cx="20" cy="22" r="9" fill="var(--accent-data)" />
+    <text class="step" x="20" y="26" text-anchor="middle">3</text>
+    <text class="title" x="38" y="27">Add knowledge</text>
+    <text class="body" x="16" y="53">Notion snapshot</text>
+    <text class="body" x="16" y="70">JSON / JSONL records</text>
+    <text class="body" x="16" y="87">Markdown, TXT, HTML</text>
+  </g>
+
+  <!-- 4 Run -->
+  <g transform="translate(564 48)">
+    <rect class="card" width="164" height="96" rx="6" />
+    <circle cx="20" cy="22" r="9" fill="var(--accent-secondary)" />
+    <text class="step" x="20" y="26" text-anchor="middle">4</text>
+    <text class="title" x="38" y="27">Run</text>
+    <text class="body" x="16" y="53">One frozen corpus,</text>
+    <text class="body" x="16" y="70">holdouts kept apart,</text>
+    <text class="body" x="16" y="87">3 native lifecycles.</text>
+  </g>
+
+  <!-- 5 Read the report -->
+  <g transform="translate(744 48)">
+    <rect class="card" width="192" height="96" rx="6" />
+    <circle cx="20" cy="22" r="9" fill="var(--status-success)" />
+    <text class="step" x="20" y="26" text-anchor="middle">5</text>
+    <text class="title" x="38" y="27">Read the report</text>
+    <text class="body" x="16" y="53">Quality, latency, cost</text>
+    <text class="body" x="16" y="70">and per-case evidence.</text>
+    <text class="okay" x="16" y="87">Or NO_RECOMMENDATION.</text>
+  </g>
+
+  <!-- gated Slack branch, hanging off stage 3 -->
+  <path class="branch" d="M466 144 V 186 H 496" />
+  <g transform="translate(496 168)">
+    <rect class="gated" width="440" height="40" rx="6" />
+    <text class="warnlbl" x="16" y="17">GATED &#183; NOT PUBLIC V1</text>
+    <text class="muted" x="16" y="33">Slack export ZIP and live Slack MCP stay advanced/future functionality.</text>
+  </g>
+
+  <text class="muted" x="24" y="192">Every run writes a new</text>
+  <text class="muted" x="24" y="208">immutable run directory.</text>
+  <text class="muted" x="24" y="224">A failed run stays</text>
+  <text class="muted" x="24" y="240">inspectable.</text>
+</svg>
