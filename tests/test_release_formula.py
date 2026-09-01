@@ -290,8 +290,7 @@ def test_checked_in_manifest_binds_the_approved_v0_1_2_release() -> None:
     assert source["version"] == "0.1.2"
     assert source["status"] == "approved"
     assert source["url"] == (
-        "https://github.com/runbear-io/AutoBrain/releases/download/v0.1.2/"
-        "autobrain-0.1.2.tar.gz"
+        "https://github.com/runbear-io/AutoBrain/releases/download/v0.1.2/autobrain-0.1.2.tar.gz"
     )
     assert source["reviewed_commit"] == "95c3336e06e40dd033a22a5d620cf05ee0be0860"
     assert source["tree_sha256"] == _release_tree_sha256(ROOT)
@@ -305,11 +304,24 @@ def test_checked_in_manifest_binds_the_approved_v0_1_2_release() -> None:
         ({"status": "approved", "reviewed_commit": None}, "approved source requires"),
         ({"status": "approved", "reviewed_commit": "a" * 40, "sha256": "0" * 64}, "non-zero"),
         (
-            {"status": "approved", "reviewed_commit": "a" * 40, "sha256": "a" * 64},
+            {
+                "status": "approved",
+                "reviewed_commit": "a" * 40,
+                "sha256": "a" * 64,
+                "url": "https://example.test/UNAPPROVED/source.tar.gz",
+            },
             "UNAPPROVED",
         ),
         ({"status": "prepared", "reviewed_commit": "a" * 40}, "prepared source must not"),
-        ({"status": "prepared", "sha256": "a" * 64}, "prepared source SHA-256"),
+        (
+            {
+                "status": "prepared",
+                "sha256": "a" * 64,
+                "reviewed_commit": None,
+                "url": "https://example.test/UNAPPROVED/source.tar.gz",
+            },
+            "prepared source SHA-256",
+        ),
     ],
 )
 def test_manifest_source_state_is_fail_closed(
