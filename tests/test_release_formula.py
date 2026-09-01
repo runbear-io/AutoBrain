@@ -21,7 +21,6 @@ from autobrain.release_formula import (
     FormulaParseError,
     ReleaseSourceError,
     classify_archive,
-    generate_prepared_formula,
     load_formula_manifest,
     parse_formula,
     run_cli,
@@ -33,7 +32,7 @@ from autobrain.release_formula import generate_formula as _raw_generate_formula
 ROOT = Path(__file__).parents[1]
 FIXTURES = Path(__file__).parent / "fixtures" / "release"
 MANIFEST = ROOT / "release" / "homebrew-formula.json"
-PREPARED_TAP_FORMULA = Path(
+TAP_FORMULA = Path(
     os.environ.get(
         "AUTOBRAIN_PREPARED_TAP_FORMULA",
         ROOT.parent / "homebrew-autobrain-wt-completeness" / "Formula" / "autobrain.rb",
@@ -267,10 +266,10 @@ def test_generator_rejects_archive_from_a_different_source_tree(
         )
 
 
-def test_checked_in_prepared_release_fails_closed_with_actionable_error() -> None:
+def test_checked_in_approved_release_requires_the_bound_source_archive() -> None:
     with pytest.raises(
         ReleaseSourceError,
-        match=r"release source is not approved.*source URL.*SHA-256.*archive",
+        match=r"approved release generation requires --source-archive",
     ):
         _raw_generate_formula(
             load_formula_manifest(MANIFEST),
@@ -285,18 +284,19 @@ def test_checked_in_manifest_binds_current_release_tree_digest() -> None:
     assert source["tree_sha256"] == _release_tree_sha256(ROOT)
 
 
-def test_checked_in_manifest_rejects_retired_tag_metadata() -> None:
+def test_checked_in_manifest_binds_the_approved_v0_1_2_release() -> None:
     source = json.loads(MANIFEST.read_text())["source"]
 
-    assert source == {
-        "version": "0.1.2",
-        "status": "prepared",
-        "url": "https://github.com/runbear-io/AutoBrain/releases/download/UNAPPROVED/autobrain-0.1.2.tar.gz",
-        "sha256": "0" * 64,
-        "reviewed_commit": None,
-        "tree_sha256": _release_tree_sha256(ROOT),
-    }
-    assert "/archive/refs/tags/v0.1.2" not in source["url"]
+    assert source["version"] == "0.1.2"
+    assert source["status"] == "approved"
+    assert source["url"] == (
+        "https://github.com/runbear-io/AutoBrain/releases/download/v0.1.2/"
+        "autobrain-0.1.2.tar.gz"
+    )
+    assert source["reviewed_commit"] == "fd9b507cc69341716b8e09ff9ea5d3254668a951"
+    assert source["tree_sha256"] == _release_tree_sha256(ROOT)
+    assert len(source["sha256"]) == 64
+    assert source["sha256"] != "0" * 64
 
 
 @pytest.mark.parametrize(
@@ -536,26 +536,13 @@ def test_generated_formula_uses_one_explicit_audited_route_for_all_native_wheels
     assert "resource(name).cached_download" in generated
 
 
-def test_prepared_generator_is_byte_idempotent_and_matches_tap_formula() -> None:
-    manifest = load_formula_manifest(MANIFEST)
-    generated_once = generate_prepared_formula(
-        manifest,
-        uv_lock_path=ROOT / "uv.lock",
-        pyproject_path=ROOT / "pyproject.toml",
-    )
-    generated_twice = generate_prepared_formula(
-        manifest,
-        uv_lock_path=ROOT / "uv.lock",
-        pyproject_path=ROOT / "pyproject.toml",
-    )
+def test_published_tap_formula_matches_approved_source_metadata() -> None:
+    source = json.loads(MANIFEST.read_text())["source"]
+    formula = TAP_FORMULA.read_text(encoding="utf-8")
 
-    assert generated_once.encode() == generated_twice.encode()
-    assert generated_once.encode() == PREPARED_TAP_FORMULA.read_bytes()
-    assert "NON-PUBLISHABLE" in generated_once
-    assert (
-        'odie "AutoBrain 0.1.2 is not approved for publication or installation"' in generated_once
-    )
-    assert "/archive/refs/tags/v0.1.2" not in generated_once
+    assert f'  url "{source["url"]}"' in formula
+    assert f'  sha256 "{source["sha256"]}"' in formula
+    assert "NON-PUBLISHABLE" not in formula
 
 
 @pytest.mark.parametrize(
