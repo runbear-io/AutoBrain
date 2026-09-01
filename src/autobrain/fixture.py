@@ -6,10 +6,11 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from autobrain.cancellation import RunCancellation
 from autobrain.models import (
@@ -22,12 +23,8 @@ from autobrain.models import (
     normalize_safe_source_url,
 )
 from autobrain.orchestration import CandidateContext, CandidateOutcome, ConnectorSnapshot
+from autobrain.secrets import contains_secret
 
-_SECRET = re.compile(
-    r"(?i)(?<![a-z0-9])(?:sk-[a-z0-9_-]{8,}|xox[a-z]-[a-z0-9-]{8,}|"
-    r"bearer\s+[a-z0-9._~+/=-]{8,}|"
-    r"(?:api[_-]?key|token|password|authorization)[=: ]+[a-z0-9._~+/=-]{8,})"
-)
 _FORBIDDEN = re.compile(
     r"(?i)\b(?:oracle|holdout|reference[\s_-]*answer|expected[\s_-]*claim|raw[\s_-]*reply)\b"
 )
@@ -37,14 +34,40 @@ class FixtureValidationError(ValueError):
     """A local fixture failed its strict, non-executable contract."""
 
 
+class FixtureFaultCode(StrEnum):
+    """Closed vocabulary for describing injected fixture defects.
+
+    Faults are metadata only. They are never interpreted as instructions or
+    executed by the fixture runtime.
+    """
+
+    CONTENT_HASH_MISMATCH = "content_hash_mismatch"
+    DUPLICATE_SOURCE_ID = "duplicate_source_id"
+    MISSING_DOCUMENT = "missing_document"
+    SECRET_LIKE_CONTENT = "secret_like_content"
+    UNSAFE_URL = "unsafe_url"
+
+
+class FixtureFault(StrictModel):
+    code: FixtureFaultCode
+    target: str | None = Field(default=None, min_length=1, max_length=512)
+
+    @field_validator("code", mode="before")
+    @classmethod
+    def parse_code(cls, value: object) -> FixtureFaultCode:
+        return value if isinstance(value, FixtureFaultCode) else FixtureFaultCode(str(value))
+
+    detail: str | None = Field(default=None, min_length=1, max_length=4096)
+
+
 class FixtureDocument(StrictModel):
     provider: Literal["slack", "notion"]
     source_id: str = Field(pattern=r"^(?:slack|notion):[A-Za-z0-9:_-]+$")
     source_kind: Literal["SLACK_MESSAGE", "NOTION_PAGE"]
     canonical_url: str
-    title: str = Field(min_length=1)
-    text: str
-    question: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=4096)
+    text: str = Field(max_length=1_000_000)
+    question: str = Field(min_length=1, max_length=4096)
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -75,6 +98,7 @@ class FixtureSpec(StrictModel):
     fixture_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     documents: list[FixtureDocument] = Field(min_length=20)
     candidates: list[FixtureCandidateSpec] = Field(min_length=3, max_length=3)
+    faults: list[FixtureFault] = Field(default_factory=list, max_length=32)
 
     @model_validator(mode="after")
     def validate_fixture(self) -> FixtureSpec:
@@ -85,12 +109,11 @@ class FixtureSpec(StrictModel):
         if candidate_ids != ["llm-wiki", "mem0", "gbrain"]:
             raise ValueError("fixture candidates must be exactly llm-wiki, mem0, gbrain")
         serialized = self.model_dump(mode="json")
-        claimed = serialized.pop("fixture_sha256")
-        encoded = json.dumps(serialized, sort_keys=True, separators=(",", ":")).encode()
-        if hashlib.sha256(encoded).hexdigest() != claimed:
+        claimed = serialized["fixture_sha256"]
+        if hashlib.sha256(_fixture_hash_payload(serialized)).hexdigest() != claimed:
             raise ValueError("fixture_sha256 does not match canonical fixture content")
         for value in _walk_strings(serialized):
-            if _SECRET.search(value) or _FORBIDDEN.search(value):
+            if contains_secret(value) or _FORBIDDEN.search(value):
                 raise ValueError("fixture contains secret or evaluator-only marker")
         return self
 
@@ -105,6 +128,85 @@ def _walk_strings(value: object) -> Sequence[str]:
         children = cast(list[object], value)
         return tuple(item for child in children for item in _walk_strings(child))
     return ()
+
+
+def _fixture_hash_payload(payload: Mapping[str, object]) -> bytes:
+    without_hash = dict(payload)
+    without_hash.pop("fixture_sha256", None)
+    if without_hash.get("faults") == []:
+        without_hash.pop("faults")
+    return json.dumps(without_hash, sort_keys=True, separators=(",", ":")).encode()
+
+
+def fixture_json_bytes(spec: FixtureSpec) -> bytes:
+    """Serialize a fixture with stable formatting for reproducible artifacts."""
+    return (json.dumps(spec.model_dump(mode="json"), sort_keys=True, indent=2) + "\n").encode()
+
+
+def build_fixture(
+    *,
+    seed: int,
+    fixture_id: str | None = None,
+    faults: Sequence[FixtureFaultCode | FixtureFault] = (),
+) -> FixtureSpec:
+    """Build a deterministic, secret-free schema-v1 fixture."""
+    identifier = fixture_id or f"generated-fixture-{seed}"
+    documents: list[dict[str, object]] = []
+    for index in range(24):
+        provider = "slack" if index % 2 == 0 else "notion"
+        text = f"Project Atlas fact {index} has stable value {index}."
+        documents.append(
+            {
+                "provider": provider,
+                "source_id": f"{provider}:fixture:{index}",
+                "source_kind": "SLACK_MESSAGE" if provider == "slack" else "NOTION_PAGE",
+                "canonical_url": f"https://fixture.example.test/source/{index}",
+                "title": f"Fixture fact {index}",
+                "text": text,
+                "question": f"What is Project Atlas fact {index}?",
+                "content_hash": hashlib.sha256(text.encode()).hexdigest(),
+            }
+        )
+    normalized_faults = [
+        item if isinstance(item, FixtureFault) else FixtureFault(code=item) for item in faults
+    ]
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "fixture_id": identifier,
+        "documents": documents,
+        "candidates": [
+            {"id": "llm-wiki", "score": 92.0, "cost_usd": 1.0},
+            {"id": "mem0", "score": 88.0, "cost_usd": 1.0},
+            {"id": "gbrain", "score": 86.0, "cost_usd": 1.0},
+        ],
+        "faults": [item.model_dump(mode="python") for item in normalized_faults],
+    }
+    payload["fixture_sha256"] = hashlib.sha256(_fixture_hash_payload(payload)).hexdigest()
+    return FixtureSpec.model_validate(payload)
+
+
+def generate_fixture(
+    *,
+    seed: int,
+    fixture_id: str | None = None,
+    faults: Sequence[FixtureFaultCode | FixtureFault] = (),
+) -> FixtureSpec:
+    """Public generator alias for callers that prefer generator terminology."""
+    return build_fixture(seed=seed, fixture_id=fixture_id, faults=faults)
+
+
+def write_fixture(
+    path: Path,
+    *,
+    seed: int,
+    fixture_id: str | None = None,
+    faults: Sequence[FixtureFaultCode | FixtureFault] = (),
+) -> Path:
+    """Write one deterministic fixture and return its path."""
+    spec = build_fixture(seed=seed, fixture_id=fixture_id, faults=faults)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(fixture_json_bytes(spec))
+    return path
 
 
 def load_fixture(path: Path) -> FixtureSpec:
@@ -180,30 +282,13 @@ class FixtureCandidate:
             CandidateObservation(
                 candidate=candidate,
                 case_id=case_id,
-                status=Status.OK if self.score >= 90 else Status.FAILED,
-                answer=(
-                    str(
-                        next(
-                            document["text"]
-                            for document in context.documents
-                            if str(index) in str(document.get("text", ""))
-                        )
-                    )
-                    if self.score >= 90
-                    else ""
-                ),
-                source_ids=[
-                    str(document["source_id"])
-                    for document in context.documents
-                    if str(index) in str(document.get("text", ""))
-                ],
+                status=Status.OK if self.score >= 90 and document is not None else Status.FAILED,
+                answer=str(document["text"]) if self.score >= 90 and document is not None else "",
+                source_ids=[str(document["source_id"])] if document is not None else [],
                 latency_ms=1,
             )
-            for case_id, index in zip(
-                context.case_ids,
-                (question.rsplit(" ", 1)[-1].rstrip("?") for question in context.questions),
-                strict=True,
-            )
+            for case_id, question in zip(context.case_ids, context.questions, strict=True)
+            for document in (_document_for_fixture_question(context, question),)
         )
         return CandidateOutcome(
             candidate=self.candidate_id,
@@ -224,6 +309,25 @@ class FixtureCandidate:
 
     def cleanup(self) -> None:
         return
+
+
+def _document_for_fixture_question(
+    context: CandidateContext,
+    question: str,
+) -> Mapping[str, object] | None:
+    """Resolve the deterministic fixture answer to its source document."""
+    normalized = question.casefold()
+    match = re.search(r"(?:fact|value) (\d+)", normalized)
+    index = match.group(1) if match is not None else None
+    return next(
+        (
+            document
+            for document in context.documents
+            if str(document.get("source_id", "")).casefold() in normalized
+            or (index is not None and index in str(document.get("text", "")))
+        ),
+        None,
+    )
 
 
 def fixture_connectors(spec: FixtureSpec) -> tuple[FixtureConnector, FixtureConnector]:

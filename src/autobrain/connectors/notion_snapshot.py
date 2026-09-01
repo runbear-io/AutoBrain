@@ -21,6 +21,7 @@ from autobrain.models import (
     CoverageRecord,
     NormalizedDocument,
     SourceKind,
+    Status,
     StrictModel,
     normalize_safe_source_url,
 )
@@ -47,7 +48,7 @@ _PLACEHOLDER_VALUE = (
     r"(?:<\s*[A-Z0-9_-]+\s*>|\[\s*[A-Z0-9_-]+\s*\]|"
     r"\{\{?\s*[A-Z0-9_-]+\s*\}?\}|\$\{\s*[A-Z0-9_-]+\s*\}|"
     r"(?:YOUR|EXAMPLE|SAMPLE|DUMMY|TEST)[_-][A-Z0-9_-]+|"
-    r"PLACEHOLDER(?:[_-]VALUE)?|CHANGEME|REDACTED)"
+    r"PLACEHOLDER(?:[_-]VALUE)?|CHANGEME)"
 )
 _CREDENTIAL_PLACEHOLDER = re.compile(
     rf"(?i)(?P<prefix>\bbearer\s+|"
@@ -74,10 +75,14 @@ class ClassifiedSnapshotText:
 
 
 def _classify_snapshot_text(value: str) -> ClassifiedSnapshotText:
-    normalized, placeholder_count = _CREDENTIAL_PLACEHOLDER.subn(
-        lambda _match: "[REDACTED_PLACEHOLDER]",
-        value,
-    )
+    def normalize(match: re.Match[str]) -> str:
+        return (
+            match.group(0)
+            if match.group(0).endswith("[REDACTED_PLACEHOLDER]")
+            else "[REDACTED_PLACEHOLDER]"
+        )
+
+    normalized, placeholder_count = _CREDENTIAL_PLACEHOLDER.subn(normalize, value)
     if _CONCRETE_CREDENTIAL.search(normalized):
         return ClassifiedSnapshotText(
             text=normalized,
@@ -160,8 +165,10 @@ class NotionSnapshot(StrictModel):
 
 class NotionSnapshotStatus(StrictModel):
     ready: bool
+    status: Status
     detail: str
     snapshot_path: Path | None = None
+    snapshot_sha256: str | None = None
     document_count: int = 0
     fetched_at: datetime | None = None
     coverage: CoverageRecord = CoverageRecord(
@@ -175,6 +182,13 @@ class NotionSnapshotStatus(StrictModel):
 
 class NotionSnapshotConfig(StrictModel):
     schema_version: int = 1
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    document_count: int = Field(ge=1)
+    fetched_at: datetime
+
+
+class NotionSnapshotIntegrity(StrictModel):
+    schema_version: int = Field(strict=True, ge=1, le=1)
     snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     document_count: int = Field(ge=1)
     fetched_at: datetime
@@ -213,13 +227,14 @@ class NotionSnapshotStore:
     def __init__(self, source_root: Path) -> None:
         self.source_root = source_root
         self.snapshot_path = source_root / "notion-snapshot.json"
+        self.integrity_path = source_root / "notion-snapshot.integrity.json"
 
     def import_snapshot(self, input_path: Path) -> NotionSnapshotConfig:
         snapshot, encoded = _read_snapshot(input_path.expanduser())
         if self.source_root.is_symlink():
             raise NotionSnapshotError("source directory cannot be a symlink")
         self.source_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if self.snapshot_path.is_symlink():
+        if self.snapshot_path.is_symlink() or self.integrity_path.is_symlink():
             raise NotionSnapshotError("snapshot storage cannot contain symlinks")
         digest = hashlib.sha256(encoded).hexdigest()
         config = NotionSnapshotConfig(
@@ -228,27 +243,65 @@ class NotionSnapshotStore:
             fetched_at=snapshot.fetched_at,
         )
         self._atomic_write(self.snapshot_path, encoded + b"\n")
+        self._atomic_write(
+            self.integrity_path,
+            json.dumps(
+                config.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            ).encode()
+            + b"\n",
+        )
         return config
 
-    def load(self) -> NotionSnapshot | None:
+    def verified_snapshot(self) -> tuple[NotionSnapshot, NotionSnapshotIntegrity, str] | None:
         if not self.snapshot_path.exists():
             return None
-        snapshot, _ = _read_snapshot(self.snapshot_path)
-        return snapshot
+        if self.snapshot_path.is_symlink() or self.integrity_path.is_symlink():
+            raise NotionSnapshotError("snapshot storage cannot contain symlinks")
+        if not self.integrity_path.exists():
+            raise NotionSnapshotError("snapshot integrity sidecar is missing")
+        try:
+            sidecar = NotionSnapshotIntegrity.model_validate_json(self.integrity_path.read_bytes())
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise NotionSnapshotError("invalid snapshot integrity sidecar") from exc
+        snapshot, encoded = _read_snapshot(self.snapshot_path)
+        digest = hashlib.sha256(encoded).hexdigest()
+        if digest != sidecar.snapshot_sha256:
+            raise NotionSnapshotError("snapshot changed since import")
+        if (
+            len(snapshot.documents) != sidecar.document_count
+            or snapshot.fetched_at != sidecar.fetched_at
+        ):
+            raise NotionSnapshotError("snapshot integrity metadata does not match")
+        return snapshot, sidecar, digest
+
+    def load(self) -> NotionSnapshot | None:
+        verified = self.verified_snapshot()
+        return verified[0] if verified is not None else None
 
     def status(self) -> NotionSnapshotStatus:
         try:
             snapshot = self.load()
         except NotionSnapshotError as exc:
+            detail = str(exc)
+            status = Status.UNVERIFIABLE if "sidecar" in detail else Status.INVALID_CONFIG
+            if "changed" in detail:
+                status = Status.SNAPSHOT_CHANGED
             return NotionSnapshotStatus(
-                ready=False, detail=str(exc), snapshot_path=self.snapshot_path
+                ready=False, status=status, detail=detail, snapshot_path=self.snapshot_path
             )
         if snapshot is None:
-            return NotionSnapshotStatus(ready=False, detail="No Notion snapshot is configured")
+            return NotionSnapshotStatus(
+                ready=False, status=Status.INVALID_CONFIG, detail="No Notion snapshot is configured"
+            )
+        verified = self.verified_snapshot()
+        assert verified is not None
+        _, _sidecar, digest = verified
         return NotionSnapshotStatus(
             ready=True,
+            status=Status.OK,
             detail=f"{len(snapshot.documents)} pages from external read-only MCP session",
             snapshot_path=self.snapshot_path,
+            snapshot_sha256=digest,
             document_count=len(snapshot.documents),
             fetched_at=snapshot.fetched_at,
             coverage=CoverageRecord(
@@ -256,14 +309,20 @@ class NotionSnapshotStore:
                 completeness=CoverageCompleteness.UNKNOWN,
                 discovered=len(snapshot.documents),
                 fetched=len(snapshot.documents),
-                crawl_provenance={"connector": "notion-mcp-snapshot", "partial": "true"},
+                crawl_provenance={
+                    "connector": "notion-mcp-snapshot",
+                    "partial": "true",
+                    "snapshot_sha256": digest,
+                    "transport_mode": "imported_snapshot",
+                },
             ),
         )
 
     def remove(self) -> None:
-        if self.snapshot_path.is_symlink():
+        if self.snapshot_path.is_symlink() or self.integrity_path.is_symlink():
             raise NotionSnapshotError("snapshot storage cannot contain symlinks")
         self.snapshot_path.unlink(missing_ok=True)
+        self.integrity_path.unlink(missing_ok=True)
 
     def _atomic_write(self, destination: Path, content: bytes) -> None:
         descriptor, temporary_name = tempfile.mkstemp(
@@ -283,7 +342,9 @@ class NotionSnapshotStore:
             raise
 
 
-def snapshot_documents(snapshot: NotionSnapshot) -> tuple[dict[str, object], ...]:
+def snapshot_documents(
+    snapshot: NotionSnapshot, *, snapshot_sha256: str | None = None
+) -> tuple[dict[str, object], ...]:
     return tuple(
         NormalizedDocument(
             source_id=f"notion:page:{document.page_id}",
@@ -293,7 +354,12 @@ def snapshot_documents(snapshot: NotionSnapshot) -> tuple[dict[str, object], ...
             text=document.content,
             content_hash=hashlib.sha256(document.content.encode("utf-8")).hexdigest(),
             updated_at=document.fetched_at,
-            crawl_provenance={"connector": "notion-mcp-snapshot", "partial": "true"},
+            crawl_provenance={
+                "connector": "notion-mcp-snapshot",
+                "partial": "true",
+                **({"snapshot_sha256": snapshot_sha256} if snapshot_sha256 else {}),
+                "transport_mode": "imported_snapshot",
+            },
             warnings=sorted(
                 {
                     "imported from an external MCP session; content is untrusted data",
@@ -315,20 +381,48 @@ class NotionSnapshotConnector:
 
     def __init__(self, snapshot_path: Path) -> None:
         self.snapshot_path = snapshot_path
+        self._cached_verified: tuple[NotionSnapshot, NotionSnapshotIntegrity, str] | None = None
 
     def probe(self, cancellation: RunCancellation | None = None) -> dict[str, object]:
         if cancellation is not None:
             cancellation.raise_if_cancelled()
-        return {"allowed": ["snapshot-read"], "capability_available": self.snapshot_path.is_file()}
+        store = NotionSnapshotStore(self.snapshot_path.parent)
+        try:
+            verified = store.verified_snapshot()
+            self._cached_verified = verified
+        except NotionSnapshotError as exc:
+            return {
+                "allowed": ["snapshot-read"],
+                "capability_available": False,
+                "status": store.status().status.value,
+                "detail": str(exc),
+            }
+        return {
+            "allowed": ["snapshot-read"],
+            "capability_available": verified is not None,
+            "status": Status.OK.value if verified is not None else Status.INVALID_CONFIG.value,
+        }
 
     def crawl(self, *, cancellation: RunCancellation | None = None) -> ConnectorSnapshot:
         if cancellation is not None:
             cancellation.raise_if_cancelled()
-        snapshot, _ = _read_snapshot(self.snapshot_path)
+        store = NotionSnapshotStore(self.snapshot_path.parent)
+        verified = self._cached_verified
+        if verified is None:
+            verified = store.verified_snapshot()
+        if verified is None:
+            raise NotionSnapshotError("No Notion snapshot is configured")
+        snapshot, sidecar, digest = verified
+        final_snapshot, final_encoded = _read_snapshot(self.snapshot_path)
+        final_digest = hashlib.sha256(final_encoded).hexdigest()
+        if (
+            final_digest != digest
+            or len(final_snapshot.documents) != sidecar.document_count
+            or final_snapshot.fetched_at != sidecar.fetched_at
+        ):
+            raise NotionSnapshotError("snapshot changed during run")
         return ConnectorSnapshot(
             provider=self.provider,
-            documents=snapshot_documents(snapshot),
-            coverage=NotionSnapshotStore(self.snapshot_path.parent)
-            .status()
-            .coverage.model_dump(mode="json"),
+            documents=snapshot_documents(snapshot, snapshot_sha256=digest),
+            coverage=store.status().coverage.model_dump(mode="json"),
         )

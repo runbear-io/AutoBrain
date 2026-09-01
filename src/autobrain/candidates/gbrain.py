@@ -13,6 +13,7 @@ import os
 import re
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -26,6 +27,7 @@ from autobrain.candidates.gbrain_config import GBrainExecutionConfig
 from autobrain.lifecycle import CleanupReceipt, remaining_paths
 from autobrain.models import CandidateId, NormalizedDocument
 from autobrain.retrieval_ids import provenance_map, resolve_retrieved_source_ids
+from autobrain.subscription_process import bounded_process_output
 
 GBRAIN_COMMIT = "f49ca569232dbc0d8e0783d84606115e3bfe5ab1"
 GBRAIN_VERSION = "0.46.19.0"
@@ -133,50 +135,53 @@ def run_process(
 ) -> CommandResult:
     """Run one process group and tear it down on timeout or external interruption."""
     started = time.monotonic()
-    process = subprocess.Popen(
-        list(command),
-        cwd=cwd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-    previous_sigterm: Any = None
-    owns_signal = threading.current_thread() is threading.main_thread()
+    with tempfile.TemporaryFile() as stdout_capture, tempfile.TemporaryFile() as stderr_capture:
+        process = subprocess.Popen(
+            list(command),
+            cwd=cwd,
+            env=env,
+            stdout=stdout_capture,
+            stderr=stderr_capture,
+            text=True,
+            start_new_session=True,
+        )
+        previous_sigterm: Any = None
+        owns_signal = threading.current_thread() is threading.main_thread()
 
-    def interrupt(_signum: int, _frame: object) -> None:
-        raise GBrainInterruptedError(f"GBrain command interrupted: {' '.join(command)}")
+        def interrupt(_signum: int, _frame: object) -> None:
+            raise GBrainInterruptedError(f"GBrain command interrupted: {' '.join(command)}")
 
-    if owns_signal:
-        previous_sigterm = signal.signal(signal.SIGTERM, interrupt)
-    remove_callback = (
-        cancellation.add_callback(lambda: _terminate_process_tree(process))
-        if cancellation is not None
-        else lambda: None
-    )
-    try:
-        if cancellation is not None:
-            cancellation.raise_if_cancelled()
+        if owns_signal:
+            previous_sigterm = signal.signal(signal.SIGTERM, interrupt)
+        remove_callback = (
+            cancellation.add_callback(lambda: _terminate_process_tree(process))
+            if cancellation is not None
+            else lambda: None
+        )
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
             if cancellation is not None:
                 cancellation.raise_if_cancelled()
-        except subprocess.TimeoutExpired as error:
-            raise GBrainProcessError(f"GBrain command timed out: {' '.join(command)}") from error
-    finally:
-        remove_callback()
-        if process.poll() is None:
-            _terminate_process_tree(process)
-        if owns_signal and previous_sigterm is not None:
-            signal.signal(signal.SIGTERM, previous_sigterm)
-    return CommandResult(
-        tuple(command),
-        process.returncode,
-        stdout,
-        stderr,
-        round((time.monotonic() - started) * 1000),
-    )
+            try:
+                process.communicate(timeout=timeout)
+                if cancellation is not None:
+                    cancellation.raise_if_cancelled()
+            except subprocess.TimeoutExpired as error:
+                raise GBrainProcessError(
+                    f"GBrain command timed out: {' '.join(command)}"
+                ) from error
+        finally:
+            remove_callback()
+            if process.poll() is None:
+                _terminate_process_tree(process)
+            if owns_signal and previous_sigterm is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm)
+        return CommandResult(
+            tuple(command),
+            process.returncode,
+            bounded_process_output(stdout_capture),
+            bounded_process_output(stderr_capture),
+            round((time.monotonic() - started) * 1000),
+        )
 
 
 _default_runner = run_process

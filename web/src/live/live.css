@@ -1,0 +1,191 @@
+/*
+ * Local runner surface.
+ *
+ * Styled entirely against the existing role tokens in styles/tokens.css and
+ * styles/themes.css, so this panel inherits both the light product surface and
+ * the dark observability surface without redefining a single color, space or
+ * type value. No palette token is referenced directly.
+ */
+
+.live-panel {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--bg-surface);
+  border: var(--border-hairline) solid var(--line-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.live-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.live-panel__title {
+  font-family: var(--font-display);
+  font-size: var(--text-h2);
+  font-weight: var(--weight-regular);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+}
+
+.live-panel__origin {
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--text-tertiary);
+}
+
+/* Honest scope label. This is a loopback fixture, not a hosted deployment. */
+.live-panel__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-hairline) dashed var(--line-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.live-status {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: var(--border-hairline) solid var(--status-neutral-line);
+  background: var(--status-neutral-soft);
+}
+
+.live-status[data-tone="success"] {
+  border-color: var(--status-success-line);
+  background: var(--status-success-soft);
+}
+
+.live-status[data-tone="warning"] {
+  border-color: var(--status-warning-line);
+  background: var(--status-warning-soft);
+}
+
+.live-status[data-tone="danger"] {
+  border-color: var(--status-danger-line);
+  background: var(--status-danger-soft);
+}
+
+.live-status__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.live-chip {
+  display: inline-flex;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: var(--border-hairline) solid var(--status-neutral-line);
+  background: var(--bg-surface);
+  color: var(--status-neutral);
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+}
+
+.live-chip[data-tone="success"] {
+  border-color: var(--status-success-line);
+  color: var(--status-success);
+}
+
+.live-chip[data-tone="warning"] {
+  border-color: var(--status-warning-line);
+  color: var(--status-warning);
+}
+
+.live-chip[data-tone="danger"] {
+  border-color: var(--status-danger-line);
+  color: var(--status-danger);
+}
+
+.live-status__headline {
+  font-size: var(--text-h3);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.live-status__detail {
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+
+.live-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+}
+
+.live-meta div {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background: var(--bg-sunken);
+  border-radius: var(--radius-md);
+}
+
+.live-meta dt {
+  font-size: var(--text-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.live-meta dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.live-candidates {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-small);
+}
+
+.live-candidates th,
+.live-candidates td {
+  padding: var(--space-3);
+  text-align: left;
+  border-bottom: var(--border-hairline) solid var(--line-subtle);
+}
+
+.live-candidates th {
+  font-size: var(--text-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.live-candidates td.num,
+.live-candidates th.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.live-panel__empty {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  font-size: var(--text-small);
+  color: var(--text-tertiary);
+}

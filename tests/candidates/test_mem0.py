@@ -39,6 +39,7 @@ class FakeMemory:
         self.deleted: list[str] = []
         self.cleanup_error: OSError | None = None
         self.add_error: OSError | None = None
+        self.get_all_calls = 0
         self.__class__.instances.append(self)
 
     def add(self, messages: str, **kwargs: Any) -> dict[str, Any]:
@@ -70,6 +71,7 @@ class FakeMemory:
         return next((item for item in self.added if item["id"] == memory_id), None)
 
     def get_all(self, **kwargs: Any) -> dict[str, Any]:
+        self.get_all_calls += 1
         return {"results": self.added}
 
     def delete_all(self, **kwargs: Any) -> dict[str, str]:
@@ -162,6 +164,27 @@ def test_ingest_uses_whole_document_provenance_and_native_add(adapter: Mem0Adapt
     assert added["infer"] is True
     assert added["metadata"]["source_id"] == "slack:launch"
     assert result.native_results[0]["id"] == "m-1"
+
+
+def test_ingest_does_not_rescan_store_when_add_returns_memory_ids(adapter: Mem0Adapter) -> None:
+    adapter.ingest([document("slack:launch"), document("slack:other")])
+
+    assert FakeMemory.instances[0].get_all_calls == 0
+
+
+def test_ingest_keeps_attribution_scan_fallback_without_memory_ids(
+    adapter: Mem0Adapter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_add = FakeMemory.add
+
+    def add_without_id(self: FakeMemory, messages: str, **kwargs: Any) -> dict[str, Any]:
+        original_add(self, messages, **kwargs)
+        return {"results": [{"memory": messages, "event": "ADD"}]}
+
+    monkeypatch.setattr(FakeMemory, "add", add_without_id)
+    adapter.ingest([document("slack:launch")])
+
+    assert FakeMemory.instances[0].get_all_calls == 1
 
 
 def test_persistence_failure_names_the_source_and_retains_store(adapter: Mem0Adapter) -> None:

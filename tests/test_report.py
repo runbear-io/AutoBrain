@@ -107,6 +107,21 @@ def test_report_is_deterministic_accessible_escaped_and_offline() -> None:
     assert "Generated cases" in html
 
 
+def test_report_redacts_labelled_credentials_and_url_userinfo() -> None:
+    artifact = comparison().model_copy(
+        update={
+            "warnings": [
+                "API_KEY: labelled-secret-value",
+                "https://user:password-value@example.test/path",
+            ]
+        }
+    )
+    rendered = render_report(artifact)
+    assert "labelled-secret-value" not in rendered
+    assert "password-value" not in rendered
+    assert rendered.count("[REDACTED]") >= 2
+
+
 def test_report_redacts_secrets_in_warnings() -> None:
     artifact = comparison().model_copy(
         update={"warnings": ["provider error sk-live-secret-123456789"]}

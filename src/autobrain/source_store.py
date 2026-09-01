@@ -55,7 +55,10 @@ class SlackSourceStore:
         self.config_path = source_root / "slack-export.json"
 
     def configure_export(self, archive_path: Path) -> SlackSourceConfig:
-        resolved = archive_path.expanduser().resolve()
+        archive_path = archive_path.expanduser()
+        if archive_path.is_symlink():
+            raise SlackExportError("Slack export input cannot be a symlink")
+        resolved = archive_path.resolve()
         summary = inspect_slack_export(resolved)
         config = SlackSourceConfig(
             archive_path=str(resolved),
@@ -96,6 +99,15 @@ class SlackSourceStore:
                 detail="No Slack export is configured",
             )
         archive_path = Path(config.archive_path)
+        if archive_path.is_symlink():
+            return self._status(
+                state=SlackSourceState.INVALID_CONFIG,
+                projection_state=SourceConnectionState.FAILED,
+                diagnostic="archive_symlink",
+                detail="Configured Slack export cannot be a symlink",
+                archive_path=archive_path,
+                config=config,
+            )
         if not archive_path.is_file():
             return self._status(
                 state=SlackSourceState.ARCHIVE_MISSING,

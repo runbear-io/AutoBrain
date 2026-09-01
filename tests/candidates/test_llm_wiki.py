@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import select
 import signal
 import stat
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -189,7 +191,9 @@ if os.environ.get("FAKE_STALE_CHILD") == "1" and operation == "compile":
         signal.signal(signal.SIGTERM, settle_child)
     pathlib.Path(os.environ["FAKE_CHILD_PID_FILE"]).write_text(str(child))
 if os.environ.get("FAKE_CANCEL") == operation:
-    print("__AUTOBRAIN_CANCEL_READY__", flush=True)
+    if ready_path := os.environ.get("FAKE_READY_FIFO"):
+        with open(ready_path, "w") as ready:
+            ready.write("__AUTOBRAIN_CANCEL_READY__")
     while True:
         time.sleep(1)
 if os.environ.get("FAKE_HANG") == operation:
@@ -506,6 +510,57 @@ def test_dirty_or_mismatched_tool_cache_is_refused(tmp_path: Path) -> None:
         LLMWikiAdapter(wrong_config).run([_document()], [_case()], api_key="fixture")
 
 
+def test_bounded_runner_limits_native_stdout_and_stderr(tmp_path: Path) -> None:
+    runner = cast(Any, llm_wiki_module)._BoundedRunner()
+    result = runner.run(
+        [
+            sys.executable,
+            "-c",
+            "print('o' * (2 * 1024 * 1024)); import sys; "
+            "print('e' * (2 * 1024 * 1024), file=sys.stderr)",
+        ],
+        cwd=tmp_path,
+        env=os.environ,
+        timeout=5,
+        cleanup_grace=0.5,
+    )
+
+    assert len(result.stdout) <= 1_048_576
+    assert len(result.stderr) <= 1_048_576
+    assert "output truncated" in result.stdout
+    assert "output truncated" in result.stderr
+
+
+def test_timeout_does_not_wait_for_descendant_held_pipe(tmp_path: Path) -> None:
+    child_pid_file = tmp_path / "escaped-child.pid"
+    runner = cast(Any, llm_wiki_module)._BoundedRunner()
+    try:
+        result = runner.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os, pathlib, signal, subprocess, sys; "
+                    "child = subprocess.Popen([sys.executable, '-c', "
+                    '"import os, signal; os.setsid(); signal.pause()"]); '
+                    "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); signal.pause()"
+                ),
+                str(child_pid_file),
+            ],
+            cwd=tmp_path,
+            env=os.environ,
+            timeout=0.2,
+            cleanup_grace=0.1,
+        )
+        assert result.timed_out is True
+        assert result.terminated is True
+        assert result.elapsed_ms < 3000
+    finally:
+        if child_pid_file.exists():
+            with suppress(ProcessLookupError):
+                os.kill(int(child_pid_file.read_text()), signal.SIGKILL)
+
+
 def test_timeout_kills_entire_process_group_and_preserves_logs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -539,7 +594,11 @@ def test_cancellation_kills_process_group_and_orphan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     child_pid_file = tmp_path / "cancel-child.pid"
+    ready_fifo = tmp_path / "ready.fifo"
+    os.mkfifo(ready_fifo)
+    ready_fd = os.open(ready_fifo, os.O_RDONLY | os.O_NONBLOCK)
     monkeypatch.setenv("FAKE_CANCEL", "compile")
+    monkeypatch.setenv("FAKE_READY_FIFO", str(ready_fifo))
     monkeypatch.setenv("FAKE_STALE_CHILD", "1")
     monkeypatch.setenv("FAKE_CHILD_PID_FILE", str(child_pid_file))
     config = _config(tmp_path)
@@ -557,16 +616,20 @@ def test_cancellation_kills_process_group_and_orphan(
         nonlocal interrupted
         argv = process.args if isinstance(process.args, list) else []
         if not interrupted and "compile" in argv:
-            assert process.stdout is not None
-            assert process.stdout.readline().strip() == "__AUTOBRAIN_CANCEL_READY__"
+            readable, _writable, _exceptional = select.select([ready_fd], [], [], 5)
+            assert readable == [ready_fd]
+            assert os.read(ready_fd, 64) == b"__AUTOBRAIN_CANCEL_READY__"
             interrupted = True
             raise KeyboardInterrupt
         return original_communicate(process, input, timeout)
 
     monkeypatch.setattr(subprocess.Popen, "communicate", interrupt_compile)
     secret = "sk-cancelled-provider-secret"
-    with pytest.raises(KeyboardInterrupt):
-        LLMWikiAdapter(config).run([_document()], [_case()], api_key=secret)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            LLMWikiAdapter(config).run([_document()], [_case()], api_key=secret)
+    finally:
+        os.close(ready_fd)
     persisted = "".join(
         path.read_text(errors="replace") for path in config.workspace.rglob("*") if path.is_file()
     )

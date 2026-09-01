@@ -525,11 +525,13 @@ class Mem0Adapter:
                 )
                 results = self._results(response, operation="add")
             self._assert_no_secrets(results, boundary="native add artifact emission")
-            for item in results:
-                memory_id = item.get("id")
-                if isinstance(memory_id, str):
-                    self._ingest_sources[memory_id] = document.source_id
-            self._map_unattributed_memories(document.source_id)
+            attributed_ids = {
+                memory_id for item in results if isinstance((memory_id := item.get("id")), str)
+            }
+            for memory_id in attributed_ids:
+                self._ingest_sources[memory_id] = document.source_id
+            if not attributed_ids:
+                self._map_unattributed_memories(document.source_id)
             native_results.extend(results)
             memory_ids.extend(
                 str(item["id"]) for item in results if isinstance(item.get("id"), str)

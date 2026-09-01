@@ -22,16 +22,13 @@ from autobrain.models import (
     ComparisonArtifact,
     CoverageRecord,
     DecisionResult,
+    ExperimentIdentity,
     RunManifest,
     Sha256,
     Status,
 )
+from autobrain.secrets import redact_secret_text
 
-_SECRET: Final = re.compile(
-    r"(?i)(?:sk-[a-z0-9_-]{8,}|xox[a-z]-[a-z0-9-]{8,}|"
-    r"bearer\s+[a-z0-9._~+/=-]{8,}|(?:api[_-]?key|token|password)=?[a-z0-9._~+/=-]{8,}|"
-    r"//[^/\s:@]+:[^@\s]+@)"
-)
 _ORACLE: Final = re.compile(
     r"(?i)\b(?:oracle|holdout|reference[\s_-]*answer|evaluator[\s_-]*only|"
     r"expected[\s_-]*claim|raw[\s_-]*reply)\b"
@@ -59,6 +56,7 @@ def build_comparison(
     candidates: list[CandidateEvaluation],
     decision: DecisionResult,
     evidence: list[CandidateCaseEvidence],
+    experiment_identity: ExperimentIdentity | None = None,
     provenance: BenchmarkProvenance | None = None,
     artifact_paths: dict[str, str] | None = None,
     warnings: list[str] | None = None,
@@ -68,6 +66,7 @@ def build_comparison(
     artifact = ComparisonArtifact(
         schema_version=2,
         run_id=run_id,
+        experiment_identity=experiment_identity,
         status=status,
         corpus_hash=corpus_hash,
         benchmark_hash=benchmark_hash,
@@ -180,7 +179,7 @@ def _redact_string(value: str, *, key: str | None = None) -> str:
         _SENSITIVE_KEY.search(key) or _ORACLE.search(key) or "BROWSER_UNAVAILABLE" in value
     ):
         return replacement
-    redacted = _SECRET.sub("[REDACTED]", value)
+    redacted = redact_secret_text(value)
     if _ORACLE.search(redacted) or "BROWSER_UNAVAILABLE" in redacted:
         return replacement
     return redacted

@@ -111,7 +111,9 @@ class Preflight:
         self.source_mode = source_mode
         self.source_oauth_config_path = source_oauth_config_path
 
-    def run(self) -> DoctorReport:
+    def run(self, *, offline: bool = False) -> DoctorReport:
+        if offline:
+            return self._run_offline()
         checks = [self._runtime("python", (3, 12, 0)), self._runtime("node", _MIN_NODE)]
         checks.extend((self._runtime("bun", _MIN_BUN), self._writable_paths()))
         checks.append(self._boolean("keyring", self.keyring_probe, Status.ENV_UNAVAILABLE))
@@ -171,6 +173,167 @@ class Preflight:
             ),
             readiness=readiness_result,
             candidate_pins=pins,
+        )
+
+    def _run_offline(self) -> DoctorReport:
+        checks = [
+            self._offline_executable("python", sys.executable),
+            self._offline_executable("node", self.executable_finder("node")),
+            self._offline_executable("bun", self.executable_finder("bun")),
+            self._offline_paths(),
+            self._not_probed(
+                "keyring",
+                "credential backend probe skipped in offline mode; "
+                "remediation: configure a local keyring",
+            ),
+        ]
+        for provider in ProviderId:
+            name = (
+                "chatgpt_subscription"
+                if provider is ProviderId.CODEX
+                else f"{provider.value}_subscription"
+            )
+            executable = self.executable_finder(provider.value)
+            if executable is None:
+                checks.append(
+                    CheckResult(
+                        name=name,
+                        status=Status.UNAVAILABLE,
+                        detail=(
+                            f"UNAVAILABLE: {provider.value} CLI not found; "
+                            f"remediation: install {provider.value}"
+                        ),
+                        remediation=f"Install the {provider.value} CLI.",
+                    )
+                )
+            else:
+                checks.append(
+                    self._not_probed(
+                        name,
+                        (
+                            "NOT_PROBED: credential status not probed in offline mode; "
+                            f"remediation: run `autobrain subscription status --provider "
+                            f"{provider.value}` or `autobrain subscription setup --provider "
+                            f"{provider.value}`"
+                        ),
+                        executable,
+                        (
+                            f"Run `autobrain subscription status --provider {provider.value}` "
+                            "outside offline mode."
+                        ),
+                    )
+                )
+        pins, pin_check = self._pins()
+        checks.append(pin_check)
+        checks.extend(
+            (
+                self._not_probed(
+                    "semantic_embeddings",
+                    "embedding capability not probed in offline mode; "
+                    "remediation: configure a supported local or provider backend",
+                ),
+                self._not_probed(
+                    "slack_source",
+                    "source credentials and transport not probed in offline mode; "
+                    "remediation: configure a local Slack export archive",
+                ),
+                self._not_probed(
+                    "google_drive_source",
+                    "provider source not probed in offline mode; "
+                    "remediation: use a local sanitized fixture",
+                ),
+                self._not_probed(
+                    "callback",
+                    "callback binding not probed in offline mode; "
+                    "remediation: run normal `autobrain doctor`",
+                ),
+                self._not_probed(
+                    "browser_open",
+                    "browser availability not probed in offline mode; "
+                    "remediation: run normal `autobrain doctor`",
+                ),
+            )
+        )
+        source_transport = SourceTransportRegistry(
+            config_path=self.source_oauth_config_path
+        ).resolve(self.source_provider, self.source_mode)
+        model_access = self._model_access()
+        readiness_result = self._readiness(source_transport, model_access)
+        readiness_result = readiness_result.model_copy(
+            update={
+                "ready": False,
+                "remediation": [
+                    "Offline mode does not probe credentials, providers, or capabilities; "
+                    "run normal `autobrain doctor` for live readiness.",
+                    *readiness_result.remediation,
+                ],
+            }
+        )
+        return DoctorReport(
+            status=self._overall(checks),
+            generated_at=datetime.now(UTC),
+            checks=checks,
+            environment=self.environment.readiness(),
+            paths=DoctorPaths(
+                root=str(self.paths.root),
+                runs=str(self.paths.runs),
+                tools=str(self.paths.tools),
+                cache=str(self.paths.cache),
+            ),
+            readiness=readiness_result,
+            candidate_pins=pins,
+        )
+
+    def _offline_paths(self) -> CheckResult:
+        directories = (self.paths.root, self.paths.runs, self.paths.tools, self.paths.cache)
+        if all(directory.is_dir() and not directory.is_symlink() for directory in directories):
+            return CheckResult(
+                name="paths",
+                status=Status.OK,
+                detail="run, tool, and cache directories exist (offline read-only check)",
+                path=str(self.paths.root),
+            )
+        return CheckResult(
+            name="paths",
+            status=Status.UNAVAILABLE,
+            detail=(
+                "UNAVAILABLE: required local state directories are absent; "
+                "remediation: run `autobrain setup`"
+            ),
+            path=str(self.paths.root),
+            remediation="Run `autobrain setup` to create the local state directories.",
+        )
+
+    @staticmethod
+    def _offline_executable(name: str, executable: str | None) -> CheckResult:
+        if executable is None:
+            return CheckResult(
+                name=name,
+                status=Status.UNAVAILABLE,
+                detail=f"UNAVAILABLE: {name} executable not found; remediation: install {name}",
+                remediation=f"Install the {name} executable.",
+            )
+        return CheckResult(
+            name=name,
+            status=Status.NOT_PROBED,
+            detail=(
+                "NOT_PROBED: executable found; version not checked in offline mode; "
+                "remediation: run normal `autobrain doctor`"
+            ),
+            path=executable,
+            remediation="Run normal `autobrain doctor` to verify the executable version.",
+        )
+
+    @staticmethod
+    def _not_probed(
+        name: str, detail: str, path: str | None = None, remediation: str | None = None
+    ) -> CheckResult:
+        return CheckResult(
+            name=name,
+            status=Status.NOT_PROBED,
+            detail=detail,
+            path=path,
+            remediation=remediation or "Run normal `autobrain doctor` to probe this capability.",
         )
 
     def _source_transport(self, slack_check: CheckResult) -> SourceTransportReadiness:
@@ -335,6 +498,7 @@ class Preflight:
     def _overall(checks: list[CheckResult]) -> Status:
         for status in (
             Status.FAILED,
+            Status.UNAVAILABLE,
             Status.ENV_UNAVAILABLE,
             Status.MISSING_PROVIDER,
             Status.MCP_AUTH_UNAVAILABLE,

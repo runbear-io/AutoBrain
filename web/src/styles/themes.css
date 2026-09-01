@@ -1,0 +1,126 @@
+/*
+ * Semantic role tokens.
+ *
+ * Two surfaces share one vocabulary:
+ *   [data-surface="light"] - calm premium product UI (onboarding, diagnosis, report)
+ *   [data-surface="dark"]  - high-density observability workspace (optimization)
+ *
+ * Components only ever reference the roles defined here.
+ */
+
+[data-surface="light"] {
+  color-scheme: light;
+
+  --bg-canvas: var(--palette-ink-025);
+  --bg-surface: var(--palette-white);
+  --bg-raised: var(--palette-white);
+  --bg-sunken: var(--palette-ink-050);
+  --bg-inset: var(--palette-ink-025);
+  --bg-hover: var(--palette-ink-050);
+  --bg-active: var(--palette-ink-100);
+  --bg-overlay: rgba(16, 19, 28, 0.42);
+
+  --text-primary: var(--palette-ink-900);
+  --text-secondary: var(--palette-ink-600);
+  --text-tertiary: var(--palette-ink-500);
+  --text-inverse: var(--palette-white);
+  --text-on-accent: var(--palette-white);
+
+  --line-subtle: var(--palette-ink-100);
+  --line-default: var(--palette-ink-200);
+  --line-strong: var(--palette-ink-300);
+
+  --accent-primary: var(--palette-blue-500);
+  --accent-primary-hover: var(--palette-blue-600);
+  --accent-primary-soft: var(--palette-blue-050);
+  --accent-primary-line: var(--palette-blue-200);
+
+  --accent-secondary: var(--palette-violet-500);
+  --accent-secondary-soft: var(--palette-violet-050);
+  --accent-secondary-line: var(--palette-violet-200);
+
+  --accent-data: var(--palette-cyan-600);
+  --accent-data-soft: var(--palette-cyan-050);
+  --accent-data-line: var(--palette-cyan-200);
+
+  --status-success: var(--palette-green-600);
+  --status-success-soft: var(--palette-green-050);
+  --status-success-line: var(--palette-green-200);
+  --status-warning: var(--palette-amber-600);
+  --status-warning-soft: var(--palette-amber-050);
+  --status-warning-line: var(--palette-amber-200);
+  --status-danger: var(--palette-red-600);
+  --status-danger-soft: var(--palette-red-050);
+  --status-danger-line: var(--palette-red-200);
+  --status-neutral: var(--palette-ink-500);
+  --status-neutral-soft: var(--palette-ink-050);
+  --status-neutral-line: var(--palette-ink-200);
+
+  /* Candidate identity colors, stable across every chart and table. */
+  --candidate-gbrain: var(--palette-violet-500);
+  --candidate-llm-wiki: var(--palette-cyan-600);
+  --candidate-mem0: var(--palette-amber-500);
+
+  --grid-line: rgba(56, 64, 87, 0.07);
+  --shadow-card: var(--shadow-sm);
+  --shadow-float: var(--shadow-md);
+  --focus-ring: var(--palette-blue-500);
+}
+
+[data-surface="dark"] {
+  color-scheme: dark;
+
+  --bg-canvas: var(--palette-ink-950);
+  --bg-surface: var(--palette-ink-900);
+  --bg-raised: var(--palette-ink-850);
+  --bg-sunken: var(--palette-ink-950);
+  --bg-inset: var(--palette-ink-800);
+  --bg-hover: var(--palette-ink-800);
+  --bg-active: var(--palette-ink-700);
+  --bg-overlay: rgba(4, 6, 11, 0.66);
+
+  --text-primary: #eef1f8;
+  --text-secondary: var(--palette-ink-300);
+  --text-tertiary: var(--palette-ink-400);
+  --text-inverse: var(--palette-ink-900);
+  --text-on-accent: var(--palette-white);
+
+  --line-subtle: var(--palette-ink-800);
+  --line-default: var(--palette-ink-700);
+  --line-strong: var(--palette-ink-600);
+
+  --accent-primary: var(--palette-blue-400);
+  --accent-primary-hover: #8aabf9;
+  --accent-primary-soft: rgba(59, 110, 240, 0.14);
+  --accent-primary-line: rgba(109, 149, 247, 0.32);
+
+  --accent-secondary: var(--palette-violet-400);
+  --accent-secondary-soft: rgba(124, 77, 238, 0.16);
+  --accent-secondary-line: rgba(157, 121, 245, 0.34);
+
+  --accent-data: var(--palette-cyan-400);
+  --accent-data-soft: rgba(22, 163, 196, 0.15);
+  --accent-data-line: rgba(70, 197, 226, 0.32);
+
+  --status-success: var(--palette-green-400);
+  --status-success-soft: rgba(29, 156, 98, 0.16);
+  --status-success-line: rgba(69, 196, 137, 0.34);
+  --status-warning: var(--palette-amber-400);
+  --status-warning-soft: rgba(208, 137, 8, 0.16);
+  --status-warning-line: rgba(239, 180, 60, 0.34);
+  --status-danger: var(--palette-red-400);
+  --status-danger-soft: rgba(220, 64, 70, 0.16);
+  --status-danger-line: rgba(238, 115, 120, 0.34);
+  --status-neutral: var(--palette-ink-400);
+  --status-neutral-soft: rgba(128, 138, 166, 0.12);
+  --status-neutral-line: var(--palette-ink-700);
+
+  --candidate-gbrain: var(--palette-violet-400);
+  --candidate-llm-wiki: var(--palette-cyan-400);
+  --candidate-mem0: var(--palette-amber-400);
+
+  --grid-line: rgba(168, 176, 198, 0.07);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-float: 0 8px 28px -14px rgba(0, 0, 0, 0.8);
+  --focus-ring: var(--palette-blue-400);
+}

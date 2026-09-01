@@ -475,7 +475,10 @@ class AutoBrainApp(App[None]):
         if self.state.screen is not previous_screen:
             self._show_state_screen()
         elif isinstance(self.screen, CockpitScreen):
-            self.screen.refresh_view()
+            if self.screen.screen_id is not self.state.screen:
+                self._show_state_screen()
+            else:
+                self.screen.refresh_view()
 
     def _show_state_screen(self) -> None:
         screen_type = SCREEN_TYPES[self.state.screen]

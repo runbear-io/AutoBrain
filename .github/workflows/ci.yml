@@ -1,0 +1,105 @@
+name: CI
+
+'on':
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-and-e2e:
+    name: Quality, package, and local E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      UV_NO_PROGRESS: "1"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: uv
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install locked Python environment
+        run: uv sync --locked --group dev
+
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: basedpyright
+        run: uv run basedpyright
+
+      - name: pytest
+        run: uv run pytest -q
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      - name: Install wheel in a clean virtual environment
+        id: clean-venv
+        run: |
+          clean_venv="$RUNNER_TEMP/autobrain-clean-venv"
+          python -m venv "$clean_venv"
+          "$clean_venv/bin/python" -m pip install --disable-pip-version-check --no-input dist/autobrain-*.whl
+          echo "python=$clean_venv/bin/python" >> "$GITHUB_OUTPUT"
+          echo "binary=$clean_venv/bin/autobrain" >> "$GITHUB_OUTPUT"
+
+      - name: Installed-binary E2E
+        env:
+          AUTOBRAIN_BINARY: ${{ steps.clean-venv.outputs.binary }}
+        run: uv run pytest -q tests/e2e/test_installed_binary.py
+
+      - name: Set up Bun 1.3.14
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install locked web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Bun web tests
+        working-directory: web
+        run: bun test
+
+      - name: Prepare safe CI metadata
+        if: always()
+        run: |
+          mkdir -p ci-artifacts
+          {
+            echo "python=3.12"
+            echo "uv=$(uv --version | awk '{print $2}')"
+            echo "ruff=$(uv run ruff --version | awk '{print $2}')"
+            echo "basedpyright=$(uv run basedpyright --version | head -n 1 | awk '{print $2}')"
+            echo "pytest=$(uv run pytest --version | awk '{print $2}')"
+            echo "bun=1.3.14"
+          } > ci-artifacts/versions.txt
+          sha256sum uv.lock web/bun.lock > ci-artifacts/checksums.sha256
+          if compgen -G 'dist/autobrain-*.whl' > /dev/null; then
+            sha256sum dist/autobrain-*.whl >> ci-artifacts/checksums.sha256
+          fi
+
+      - name: Upload allowlisted CI metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-metadata
+          if-no-files-found: error
+          path: |
+            ci-artifacts/versions.txt
+            ci-artifacts/checksums.sha256
+          include-hidden-files: false

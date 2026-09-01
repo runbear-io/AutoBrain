@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from autobrain.connectors.slack_export_archive import parse_slack_export
+from autobrain.connectors.slack_export_archive import archive_sha256, parse_slack_export
 from autobrain.connectors.slack_export_types import (
     SlackExportCrawlResult,
     SlackExportError,
+    SlackExportSourceChangedError,
     SlackExportSummary,
 )
 from autobrain.models import Status
@@ -16,6 +18,7 @@ __all__ = [
     "SlackExportConnector",
     "SlackExportCrawlResult",
     "SlackExportError",
+    "SlackExportSourceChangedError",
     "SlackExportSummary",
     "inspect_slack_export",
 ]
@@ -23,11 +26,16 @@ __all__ = [
 
 class SlackExportConnector:
     def __init__(self, archive_path: Path, *, expected_sha256: str | None = None) -> None:
-        self.archive_path = archive_path.expanduser().resolve()
+        archive_path = archive_path.expanduser()
+        if archive_path.is_symlink():
+            raise SlackExportError("Slack export input cannot be a symlink")
+        self.archive_path = archive_path.resolve()
         self.expected_sha256 = expected_sha256
+        self._cached: tuple[SlackExportSummary, tuple[Any, ...]] | None = None
 
     async def probe(self) -> dict[str, str | int]:
-        summary = inspect_slack_export(self.archive_path)
+        summary, documents = parse_slack_export(self.archive_path)
+        self._cached = (summary, documents)
         self._verify_hash(summary.archive_sha256)
         return {
             "status": Status.OK.value,
@@ -36,7 +44,12 @@ class SlackExportConnector:
         }
 
     async def crawl(self) -> SlackExportCrawlResult:
-        summary, documents = parse_slack_export(self.archive_path)
+        cached = self._cached
+        if cached is None:
+            summary, documents = parse_slack_export(self.archive_path)
+        else:
+            summary, documents = cached
+            self._verify_hash(archive_sha256(self.archive_path))
         self._verify_hash(summary.archive_sha256)
         return SlackExportCrawlResult(
             status=Status.OK,
@@ -57,5 +70,5 @@ class SlackExportConnector:
 
 
 def inspect_slack_export(path: Path) -> SlackExportSummary:
-    summary, _ = parse_slack_export(path.expanduser().resolve())
+    summary, _ = parse_slack_export(path.expanduser())
     return summary

@@ -158,8 +158,8 @@ VITE_LOCAL_RUNNER_URL=http://127.0.0.1:<port> bun run dev
 ```
 
 Open the URL shown by Vite (`http://127.0.0.1:5173/autobrain-demo/`) and go to
-**New experiment**. Choose a subscription, import a fixture, Slack export, or
-Notion snapshot source in JSON or JSONL, and select Brain candidates. The
+**New experiment**. Choose a subscription, import normalized JSON or JSONL
+records for a Slack export or Notion snapshot, and select Brain candidates. The
 Preview button stays disabled until every readiness check reports READY, the
 same rule the Python contract enforces. A submitted Preview drives the real
 create, validate, and start lifecycle; the **Results** route then shows
@@ -168,10 +168,10 @@ share the same corpus and benchmark identity. Source content and provider
 credentials never leave your machine.
 
 Be clear about what this trial is: the harness runs the shipped job boundary
-classes with a deterministic fixture runner, so Preview metrics exercise the
-contract rather than score your corpus. Slack exports, Notion snapshots, and
-live provider execution still require their respective readiness and
-authorization, and unmet requirements surface as visible blockers.
+classes with deterministic test data, so Preview metrics exercise the contract
+rather than score your corpus. Slack exports, Notion snapshots, and live
+provider execution still require their respective readiness and authorization,
+and unmet requirements surface as visible blockers.
 
 To preview a real evaluation in the browser, produce one with the CLI first
 and publish it through the local run server:
@@ -411,14 +411,24 @@ The candidate set is intentionally fixed:
 | **Mem0 OSS** | Memory ingestion and answer behavior through its native lifecycle |
 | **GBrain** | Native initialization, import, sync, search, and query behavior |
 
-Current connector scope is intentionally narrow:
+Current connector scope is intentionally narrow. The documented v1 source
+inputs and their actual boundaries are:
 
-- Slack
-- Notion
+| Source or input | v1 status and accepted representation |
+| --- | --- |
+| Slack | Supported through an official Workspace Export ZIP, or the advanced read-only live Slack MCP path. Export archives preserve messages, threads, metadata, and file links; file binaries are not implicitly downloaded. |
+| Notion | Supported through the hosted read-only Notion MCP connector, or a strict normalized JSON snapshot imported with `autobrain source notion-snapshot`. |
+| JSON / JSONL | Supported by the Web-first local experiment boundary as normalized records with `source_id`, `title`, and `text`; JSON also accepts the version-1 `{schema_version, records}` envelope. |
+| Google Drive | Gated and not executable in v1. Its MIME/Workspace-export contract is documented for readiness review, but no production connector constructor is available. |
+| Confluence | Gated and not executable in v1. The official MCP authentication contract is unverified, so readiness remains fail-closed. |
+| Markdown / TXT / HTML / PDF / DOCX | Not standalone v1 source inputs. Markdown is an internal candidate materialization; Slack/Notion source content must enter through the source contracts above. PDF and DOCX extraction is not provided. |
+| SharePoint / Onyx | Gated and not executable. They remain represented by fail-closed readiness/provenance contracts only; no authenticated connector or production constructor is available. |
 
-Google Drive and other sources are out of scope for this repository. Connector
-coverage is reported only for the exposed read surfaces; it is not described
-as an exhaustive audit of every source API.
+Fixtures and synthetic data are test-only QA inputs. They are retained in the
+internal fixture and local-boundary contracts, but are excluded from the public
+source choices and must never be described as real-source readiness or provider
+verification. Connector coverage is reported only for the exposed read
+surfaces; it is not described as an exhaustive audit of every source API.
 
 ## Prepare your knowledge
 

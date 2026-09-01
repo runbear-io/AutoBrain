@@ -1,0 +1,137 @@
+/*
+ * AutoBrain design tokens.
+ *
+ * Single source of truth for color, spacing, typography, radii, elevation and
+ * motion. Components must never hardcode a raw color or a magic pixel value;
+ * they reference these custom properties.
+ *
+ * Theming model: the light "product" surface is the default. Any subtree can be
+ * flipped to the dark observability surface with [data-surface="dark"], which
+ * re-points the same semantic role tokens at a dark ramp. This is why every
+ * component styles against role tokens (--bg-*, --text-*, --line-*) rather than
+ * palette tokens (--palette-blue-500).
+ */
+
+:root {
+  /* ---------------------------------------------------------------- palette */
+  /* Raw ramps. Components should not reference these directly. */
+  --palette-ink-950: #0a0c12;
+  --palette-ink-900: #10131c;
+  --palette-ink-850: #151926;
+  --palette-ink-800: #1b2030;
+  --palette-ink-700: #262d42;
+  --palette-ink-600: #384057;
+  --palette-ink-500: #5a6480;
+  --palette-ink-400: #808aa6;
+  --palette-ink-300: #a8b0c6;
+  --palette-ink-200: #cbd1e0;
+  --palette-ink-100: #e4e8f1;
+  --palette-ink-050: #f1f3f8;
+  --palette-ink-025: #f8f9fc;
+  --palette-white: #ffffff;
+
+  --palette-blue-600: #2450c8;
+  --palette-blue-500: #3b6ef0;
+  --palette-blue-400: #6d95f7;
+  --palette-blue-200: #c2d3fd;
+  --palette-blue-050: #eef3fe;
+
+  --palette-violet-600: #6234c9;
+  --palette-violet-500: #7c4dee;
+  --palette-violet-400: #9d79f5;
+  --palette-violet-200: #d9c9fd;
+  --palette-violet-050: #f4efff;
+
+  --palette-cyan-600: #0a7f9c;
+  --palette-cyan-500: #16a3c4;
+  --palette-cyan-400: #46c5e2;
+  --palette-cyan-200: #b6e8f4;
+  --palette-cyan-050: #ecfaff;
+
+  --palette-green-600: #177a4d;
+  --palette-green-500: #1d9c62;
+  --palette-green-400: #45c489;
+  --palette-green-200: #b3e8cd;
+  --palette-green-050: #ecfbf3;
+
+  --palette-amber-600: #a76a06;
+  --palette-amber-500: #d08908;
+  --palette-amber-400: #efb43c;
+  --palette-amber-200: #fae3b4;
+  --palette-amber-050: #fff8e9;
+
+  --palette-red-600: #b32d33;
+  --palette-red-500: #dc4046;
+  --palette-red-400: #ee7378;
+  --palette-red-200: #fbcccd;
+  --palette-red-050: #fff0f0;
+
+  /* ------------------------------------------------------------------ scale */
+  /* 4px base, 8px rhythm. Every margin/padding/gap uses one of these. */
+  --space-0: 0;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 2.5rem;
+  --space-8: 3rem;
+  --space-9: 4rem;
+  --space-10: 6rem;
+
+  /* -------------------------------------------------------------- typography */
+  --font-display: "Iowan Old Style", "Hoefler Text", "Source Serif 4", Palatino,
+    "Palatino Linotype", Georgia, serif;
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+    "Helvetica Neue", Helvetica, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "IBM Plex Mono", Menlo, monospace;
+
+  --text-display: 3.25rem;
+  --text-h1: 2.25rem;
+  --text-h2: 1.5rem;
+  --text-h3: 1.125rem;
+  --text-h4: 0.9375rem;
+  --text-body: 0.9375rem;
+  --text-small: 0.8125rem;
+  --text-caption: 0.75rem;
+  --text-micro: 0.6875rem;
+
+  --leading-tight: 1.1;
+  --leading-snug: 1.3;
+  --leading-normal: 1.55;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+  --tracking-caps: 0.09em;
+
+  /* ------------------------------------------------------------------ radii */
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  /* ------------------------------------------------------------- elevation */
+  --shadow-sm: 0 1px 2px rgba(16, 19, 28, 0.06);
+  --shadow-md: 0 2px 4px rgba(16, 19, 28, 0.06), 0 8px 20px -12px rgba(16, 19, 28, 0.18);
+  --shadow-lg: 0 4px 8px rgba(16, 19, 28, 0.05), 0 24px 48px -24px rgba(16, 19, 28, 0.24);
+
+  /* ---------------------------------------------------------------- motion */
+  --ease-out: cubic-bezier(0.22, 0.9, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0.05, 0.36, 1);
+  --duration-fast: 120ms;
+  --duration-base: 220ms;
+  --duration-slow: 420ms;
+
+  /* ------------------------------------------------------------------ layout */
+  --layout-max: 1200px;
+  --layout-wide: 1440px;
+  --layout-reading: 680px;
+  --border-hairline: 1px;
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,7 +26,11 @@ from autobrain.models import (
     UsageSource,
 )
 from autobrain.report import build_comparison, write_artifacts
-from autobrain.runs import _candidate_snapshot  # pyright: ignore[reportPrivateUsage]
+from autobrain.runs import (
+    RunVerificationStatus,
+    _candidate_snapshot,  # pyright: ignore[reportPrivateUsage]
+    verify_run,
+)
 
 _SEMANTIC_EMBEDDING = EmbeddingBackendConfig.from_environ(
     {"OPENAI_API_KEY": "fixture-embedding-key"},
@@ -122,6 +127,79 @@ def _json_result(arguments: list[str], home: Path):
     return result, json.loads(result.stdout)
 
 
+def test_verify_run_checks_recorded_artifact_hashes(tmp_path: Path) -> None:
+    home = tmp_path / "state"
+    run_dir = _write_run(home, "run-verified")
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["comparison"] = {
+        "path": "comparison.json",
+        "sha256": hashlib.sha256((run_dir / "comparison.json").read_bytes()).hexdigest(),
+    }
+    manifest["report"] = {
+        "path": "report.html",
+        "sha256": hashlib.sha256((run_dir / "report.html").read_bytes()).hexdigest(),
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    verification = verify_run(home / "runs", "run-verified")
+
+    assert verification.status is RunVerificationStatus.VALID
+    assert {item.path for item in verification.artifacts} == {"comparison.json", "report.html"}
+
+
+def test_verify_run_detects_tampered_recorded_artifact(tmp_path: Path) -> None:
+    home = tmp_path / "state"
+    run_dir = _write_run(home, "run-tampered")
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["comparison"] = {
+        "path": "comparison.json",
+        "sha256": "0" * 64,
+    }
+    manifest["report"] = {
+        "path": "report.html",
+        "sha256": "0" * 64,
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    verification = verify_run(home / "runs", "run-tampered")
+
+    assert verification.status is RunVerificationStatus.CORRUPT
+    assert any(not item.matches for item in verification.artifacts)
+
+
+def test_verify_run_marks_legacy_artifacts_without_recorded_hashes_unverifiable(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "state"
+    _write_run(home, "run-legacy", schema_version=1)
+
+    verification = verify_run(home / "runs", "run-legacy")
+
+    assert verification.status is RunVerificationStatus.UNVERIFIABLE
+
+
+def test_runs_verify_cli_returns_typed_status_and_nonzero_for_corruption(tmp_path: Path) -> None:
+    home = tmp_path / "state"
+    run_dir = _write_run(home, "run-cli")
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["comparison"] = {"path": "comparison.json", "sha256": "0" * 64}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["runs", "verify", "run-cli", "--run-root", str(home / "runs"), "--json"],
+        env=_env(home),
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "CORRUPT"
+    assert payload["run_id"] == "run-cli"
+
+
 def test_runs_list_json_reports_complete_failed_incomplete_and_legacy_runs(
     tmp_path: Path,
 ) -> None:
@@ -166,8 +244,9 @@ def test_runs_list_does_not_silently_skip_corrupt_runs(tmp_path: Path, artifact:
 
     assert result.exit_code == 1
     assert payload["status"] == "CORRUPT_RUN"
-    assert payload["run_id"] == "run-corrupt"
-    assert artifact in payload["detail"]
+    corrupt = next(item for item in payload["runs"] if item["run_id"] == "run-corrupt")
+    assert corrupt["artifact_status"] == "CORRUPT_RUN"
+    assert artifact in corrupt["detail"]
 
 
 _CANDIDATE_FIELD_MUTATIONS: dict[str, object] = {
@@ -312,6 +391,92 @@ def test_equivalence_rejects_dirty_manifest(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert payload["status"] == "CORRUPT_RUN"
     assert payload["run_id"] == "run-b"
+
+
+def test_runs_explain_json_uses_persisted_eligibility_reasons_and_redacts(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "state"
+    run_dir = _write_run(home, "run-explain", eligible=False)
+    persisted_reason = "operator token=fixture-secret-123456 marked this candidate ineligible"
+    for artifact_name, candidate_key in (
+        ("manifest.json", "evaluations"),
+        ("comparison.json", "candidates"),
+    ):
+        artifact = json.loads((run_dir / artifact_name).read_text(encoding="utf-8"))
+        artifact[candidate_key][0]["eligibility_reasons"] = [persisted_reason]
+        (run_dir / artifact_name).write_text(json.dumps(artifact), encoding="utf-8")
+
+    result, payload = _json_result(["runs", "explain", "run-explain", "--json"], home)
+
+    assert result.exit_code == 0
+    assert payload == {
+        "status": "OK",
+        "run_id": "run-explain",
+        "run_status": "OK",
+        "verdict": "NO_RECOMMENDATION",
+        "decision_status": "NO_RECOMMENDATION",
+        "rationale": payload["rationale"],
+        "candidates": [
+            {
+                "candidate": "mem0",
+                "eligible": False,
+                "eligibility_reasons": ["operator [REDACTED] marked this candidate ineligible"],
+            }
+        ],
+    }
+    assert "fixture-secret-123456" not in result.stdout
+    assert "explicitly marked ineligible" not in result.stdout
+
+
+def test_runs_explain_human_output_and_manifest_only_run(tmp_path: Path) -> None:
+    home = tmp_path / "state"
+    _write_run(home, "run-explain", eligible=False, comparison=False)
+
+    result = CliRunner().invoke(
+        app,
+        ["runs", "explain", "run-explain"],
+        env=_env(home),
+    )
+
+    assert result.exit_code == 0
+    assert "run-id: run-explain" in result.stdout
+    assert "verdict: NO_RECOMMENDATION" in result.stdout
+    assert "mem0: ineligible" in result.stdout
+    assert "fixture ineligible" in result.stdout
+
+
+def test_runs_explain_rejects_run_without_persisted_decision_or_evaluations(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "state"
+    run_dir = _write_run(home, "run-incomplete", comparison=False)
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["decision"] = None
+    manifest["evaluations"] = None
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    result, payload = _json_result(["runs", "explain", "run-incomplete", "--json"], home)
+
+    assert result.exit_code == 1
+    assert payload["status"] == "INCOMPLETE_RUN"
+    assert payload["run_id"] == "run-incomplete"
+
+
+def test_runs_explain_rejects_traversal_and_symlink_escape(tmp_path: Path) -> None:
+    home = tmp_path / "state"
+    outside = tmp_path / "outside"
+    _write_run(outside, "escaped")
+    (home / "runs").mkdir(parents=True)
+    (home / "runs" / "escaped").symlink_to(outside / "runs" / "escaped", target_is_directory=True)
+
+    malformed, malformed_payload = _json_result(["runs", "explain", "../escape", "--json"], home)
+    escaped, escaped_payload = _json_result(["runs", "explain", "escaped", "--json"], home)
+
+    assert malformed.exit_code == 1
+    assert malformed_payload["status"] == "INVALID_RUN_ID"
+    assert escaped.exit_code == 1
+    assert escaped_payload["status"] == "PATH_ESCAPE"
 
 
 def test_runs_compare_equivalent_and_metric_or_eligibility_differences(tmp_path: Path) -> None:
@@ -478,6 +643,72 @@ def test_runs_list_rejects_symlinked_root(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert payload["status"] == "PATH_ESCAPE"
+
+
+def test_runs_list_retains_healthy_runs_when_one_run_is_corrupt(tmp_path: Path) -> None:
+    home = tmp_path / "state"
+    _write_run(home, "run-healthy")
+    corrupt = _write_run(home, "run-corrupt")
+    (corrupt / "manifest.json").write_text("{bad", encoding="utf-8")
+
+    result, payload = _json_result(
+        ["runs", "list", "--run-root", str(home / "runs"), "--json"], home
+    )
+
+    assert result.exit_code == 1
+    assert payload["status"] == "CORRUPT_RUN"
+    assert {item["run_id"] for item in payload["runs"]} == {"run-healthy", "run-corrupt"}
+    healthy = next(item for item in payload["runs"] if item["run_id"] == "run-healthy")
+    assert healthy["artifact_status"] == "COMPLETE"
+
+
+def test_custom_run_root_is_shared_by_list_compare_explain_and_report(tmp_path: Path) -> None:
+    home = tmp_path / "state"
+    _write_run(home, "run-custom")
+    custom_root = tmp_path / "custom-runs"
+    custom_root.mkdir()
+    (home / "runs" / "run-custom").rename(custom_root / "run-custom")
+
+    listed, listed_payload = _json_result(
+        ["runs", "list", "--run-root", str(custom_root), "--json"], home
+    )
+    compared, compared_payload = _json_result(
+        [
+            "runs",
+            "compare",
+            "run-custom",
+            "run-custom",
+            "--run-root",
+            str(custom_root),
+            "--json",
+        ],
+        home,
+    )
+    explained, explained_payload = _json_result(
+        [
+            "runs",
+            "explain",
+            "run-custom",
+            "--run-root",
+            str(custom_root),
+            "--json",
+        ],
+        home,
+    )
+    reopened = CliRunner().invoke(
+        app,
+        ["report", "run-custom", "--run-root", str(custom_root), "--no-open"],
+        env=_env(home),
+    )
+
+    assert listed.exit_code == 0
+    assert listed_payload["runs"][0]["run_id"] == "run-custom"
+    assert compared.exit_code == 0
+    assert compared_payload["status"] == "EQUIVALENT"
+    assert explained.exit_code == 0
+    assert explained_payload["run_id"] == "run-custom"
+    assert reopened.exit_code == 0
+    assert str(custom_root / "run-custom" / "report.html") in reopened.stdout
 
 
 def test_runs_list_preserves_unrelated_dirty_files(tmp_path: Path) -> None:

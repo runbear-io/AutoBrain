@@ -7,3 +7,8 @@ runs/
 .senpi/
 *.pyc
 .DS_Store
+.tmp/
+.omo/
+node_modules/
+web/dist/
+dist/

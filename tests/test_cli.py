@@ -32,6 +32,18 @@ def test_cli_exposes_doctor_subcommand() -> None:
     assert "source" in result.stdout
 
 
+def test_doctor_offline_is_explicit_and_machine_readable(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    result = CliRunner().invoke(app, ["doctor", "--offline", "--json"])
+    assert result.exit_code == 0
+    report = json.loads(result.stdout)
+    assert report["schema_version"] == 1
+    checks = {check["name"]: check for check in report["checks"]}
+    assert checks["browser_open"]["status"] == "NOT_PROBED"
+    assert checks["chatgpt_subscription"]["status"] in {"NOT_PROBED", "UNAVAILABLE"}
+    assert "remediation" in checks["chatgpt_subscription"]["detail"]
+
+
 def test_doctor_json_is_machine_readable(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     result = CliRunner().invoke(app, ["doctor", "--json"])
@@ -89,6 +101,21 @@ def test_malformed_callback_port_is_a_typed_independent_check(monkeypatch: Monke
     assert "integer from 1 to 65535" in checks["callback"]["detail"]
     assert checks["candidate_pins"]["status"] == "OK"
     assert checks["python"]["status"] == "OK"
+
+
+def test_source_slack_export_reports_typed_archive_failure(tmp_path: Path) -> None:
+    archive_path = _slack_export(tmp_path / "slack-export.zip")
+    archive_path.write_bytes(archive_path.read_bytes()[:-12])
+
+    result = CliRunner().invoke(
+        app,
+        ["source", "slack", "--export", str(archive_path)],
+        env={"HOME": str(tmp_path)},
+    )
+
+    assert result.exit_code == 1
+    assert "SOURCE_AUTH_UNAVAILABLE: invalid Slack export ZIP" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_source_slack_export_configures_local_archive(tmp_path: Path) -> None:

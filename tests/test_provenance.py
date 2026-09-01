@@ -112,8 +112,22 @@ def test_provenance_round_trips_with_json_html_parity_and_null_preservation(
     }
     assert payload["provenance"]["usage_source"] == "measured"
     assert payload["provenance"]["sources"] == [
-        {"source": "slack", "mutability": "frozen_export"},
-        {"source": "notion", "mutability": "live_mcp_captured"},
+        {
+            "source": "slack",
+            "mutability": "frozen_export",
+            "snapshot_sha256": None,
+            "fetched_at": None,
+            "transport_mode": None,
+            "partial_coverage_reason": None,
+        },
+        {
+            "source": "notion",
+            "mutability": "live_mcp_captured",
+            "snapshot_sha256": None,
+            "fetched_at": None,
+            "transport_mode": None,
+            "partial_coverage_reason": None,
+        },
     ]
     assert payload["provenance"]["latency_spans"][1]["duration_ms"] is None
     for value in (

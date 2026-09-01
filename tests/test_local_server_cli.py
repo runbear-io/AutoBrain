@@ -28,6 +28,33 @@ def test_serve_help_documents_the_local_unauthenticated_scope() -> None:
     assert str(DEFAULT_LOCAL_PORT) in result.stdout
 
 
+def test_serve_rejects_a_directory_outside_the_configured_run_root(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs"
+    run_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    result = CliRunner().invoke(
+        app,
+        ["serve", "--run-root", str(run_root), "--run-dir", str(outside), "--check"],
+    )
+    assert result.exit_code != 0
+    assert "PATH_ESCAPE" in result.stdout
+
+
+def test_serve_rejects_a_symlinked_run_directory(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs"
+    run_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (run_root / "run-1").symlink_to(outside, target_is_directory=True)
+    result = CliRunner().invoke(
+        app,
+        ["serve", "--run-root", str(run_root), "--run-dir", str(run_root / "run-1"), "--check"],
+    )
+    assert result.exit_code != 0
+    assert "PATH_ESCAPE" in result.stdout
+
+
 def test_serve_reports_no_run_when_the_directory_is_empty(tmp_path: Path) -> None:
     """With nothing to serve the command fails closed instead of inventing a run."""
     result = CliRunner().invoke(

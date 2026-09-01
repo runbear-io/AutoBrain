@@ -16,10 +16,15 @@ from autobrain.connectors.slack_export_messages import (
     object_value,
     text_value,
 )
-from autobrain.connectors.slack_export_types import SlackExportError, SlackExportSummary
+from autobrain.connectors.slack_export_types import (
+    SlackExportError,
+    SlackExportSourceChangedError,
+    SlackExportSummary,
+)
 
 MAX_MEMBER_BYTES = 256 * 1024 * 1024
 MAX_TOTAL_BYTES = 20 * 1024 * 1024 * 1024
+MAX_MEMBER_COUNT = 100_000
 _CATALOG_NAMES = frozenset(
     {"team.json", "users.json", "channels.json", "groups.json", "dms.json", "mpims.json"}
 )
@@ -36,9 +41,14 @@ def archive_sha256(path: Path) -> str:
 def parse_slack_export(
     path: Path,
 ) -> tuple[SlackExportSummary, tuple[RawSlackDocument, ...]]:
+    if path.is_symlink():
+        raise SlackExportError("Slack export input cannot be a symlink")
     if not path.is_file():
         raise SlackExportError(f"Slack export not found: {path}")
-    digest = archive_sha256(path)
+    try:
+        digest = archive_sha256(path)
+    except OSError as error:
+        raise SlackExportError(f"cannot read Slack export: {path}") from error
     try:
         with ZipFile(path) as archive:
             members = _validated_members(archive)
@@ -55,8 +65,18 @@ def parse_slack_export(
                 team=team,
                 digest=digest,
             )
+        try:
+            final_digest = archive_sha256(path)
+        except OSError as error:
+            raise SlackExportSourceChangedError(
+                f"Slack export changed during parse: {path}"
+            ) from error
+        if final_digest != digest:
+            raise SlackExportSourceChangedError(f"Slack export changed during parse: {path}")
     except BadZipFile as error:
         raise SlackExportError("invalid Slack export ZIP") from error
+    except OSError as error:
+        raise SlackExportError(f"cannot read Slack export: {path}") from error
     if not documents:
         raise SlackExportError("Slack export contains no Slack messages")
     file_links = sum(bool(document.metadata.get("file_urls")) for document in documents)
@@ -77,7 +97,10 @@ def parse_slack_export(
 def _validated_members(archive: ZipFile) -> dict[PurePosixPath, ZipInfo]:
     members: dict[PurePosixPath, ZipInfo] = {}
     total_size = 0
-    for info in archive.infolist():
+    infos = archive.infolist()
+    if len(infos) > MAX_MEMBER_COUNT:
+        raise SlackExportError("Slack export contains too many archive members")
+    for info in infos:
         member = PurePosixPath(info.filename)
         if member.is_absolute() or ".." in member.parts:
             raise SlackExportError(f"unsafe archive member: {info.filename}")

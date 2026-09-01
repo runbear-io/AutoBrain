@@ -247,6 +247,25 @@ def test_missing_provider_is_typed_and_preserves_native_stderr(tmp_path: Path) -
     assert "OPENAI_API_KEY" in caught.value.stderr
 
 
+def test_run_process_bounds_native_stdout_and_stderr(tmp_path: Path) -> None:
+    result = run_process(
+        (
+            sys.executable,
+            "-c",
+            "print('o' * (2 * 1024 * 1024)); import sys; "
+            "print('e' * (2 * 1024 * 1024), file=sys.stderr)",
+        ),
+        tmp_path,
+        dict(os.environ),
+        5,
+    )
+
+    assert len(result.stdout) <= 1_048_576
+    assert len(result.stderr) <= 1_048_576
+    assert "output truncated" in result.stdout
+    assert "output truncated" in result.stderr
+
+
 def test_external_sigterm_cleans_process_group(tmp_path: Path) -> None:
     ready = tmp_path / "ready.fifo"
     os.mkfifo(ready)

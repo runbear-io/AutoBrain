@@ -24,6 +24,59 @@ def _runner(command: tuple[str, ...], timeout: float) -> CommandResult:
     )
 
 
+def test_offline_preflight_does_not_execute_runtime_or_provider_probes(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def forbidden_runner(_command: tuple[str, ...], _timeout: float) -> CommandResult:
+        calls.append("command")
+        raise AssertionError("offline doctor must not execute commands")
+
+    report = Preflight(
+        paths=AutoBrainPaths.from_home(tmp_path),
+        environment=RuntimeEnvironment.from_environ({}),
+        command_runner=forbidden_runner,
+        executable_finder=lambda name: "/fake/" + name,
+        keyring_available=lambda: (_ for _ in ()).throw(AssertionError("keyring probed")),
+        callback_available=lambda _host, _port: (_ for _ in ()).throw(
+            AssertionError("callback probed")
+        ),
+        browser_available=lambda: (_ for _ in ()).throw(AssertionError("browser probed")),
+    ).run(offline=True)
+
+    assert calls == []
+    checks = {check.name: check for check in report.checks}
+    assert checks["python"].status is Status.NOT_PROBED
+    assert checks["node"].status is Status.NOT_PROBED
+    assert checks["chatgpt_subscription"].status is Status.NOT_PROBED
+    assert checks["callback"].status is Status.NOT_PROBED
+    assert checks["browser_open"].status is Status.NOT_PROBED
+    assert checks["chatgpt_subscription"].detail.startswith("NOT_PROBED:")
+    assert "autobrain subscription setup" in checks["chatgpt_subscription"].detail
+
+
+def test_offline_preflight_distinguishes_missing_executables_from_unprobed_auth(
+    tmp_path: Path,
+) -> None:
+    report = Preflight(
+        paths=AutoBrainPaths.from_home(tmp_path),
+        environment=RuntimeEnvironment.from_environ({}),
+        executable_finder=lambda name: None if name == "codex" else "/fake/" + name,
+    ).run(offline=True)
+
+    checks = {check.name: check for check in report.checks}
+    assert (
+        checks[
+            "codex_subscription" if "codex_subscription" in checks else "chatgpt_subscription"
+        ].status
+        is Status.UNAVAILABLE
+    )
+    assert checks["chatgpt_subscription"].detail.startswith("UNAVAILABLE:")
+    assert checks["claude_subscription"].status is Status.NOT_PROBED
+    assert checks["keyring"].status is Status.NOT_PROBED
+    assert checks["callback"].status is Status.NOT_PROBED
+    assert checks["browser_open"].status is Status.NOT_PROBED
+
+
 def test_preflight_reports_independent_missing_requirements(tmp_path: Path) -> None:
     report = Preflight(
         paths=AutoBrainPaths.from_home(tmp_path),

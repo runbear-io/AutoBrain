@@ -63,6 +63,25 @@ def test_slack_source_store_detects_changed_archive(tmp_path: Path) -> None:
     assert status.projection.diagnostics == ["archive_changed"]
 
 
+def test_slack_source_store_rejects_configured_archive_symlink(tmp_path: Path) -> None:
+    paths = AutoBrainPaths.from_home(tmp_path)
+    archive_path = _export(tmp_path / "slack-export.zip")
+    store = SlackSourceStore(paths.sources)
+    configured = store.configure_export(archive_path)
+
+    replacement = tmp_path / "replacement.zip"
+    replacement.write_bytes(archive_path.read_bytes())
+    archive_path.unlink()
+    archive_path.symlink_to(replacement)
+    store.config_path.write_text(configured.model_dump_json())
+
+    status = store.status()
+
+    assert status.state is SlackSourceState.INVALID_CONFIG
+    assert status.ready is False
+    assert status.projection.diagnostics == ["archive_symlink"]
+
+
 def test_slack_source_store_detects_deleted_archive(tmp_path: Path) -> None:
     paths = AutoBrainPaths.from_home(tmp_path)
     archive_path = _export(tmp_path / "slack-export.zip")

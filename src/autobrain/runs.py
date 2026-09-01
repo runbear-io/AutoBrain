@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -11,8 +12,8 @@ from typing import cast
 from pydantic import BaseModel, ConfigDict
 
 from autobrain.models import ComparisonArtifact, RunManifest
-from autobrain.paths import is_valid_run_id
-from autobrain.report import load_comparison, load_manifest
+from autobrain.paths import is_valid_run_id, resolve_run_root
+from autobrain.report import load_comparison, load_manifest, redact_payload
 
 
 class RunInspectionStatus(StrEnum):
@@ -25,6 +26,31 @@ class RunInspectionStatus(StrEnum):
     DIFFERENT_CORPUS = "DIFFERENT_CORPUS"
     EQUIVALENT = "EQUIVALENT"
     NON_EQUIVALENT = "NON_EQUIVALENT"
+
+
+class RunVerificationStatus(StrEnum):
+    VALID = "VALID"
+    CORRUPT = "CORRUPT"
+    INCOMPLETE = "INCOMPLETE"
+    UNVERIFIABLE = "UNVERIFIABLE"
+
+
+class VerifiedArtifact(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    path: str
+    recorded_sha256: str | None = None
+    actual_sha256: str | None = None
+    matches: bool | None = None
+
+
+class RunVerification(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    status: RunVerificationStatus
+    run_id: str
+    artifacts: list[VerifiedArtifact]
+    detail: str | None = None
 
 
 class RunInspectionError(ValueError):
@@ -57,6 +83,7 @@ class RunRecord(BaseModel):
     benchmark_hash: str | None
     verdict: str | None
     provenance: dict[str, object]
+    detail: str | None = None
 
 
 class RunInventory(BaseModel):
@@ -64,6 +91,8 @@ class RunInventory(BaseModel):
 
     status: str = RunInspectionStatus.OK.value
     runs: list[RunRecord]
+    run_id: str | None = None
+    detail: str | None = None
 
 
 class RunDifference(BaseModel):
@@ -88,6 +117,26 @@ class RunComparison(BaseModel):
     differences: list[RunDifference]
 
 
+class CandidateEligibilityExplanation(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    candidate: str
+    eligible: bool
+    eligibility_reasons: list[str]
+
+
+class RunExplanation(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    status: str
+    run_id: str
+    run_status: str
+    verdict: str
+    decision_status: str
+    rationale: str
+    candidates: list[CandidateEligibilityExplanation]
+
+
 @dataclass(frozen=True)
 class _LoadedRun:
     run_dir: Path
@@ -96,19 +145,11 @@ class _LoadedRun:
 
 
 def _confined_runs_root(root: Path) -> Path:
-    if root.is_symlink():
-        raise RunInspectionError(
-            RunInspectionStatus.PATH_ESCAPE,
-            f"runs root cannot be a symlink: {root}",
-        )
-    if not root.exists():
-        return root
-    if not root.is_dir():
-        raise RunInspectionError(
-            RunInspectionStatus.PATH_ESCAPE,
-            f"runs root is not a directory: {root}",
-        )
-    return root.resolve()
+    try:
+        resolved = resolve_run_root(root)
+    except ValueError as error:
+        raise RunInspectionError(RunInspectionStatus.PATH_ESCAPE, str(error)) from error
+    return resolved.resolve() if resolved.exists() else resolved
 
 
 def _confined_run_dir(root: Path, run_id: str) -> Path:
@@ -228,6 +269,12 @@ def _validate_manifest_comparison(
 ) -> None:
     if manifest.status is not None and manifest.status != comparison.status:
         raise _integrity_mismatch(run_id, "status")
+    if (
+        manifest.experiment_identity is not None
+        and comparison.experiment_identity is not None
+        and manifest.experiment_identity != comparison.experiment_identity
+    ):
+        raise _integrity_mismatch(run_id, "experiment identity")
     if manifest.hashes is not None:
         if (
             manifest.hashes.corpus_sha256 is not None
@@ -257,12 +304,125 @@ def _validate_manifest_comparison(
         raise _integrity_mismatch(run_id, "candidate identities")
 
 
+def _recorded_artifact_hash(
+    manifest: RunManifest, artifact_name: str
+) -> tuple[str | None, str | None]:
+    """Return an explicitly recorded artifact path and digest, if present."""
+    extra = manifest.model_extra or {}
+    record = extra.get("comparison" if artifact_name == "comparison.json" else "report")
+    if isinstance(record, Mapping):
+        typed_record = cast(Mapping[str, object], record)
+        recorded_path = typed_record.get("path")
+        recorded_hash = typed_record.get("sha256")
+        if isinstance(recorded_path, str) and isinstance(recorded_hash, str):
+            return recorded_path, recorded_hash
+    hashes = extra.get("hashes")
+    if isinstance(hashes, Mapping):
+        typed_hashes = cast(Mapping[str, object], hashes)
+        recorded_hash = typed_hashes.get(artifact_name)
+        if isinstance(recorded_hash, str):
+            return artifact_name, recorded_hash
+    return None, None
+
+
+def verify_run(root: Path, run_id: str) -> RunVerification:
+    """Verify one immutable run without mutating or exposing its contents."""
+    try:
+        loaded = _load_run(root, run_id)
+    except RunInspectionError as error:
+        if error.status in {
+            RunInspectionStatus.INVALID_RUN_ID,
+            RunInspectionStatus.PATH_ESCAPE,
+            RunInspectionStatus.RUN_NOT_FOUND,
+        }:
+            raise
+        status = (
+            RunVerificationStatus.INCOMPLETE
+            if error.status is RunInspectionStatus.INCOMPLETE_RUN
+            else RunVerificationStatus.CORRUPT
+        )
+        if error.status is RunInspectionStatus.CORRUPT_RUN and "provenance" in error.detail:
+            try:
+                legacy_dir = _confined_run_dir(root, run_id)
+                legacy_manifest = load_manifest(legacy_dir / "manifest.json")
+            except (RunInspectionError, ValueError):
+                pass
+            else:
+                if legacy_manifest.schema_version == 1:
+                    status = RunVerificationStatus.UNVERIFIABLE
+        return RunVerification(
+            status=status,
+            run_id=run_id,
+            artifacts=[],
+            detail=error.detail,
+        )
+
+    if loaded.comparison is None:
+        return RunVerification(
+            status=RunVerificationStatus.INCOMPLETE,
+            run_id=run_id,
+            artifacts=[],
+            detail="comparison artifact is missing",
+        )
+
+    artifacts: list[VerifiedArtifact] = []
+    missing_recording = False
+    mismatch = False
+    for artifact_name in ("comparison.json", "report.html"):
+        recorded_path, recorded_hash = _recorded_artifact_hash(loaded.manifest, artifact_name)
+        if recorded_path is None or recorded_hash is None:
+            missing_recording = True
+            artifacts.append(VerifiedArtifact(path=artifact_name))
+            continue
+        artifact_path = _artifact_path(loaded.run_dir, recorded_path)
+        if not artifact_path.is_file():
+            mismatch = True
+            artifacts.append(
+                VerifiedArtifact(path=artifact_name, recorded_sha256=recorded_hash, matches=False)
+            )
+            continue
+        actual_hash = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        matches = actual_hash == recorded_hash
+        mismatch |= not matches
+        artifacts.append(
+            VerifiedArtifact(
+                path=artifact_name,
+                recorded_sha256=recorded_hash,
+                actual_sha256=actual_hash,
+                matches=matches,
+            )
+        )
+
+    if mismatch:
+        return RunVerification(
+            status=RunVerificationStatus.CORRUPT,
+            run_id=run_id,
+            artifacts=artifacts,
+            detail="recorded artifact hash mismatch",
+        )
+    if missing_recording:
+        return RunVerification(
+            status=RunVerificationStatus.UNVERIFIABLE,
+            run_id=run_id,
+            artifacts=artifacts,
+            detail="one or more artifact hashes were not recorded",
+        )
+    return RunVerification(
+        status=RunVerificationStatus.VALID,
+        run_id=run_id,
+        artifacts=artifacts,
+    )
+
+
 def list_runs(root: Path) -> RunInventory:
-    """List every immutable run, failing if any discovered run is unsafe or corrupt."""
+    """List runs, retaining healthy records when an ordinary run is corrupt."""
+    root = resolve_run_root(root)
     canonical_root = _confined_runs_root(root)
     if not root.exists():
         return RunInventory(runs=[])
     records: list[RunRecord] = []
+    corrupt_run_id: str | None = None
+    corrupt_detail: str | None = None
     for entry in sorted(root.iterdir(), key=lambda item: item.name, reverse=True):
         if entry.name.startswith("."):
             continue
@@ -280,7 +440,30 @@ def list_runs(root: Path) -> RunInventory:
                 f"run path escapes runs root: {entry}",
                 run_id=entry.name,
             )
-        loaded = _load_run(root, entry.name)
+        try:
+            loaded = _load_run(root, entry.name)
+        except RunInspectionError as error:
+            if error.status is not RunInspectionStatus.CORRUPT_RUN:
+                raise
+            if corrupt_run_id is None:
+                corrupt_run_id = entry.name
+                corrupt_detail = error.detail
+            detail = error.detail if len(error.detail) <= 500 else error.detail[:497] + "..."
+            records.append(
+                RunRecord(
+                    run_id=entry.name,
+                    schema_version=0,
+                    created_at=None,
+                    status=RunInspectionStatus.CORRUPT_RUN.value,
+                    artifact_status=RunInspectionStatus.CORRUPT_RUN.value,
+                    corpus_hash=None,
+                    benchmark_hash=None,
+                    verdict=None,
+                    provenance={},
+                    detail=detail,
+                )
+            )
+            continue
         manifest = loaded.manifest
         comparison = loaded.comparison
         records.append(
@@ -314,7 +497,16 @@ def list_runs(root: Path) -> RunInventory:
                 provenance=manifest.provenance.model_dump(mode="json"),
             )
         )
-    return RunInventory(runs=records)
+    return RunInventory(
+        status=(
+            RunInspectionStatus.CORRUPT_RUN.value
+            if corrupt_run_id is not None
+            else RunInspectionStatus.OK.value
+        ),
+        runs=records,
+        run_id=corrupt_run_id,
+        detail=corrupt_detail,
+    )
 
 
 def _candidate_snapshot(artifact: ComparisonArtifact) -> dict[str, object]:
@@ -368,6 +560,48 @@ def _differences(left: object, right: object, path: str = "") -> list[RunDiffere
     return []
 
 
+def explain_run(root: Path, run_id: str) -> RunExplanation:
+    """Explain a persisted run without recomputing eligibility or mutating it."""
+    loaded = _load_run(root, run_id)
+    manifest = loaded.manifest
+    artifact = loaded.comparison
+    decision = artifact.decision if artifact is not None else manifest.decision
+    evaluations = artifact.candidates if artifact is not None else manifest.evaluations
+    if decision is None or evaluations is None:
+        raise RunInspectionError(
+            RunInspectionStatus.INCOMPLETE_RUN,
+            f"persisted decision or candidate evaluations are missing for run: {run_id}",
+            run_id=run_id,
+        )
+
+    eligible_candidates = set(decision.eligible_candidates)
+    candidates = [
+        {
+            "candidate": evaluation.candidate.value,
+            "eligible": evaluation.candidate in eligible_candidates,
+            "eligibility_reasons": list(evaluation.eligibility_reasons),
+        }
+        for evaluation in evaluations
+    ]
+    payload = {
+        "status": RunInspectionStatus.OK.value,
+        "run_id": run_id,
+        "run_status": (
+            artifact.status.value
+            if artifact is not None
+            else manifest.status.value
+            if manifest.status is not None
+            else "INCOMPLETE"
+        ),
+        "verdict": decision.verdict.value,
+        "decision_status": decision.status.value,
+        "rationale": decision.rationale,
+        "candidates": candidates,
+    }
+    redacted = cast(dict[str, object], redact_payload(payload))
+    return RunExplanation.model_validate(redacted, strict=True)
+
+
 def compare_runs(
     root: Path,
     left_run_id: str,
@@ -392,9 +626,20 @@ def compare_runs(
         )
     left = _snapshot(left_loaded.comparison)
     right = _snapshot(right_loaded.comparison)
+    if left_loaded.manifest.schema_version == 1 or right_loaded.manifest.schema_version == 1:
+        raise RunInspectionError(
+            RunInspectionStatus.DIFFERENT_CORPUS,
+            "legacy artifacts are readable but non-comparable; regenerate both runs",
+        )
+    left_identity = left_loaded.comparison.experiment_identity
+    right_identity = right_loaded.comparison.experiment_identity
     same_corpus = (
-        left_loaded.comparison.corpus_hash == right_loaded.comparison.corpus_hash
-        and left_loaded.comparison.benchmark_hash == right_loaded.comparison.benchmark_hash
+        left_identity == right_identity
+        if left_identity is not None and right_identity is not None
+        else (
+            left_loaded.comparison.corpus_hash == right_loaded.comparison.corpus_hash
+            and left_loaded.comparison.benchmark_hash == right_loaded.comparison.benchmark_hash
+        )
     )
     if not same_corpus and not allow_different_corpus:
         raise RunInspectionError(

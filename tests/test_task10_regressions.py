@@ -13,39 +13,11 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from autobrain.cli import app
+from autobrain.fixture import build_fixture
 
 
 def _fixture_payload() -> dict[str, object]:
-    documents = [
-        {
-            "provider": "slack" if index % 2 == 0 else "notion",
-            "source_id": (
-                f"slack:fixture:{index}" if index % 2 == 0 else f"notion:fixture:{index}"
-            ),
-            "source_kind": "SLACK_MESSAGE" if index % 2 == 0 else "NOTION_PAGE",
-            "canonical_url": f"https://fixture.example.test/source/{index}",
-            "title": f"Fixture fact {index}",
-            "text": f"Project Atlas fact {index} has stable value {index}.",
-            "question": f"What is Project Atlas fact {index}?",
-            "content_hash": hashlib.sha256(
-                f"Project Atlas fact {index} has stable value {index}.".encode()
-            ).hexdigest(),
-        }
-        for index in range(24)
-    ]
-    payload: dict[str, object] = {
-        "schema_version": 1,
-        "fixture_id": "task-10-regression-fixture",
-        "documents": documents,
-        "candidates": [
-            {"id": "llm-wiki", "score": 92.0, "cost_usd": 1.0},
-            {"id": "mem0", "score": 88.0, "cost_usd": 1.0},
-            {"id": "gbrain", "score": 86.0, "cost_usd": 1.0},
-        ],
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    payload["fixture_sha256"] = hashlib.sha256(encoded).hexdigest()
-    return payload
+    return build_fixture(seed=10, fixture_id="task-10-regression-fixture").model_dump(mode="json")
 
 
 def _write_fixture(tmp_path: Path) -> Path:

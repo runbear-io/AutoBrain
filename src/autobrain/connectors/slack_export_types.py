@@ -12,6 +12,10 @@ class SlackExportError(ValueError):
     """Raised when a Slack export is unsafe or unsupported."""
 
 
+class SlackExportSourceChangedError(SlackExportError):
+    """Raised when the Slack export changes while it is being parsed."""
+
+
 class SlackExportSummary(StrictModel):
     archive_path: str
     archive_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

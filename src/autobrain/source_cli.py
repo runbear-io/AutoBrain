@@ -14,8 +14,10 @@ from autobrain.auth.models import OAuthError, Provider
 from autobrain.auth.oauth import OAuthManager
 from autobrain.auth.service import ConnectionManager
 from autobrain.auth.storage import TokenStore
+from autobrain.connectors.local_file import local_file_readiness
 from autobrain.connectors.notion_snapshot import NotionSnapshotError, NotionSnapshotStore
 from autobrain.connectors.readiness import readiness_for
+from autobrain.connectors.slack_export import SlackExportError
 from autobrain.paths import AutoBrainPaths
 from autobrain.secrets import RuntimeEnvironment, RuntimeSettings
 from autobrain.source_store import SlackSourceStore
@@ -141,7 +143,7 @@ def configure_slack_source(
         raise typer.Exit(2)
     try:
         config = store.configure_export(export_path)
-    except (OSError, ValueError) as exc:
+    except (SlackExportError, OSError, ValueError) as exc:
         typer.echo(f"SOURCE_AUTH_UNAVAILABLE: {exc}", err=True)
         raise typer.Exit(1) from None
     typer.echo(
@@ -184,6 +186,21 @@ def configure_notion_snapshot(
         f"Notion snapshot ready: {config.document_count} pages; "
         "coverage is partial/non-final and content remains untrusted data"
     )
+
+
+@source_app.command("local-file")
+def local_file_status(
+    path: Annotated[Path, typer.Argument(help="Absolute Markdown, TXT, or HTML file path.")],
+    json_output: Annotated[bool, typer.Option("--json", help="Emit JSON status.")] = False,
+) -> None:
+    """Check readiness for one bounded local document source."""
+    readiness = local_file_readiness(path.expanduser())
+    if json_output:
+        typer.echo(json.dumps(readiness.model_dump(mode="json"), indent=2))
+    else:
+        typer.echo(f"Local file: {readiness.status.value}: {readiness.detail}")
+    if not readiness.ready:
+        raise typer.Exit(1)
 
 
 @source_app.command("status")

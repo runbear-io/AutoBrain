@@ -39,7 +39,17 @@ GBrain adapters. Codex and Claude are protocol-reuse subscription adapters;
 their consumer-subscription identity is distinct from API-key embedding
 configuration. Local hash embedding is retained for smoke execution only.
 
-Google Drive and Confluence are explicit readiness gates. Kimi and Grok are
-explicit unsupported provider gates. Gated records have no capabilities and
-unavailable usage provenance, so they cannot appear ready merely because a
-binary, endpoint, or API key exists.
+Google Drive and Confluence are explicit readiness gates, not v1 source
+connectors. SharePoint is likewise a gated Graph OAuth preview with no
+production constructor. Onyx is a design-partner evaluation gate only; it has
+no verified license, public API, runtime, ACL, resource, network, or teardown
+proof. Kimi and Grok are explicit unsupported provider gates. Gated records
+have no capabilities and unavailable usage provenance, so they cannot appear
+ready merely because a binary, endpoint, or API key exists.
+
+The v1 document boundary is intentionally narrower than a general file
+indexer: source ingestion accepts Slack export ZIPs, Notion MCP captures, and
+normalized JSON/JSONL records. Markdown is an internal candidate materialization
+(and TXT/HTML/PDF/DOCX are not standalone v1 import formats); Slack export file
+links do not imply binary extraction. Fixtures remain internal test-only data
+and are excluded from public setup choices.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import os
 import re
 import signal
@@ -15,6 +16,7 @@ from pathlib import Path
 from autobrain.cancellation import RunCancellation, RunCancelled
 
 _MAX_DIAGNOSTIC_CHARS = 2048
+MAX_CAPTURE_CHARS = 1_048_576
 _SENSITIVE_NAME = re.compile(
     r"(?:^|[_-])(?:API[_-]?KEY|KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|TOKEN|BEARER|"
     r"SECRET|PASSWORD|COOKIE)(?:$|[_-])",
@@ -113,6 +115,46 @@ def sanitized_environment(
     return clean
 
 
+def bounded_process_output(stream: io.BufferedRandom, *, limit: int = MAX_CAPTURE_CHARS) -> str:
+    stream.flush()
+    stream.seek(0, os.SEEK_END)
+    size = stream.tell()
+    if size <= limit:
+        stream.seek(0)
+        return stream.read().decode(errors="replace")
+    marker = "\n...[output truncated]...\n"
+    content_limit = max(0, limit - len(marker))
+    head_size = content_limit // 2
+    tail_size = content_limit - head_size
+    stream.seek(0)
+    head = stream.read(head_size).decode(errors="replace")
+    stream.seek(-tail_size, os.SEEK_END)
+    tail = stream.read(tail_size).decode(errors="replace")
+    return f"{head}{marker}{tail}"
+
+
+def terminate_process_group(process: subprocess.Popen[str], grace: float = 1.0) -> bool:
+    """Terminate a process group without waiting beyond the cleanup budget."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=grace)
+
+    # The leader may exit before descendants. Signal the group again so an
+    # inherited provider child cannot outlive cancellation.
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return True
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=grace)
+    return True
+
+
 def sanitize_diagnostic(value: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) -> str:
     """Return bounded single-line diagnostics with labelled credentials redacted."""
     redacted = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
@@ -135,58 +177,65 @@ class ProviderProcessRunner:
 
         with tempfile.TemporaryDirectory(prefix="autobrain-provider-") as cwd_raw:
             cwd = Path(cwd_raw)
-            process = subprocess.Popen(
-                request.argv,
-                shell=False,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=cwd,
-                env=sanitized_environment(
-                    os.environ,
-                    selected=request.environment,
-                ),
-                start_new_session=True,
-            )
-            cancellation = request.cancellation
-
-            def terminate() -> None:
-                self._terminate_group(process)
-
-            remove_callback = (
-                cancellation.add_callback(terminate) if cancellation is not None else lambda: None
-            )
-            try:
-                if cancellation is not None:
-                    cancellation.raise_if_cancelled()
-                stdout, stderr = process.communicate(
-                    input=request.stdin,
-                    timeout=request.timeout_seconds,
+            with (
+                tempfile.TemporaryFile() as stdout_capture,
+                tempfile.TemporaryFile() as stderr_capture,
+            ):
+                process = subprocess.Popen(
+                    request.argv,
+                    shell=False,
+                    stdin=subprocess.PIPE,
+                    stdout=stdout_capture,
+                    stderr=stderr_capture,
+                    text=True,
+                    cwd=cwd,
+                    env=sanitized_environment(
+                        os.environ,
+                        selected=request.environment,
+                    ),
+                    start_new_session=True,
                 )
-                if cancellation is not None:
-                    cancellation.raise_if_cancelled()
-            except RunCancelled as exc:
-                self._terminate_group(process)
-                process.communicate()
-                raise ProviderProcessCancelled("provider execution cancelled") from exc
-            except subprocess.TimeoutExpired as exc:
-                self._terminate_group(process)
-                stdout, stderr = process.communicate()
-                raise ProviderProcessTimeout("provider execution timed out") from exc
-            except (KeyboardInterrupt, GeneratorExit) as exc:
-                self._terminate_group(process)
-                process.communicate()
-                raise ProviderProcessCancelled("provider execution cancelled") from exc
-            finally:
-                remove_callback()
-            return ProcessResult(
-                argv=request.argv,
-                returncode=process.returncode,
-                stdout=stdout,
-                stderr=stderr,
-                cwd=cwd,
-            )
+                cancellation = request.cancellation
+
+                def terminate() -> None:
+                    self._terminate_group(process)
+
+                remove_callback = (
+                    cancellation.add_callback(terminate)
+                    if cancellation is not None
+                    else lambda: None
+                )
+                try:
+                    if cancellation is not None:
+                        cancellation.raise_if_cancelled()
+                    process.communicate(
+                        input=request.stdin,
+                        timeout=request.timeout_seconds,
+                    )
+                    stdout = bounded_process_output(stdout_capture)
+                    stderr = bounded_process_output(stderr_capture)
+                    if cancellation is not None:
+                        cancellation.raise_if_cancelled()
+                except RunCancelled as exc:
+                    self._terminate_group(process)
+                    raise ProviderProcessCancelled("provider execution cancelled") from exc
+                except subprocess.TimeoutExpired as exc:
+                    self._terminate_group(process)
+                    stdout = bounded_process_output(stdout_capture)
+                    stderr = bounded_process_output(stderr_capture)
+                    raise ProviderProcessTimeout("provider execution timed out") from exc
+                except (KeyboardInterrupt, GeneratorExit) as exc:
+                    self._terminate_group(process)
+                    raise ProviderProcessCancelled("provider execution cancelled") from exc
+                finally:
+                    remove_callback()
+                return ProcessResult(
+                    argv=request.argv,
+                    returncode=process.returncode,
+                    stdout=stdout,
+                    stderr=stderr,
+                    cwd=cwd,
+                )
 
     def run_interactive(self, argv: Sequence[str]) -> int:
         """Run an interactive login without capturing terminal input or output."""
@@ -209,19 +258,7 @@ class ProviderProcessRunner:
 
     @staticmethod
     def _terminate_group(process: subprocess.Popen[str]) -> None:
-        if process.poll() is not None:
-            return
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=1.0)
-            # The leader may exit before descendants. Kill the group once more
-            # so an inherited provider child cannot outlive cancellation.
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-        except ProcessLookupError:
-            return
+        terminate_process_group(process)
 
 
 def run_interactive_provider_process(args: Sequence[str]) -> int:

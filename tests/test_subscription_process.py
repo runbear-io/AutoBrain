@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from autobrain.subscription_process import (
+    MAX_CAPTURE_CHARS,
     ProcessRequest,
     ProviderProcessCancelled,
     ProviderProcessRunner,
@@ -81,6 +85,56 @@ Path(sys.argv[1]).write_text(json.dumps({
         "cwd_empty": True,
         "openai_key": None,
     }
+
+
+def test_process_runner_bounds_native_stdout_and_stderr_capture(tmp_path: Path) -> None:
+    executable = _executable(
+        tmp_path,
+        """
+import sys
+sys.stdout.write("o" * (2 * 1024 * 1024))
+sys.stderr.write("e" * (2 * 1024 * 1024))
+""",
+    )
+
+    result = ProviderProcessRunner().run(ProcessRequest((str(executable),), timeout_seconds=5))
+
+    assert len(result.stdout) <= MAX_CAPTURE_CHARS
+    assert len(result.stderr) <= MAX_CAPTURE_CHARS
+    assert result.stdout.startswith("o")
+    assert result.stderr.startswith("e")
+
+
+def test_process_runner_timeout_does_not_wait_for_descendant_held_pipe(tmp_path: Path) -> None:
+    child_pid_path = tmp_path / "escaped-child.pid"
+    executable = _executable(
+        tmp_path,
+        """
+import os
+import subprocess
+import sys
+import signal
+
+child = subprocess.Popen([
+    sys.executable,
+    "-c",
+    "import os, signal; os.setsid(); signal.pause()",
+])
+open(sys.argv[1], "w").write(str(child.pid))
+signal.pause()
+""",
+    )
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProviderProcessTimeout):
+            ProviderProcessRunner().run(
+                ProcessRequest((str(executable), str(child_pid_path)), timeout_seconds=0.2)
+            )
+        assert time.monotonic() - started < 3
+    finally:
+        if child_pid_path.exists():
+            os.kill(int(child_pid_path.read_text(encoding="utf-8")), signal.SIGKILL)
 
 
 def test_process_runner_kills_the_process_group_on_timeout(tmp_path: Path) -> None:

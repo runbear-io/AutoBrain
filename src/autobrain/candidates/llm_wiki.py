@@ -7,12 +7,10 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final, cast
@@ -29,6 +27,7 @@ from autobrain.models import (
     NormalizedDocument,
     Status,
 )
+from autobrain.subscription_process import bounded_process_output, terminate_process_group
 
 APPROVED_DISTRIBUTION: Final = "llm-wiki-compiler"
 APPROVED_VERSION: Final = "1.1.0"
@@ -276,13 +275,37 @@ class _BoundedRunner:
         cleanup_grace: float,
     ) -> _ProcessResult:
         started = time.monotonic()
+        with tempfile.TemporaryFile() as stdout_capture, tempfile.TemporaryFile() as stderr_capture:
+            return self._run_captured(
+                argv,
+                cwd=cwd,
+                env=env,
+                timeout=timeout,
+                cleanup_grace=cleanup_grace,
+                started=started,
+                stdout_capture=stdout_capture,
+                stderr_capture=stderr_capture,
+            )
+
+    def _run_captured(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout: float,
+        cleanup_grace: float,
+        started: float,
+        stdout_capture: Any,
+        stderr_capture: Any,
+    ) -> _ProcessResult:
         process = subprocess.Popen(
             [str(part) for part in argv],
             cwd=cwd,
             env=dict(env),
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=stdout_capture,
+            stderr=stderr_capture,
             text=True,
             shell=False,
             start_new_session=True,
@@ -300,18 +323,19 @@ class _BoundedRunner:
         try:
             if cancellation is not None:
                 cancellation.raise_if_cancelled()
-            stdout, stderr = process.communicate(timeout=timeout)
+            process.communicate(timeout=timeout)
             if cancellation is not None:
                 cancellation.raise_if_cancelled()
         except subprocess.TimeoutExpired:
             timed_out = True
             terminated = self._terminate_group(process, cleanup_grace)
-            stdout, stderr = process.communicate()
         except BaseException:
             self._terminate_group(process, cleanup_grace)
             raise
         finally:
             remove_callback()
+        stdout = bounded_process_output(stdout_capture)
+        stderr = bounded_process_output(stderr_capture)
         elapsed_ms = round((time.monotonic() - started) * 1000)
         return _ProcessResult(
             returncode=process.returncode,
@@ -324,25 +348,7 @@ class _BoundedRunner:
 
     @staticmethod
     def _terminate_group(process: subprocess.Popen[str], grace: float) -> bool:
-        # The group leader may exit while descendants remain. Never use leader
-        # liveness as proof that the process group is gone.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return False
-        if process.poll() is None:
-            with suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=grace)
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            return True
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        if process.poll() is None:
-            with suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=grace)
-        return True
+        return terminate_process_group(process, grace)
 
 
 class LLMWikiAdapter:

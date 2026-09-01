@@ -13,7 +13,11 @@ be exercised against something a drifted or damaged runner might emit.
 from __future__ import annotations
 
 import json
+import os
+import signal
+import subprocess
 import sys
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final, cast
@@ -124,6 +128,50 @@ def announce(base_url: str) -> None:
 
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "succeeded"
+    installed_binary = os.environ.get("AUTOBRAIN_BINARY")
+    if installed_binary is not None and mode in {"succeeded", "failed"}:
+        # The web test is intentionally a two-process seam: this helper owns
+        # the test fixture, while the installed console script owns serving.
+        with tempfile.TemporaryDirectory(prefix="autobrain-web-") as directory:
+            run_dir = os.path.join(directory, "RUN-A41F")
+            os.mkdir(run_dir)
+            if mode == "succeeded":
+                from tests.test_projection import artifact
+
+                with open(
+                    os.path.join(run_dir, "comparison.json"), "w", encoding="utf-8"
+                ) as output:
+                    output.write(artifact().model_dump_json())
+            child = subprocess.Popen(
+                [installed_binary, "serve", "--run-dir", run_dir, "--port", "0"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            assert child.stdout is not None
+            child.stdout.readline()
+            projection_line = child.stdout.readline()
+            prefix = "projection: "
+            if not projection_line.startswith(prefix):
+                error = child.stderr.read() if child.stderr is not None else ""
+                raise RuntimeError(f"installed server did not announce projection: {error}")
+            announce(projection_line.removeprefix(prefix).removesuffix(PROJECTION_PATH + "\n"))
+
+            def forward_shutdown(signum: int, _frame: object) -> None:
+                if child.poll() is None:
+                    child.send_signal(signum)
+                    child.wait(timeout=5)
+                raise SystemExit(0)
+
+            signal.signal(signal.SIGINT, forward_shutdown)
+            signal.signal(signal.SIGTERM, forward_shutdown)
+            try:
+                child.wait()
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=5)
+        return
     if mode == "malformed":
         server = ThreadingHTTPServer((LOOPBACK_HOST, 0), _MalformedHandler)
         announce(f"http://{LOOPBACK_HOST}:{server.server_port}")
