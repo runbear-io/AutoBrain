@@ -255,6 +255,7 @@ def test_built_sdist_excludes_repository_local_trees(tmp_path: Path) -> None:
     assert ".omo" not in top_level
     assert ".senpi" in top_level
     assert "web" not in top_level
+    assert "candidate-pins.json" in members
     assert "src/autobrain/candidate-pins.json" in members
     assert "schemas/fixture-v1.json" in members
 

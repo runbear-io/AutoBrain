@@ -48,6 +48,7 @@ include = [
   "DESIGN.md",
   "pyproject.toml",
   "uv.lock",
+  "candidate-pins.json",
   "schemas/fixture-v1.json",
 ]
 exclude = [
