@@ -5,19 +5,19 @@
   "homepage": "https://github.com/runbear-io/AutoBrain",
   "license": "MIT",
   "source": {
-    "version": "0.1.1",
+    "version": "0.1.2",
     "status": "prepared",
-    "url": "https://github.com/runbear-io/AutoBrain/releases/download/UNAPPROVED/autobrain-0.1.1.tar.gz",
+    "url": "https://github.com/runbear-io/AutoBrain/releases/download/UNAPPROVED/autobrain-0.1.2.tar.gz",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
     "reviewed_commit": null,
-    "tree_sha256": "5981b2cbeb4ed8e5b8db6a90ae0989772d655940b669f54e6afb19258927733f"
+    "tree_sha256": "6540cc273efc665b60e6c339b640d33f0d38d22082d4559dcc5d27df5476fea6"
   },
   "head": {
     "url": "https://github.com/runbear-io/AutoBrain.git",
     "branch": "main"
   },
   "python": "python@3.13",
-  "uv_lock_sha256": "a4481b7bd4228d6a2f79e96cdf9f9885d850f4eddd23942f98425efd8ec1763e",
+  "uv_lock_sha256": "7a97b2bbb561095c545ef7cd428b6a635de3f08594a3f0a2bfb0e05727f3f479",
   "candidate_pins_sha256": "823e6b199432fa9f512062c190b33113ba6e5916d6c73bd0f2ec141046240678",
   "platform_wheel_resources": [
     "cffi",

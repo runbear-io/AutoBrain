@@ -211,7 +211,7 @@ def test_release_evidence_manifest_is_complete_canonical_and_fail_closed() -> No
     }
     assert manifest["runtime_evidence"] == {
         "status": "UNBOUND_CURRENT_RELEASE",
-        "reason": "RUNTIME_SOURCE_DIGEST_AND_0.1.1_WHEEL_NOT_RECORDED",
+        "reason": "RUNTIME_SOURCE_DIGEST_AND_0.1.2_WHEEL_NOT_RECORDED",
         "observed_installed_wheel": "autobrain-0.1.0-py3-none-any.whl",
         "external_access": "NOT_ATTEMPTED",
     }

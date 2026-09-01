@@ -2,7 +2,7 @@
 
 All notable changes to AutoBrain are documented here.
 
-## Unreleased
+## 0.1.2 - 2026-09-01
 
 - Added a Web-first local experiment setup and retrieval comparison flow.
 - Added typed source readiness and local experiment lifecycle boundaries.

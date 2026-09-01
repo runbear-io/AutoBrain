@@ -289,14 +289,14 @@ def test_checked_in_manifest_rejects_retired_tag_metadata() -> None:
     source = json.loads(MANIFEST.read_text())["source"]
 
     assert source == {
-        "version": "0.1.1",
+        "version": "0.1.2",
         "status": "prepared",
-        "url": "https://github.com/runbear-io/AutoBrain/releases/download/UNAPPROVED/autobrain-0.1.1.tar.gz",
+        "url": "https://github.com/runbear-io/AutoBrain/releases/download/UNAPPROVED/autobrain-0.1.2.tar.gz",
         "sha256": "0" * 64,
         "reviewed_commit": None,
         "tree_sha256": _release_tree_sha256(ROOT),
     }
-    assert "/archive/refs/tags/v0.1.1" not in source["url"]
+    assert "/archive/refs/tags/v0.1.2" not in source["url"]
 
 
 @pytest.mark.parametrize(
@@ -553,9 +553,9 @@ def test_prepared_generator_is_byte_idempotent_and_matches_tap_formula() -> None
     assert generated_once.encode() == PREPARED_TAP_FORMULA.read_bytes()
     assert "NON-PUBLISHABLE" in generated_once
     assert (
-        'odie "AutoBrain 0.1.1 is not approved for publication or installation"' in generated_once
+        'odie "AutoBrain 0.1.2 is not approved for publication or installation"' in generated_once
     )
-    assert "/archive/refs/tags/v0.1.1" not in generated_once
+    assert "/archive/refs/tags/v0.1.2" not in generated_once
 
 
 @pytest.mark.parametrize(

@@ -3,9 +3,9 @@ Task 10 retained QA evidence (redacted, fail-closed)
 
 Release binding
 ---------------
-- Current release version: 0.1.1.
+- Current release version: 0.1.2.
 - Reviewed release-source digest:
-  `sha256:5981b2cbeb4ed8e5b8db6a90ae0989772d655940b669f54e6afb19258927733f`.
+  `sha256:6540cc273efc665b60e6c339b640d33f0d38d22082d4559dcc5d27df5476fea6`.
 - The digest uses the release-closure algorithm over exact bytes of
   `pyproject.toml`, `uv.lock`, `candidate-pins.json`, and every regular file
   recursively under `src/autobrain/`, excluding generated `__pycache__` and
@@ -14,7 +14,7 @@ Release binding
 - Reason: the retained QA record names an installed
   `autobrain-0.1.0-py3-none-any.whl` and does not record the reviewed source digest.
 - Therefore the retained report screenshots and runtime observations are not
-  evidence that release 0.1.1 or the reviewed release source passed runtime
+  evidence that release 0.1.2 or the reviewed release source passed runtime
   QA. Their bytes are preserved as historical observations only; they were not
   regenerated, relabeled, or represented as current-release evidence.
 
