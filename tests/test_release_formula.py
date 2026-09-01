@@ -293,7 +293,7 @@ def test_checked_in_manifest_binds_the_approved_v0_1_2_release() -> None:
         "https://github.com/runbear-io/AutoBrain/releases/download/v0.1.2/"
         "autobrain-0.1.2.tar.gz"
     )
-    assert source["reviewed_commit"] == "fd9b507cc69341716b8e09ff9ea5d3254668a951"
+    assert source["reviewed_commit"] == "95c3336e06e40dd033a22a5d620cf05ee0be0860"
     assert source["tree_sha256"] == _release_tree_sha256(ROOT)
     assert len(source["sha256"]) == 64
     assert source["sha256"] != "0" * 64
