@@ -38,13 +38,13 @@ describe("source capability and import contracts", () => {
     ]);
     expect(PUBLIC_SOURCE_CAPABILITIES.map((item) => item.id)).toEqual([
       "local-file",
-      "slack-export",
       "notion-snapshot",
-      "approved-read-only-connector",
     ]);
     expect(sourceCapability("fixture").readiness).toBe("TEST_ONLY");
     expect(sourceCapability("fixture").credentialsRequired).toBe(false);
     expect(sourceCapability("slack-export").mutability).toBe("frozen_export");
+    expect(sourceCapability("slack-export").readiness).toBe("GATED");
+    expect(PUBLIC_SOURCE_CAPABILITIES.some((item) => item.id === "slack-export")).toBe(false);
     expect(sourceCapability("notion-snapshot").capabilities).toContain("fetch");
     expect(sourceCapability("approved-read-only-connector").readiness).toBe("GATED");
   });

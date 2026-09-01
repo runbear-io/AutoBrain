@@ -2,9 +2,9 @@
 
 ## Engineering complete for the supported local surface
 
-- Slack/Notion source contracts and synthetic replay
-- JSON/JSONL normalized imports
+- Notion snapshot, JSON/JSONL normalized imports
 - Markdown, TXT, and HTML local-file imports
+- Slack connector retained behind an explicit advanced/future gate (not a public v1 claim)
 - PDF and DOCX typed unavailable states
 - Fixture excluded from public source choices
 - Security, Web, package, and installed CLI checks
@@ -19,8 +19,8 @@ only after the owner freezes and approves the release source.
 
 ## Remaining external verification
 
-- Real Slack Workspace Export ZIP
 - Fresh Notion read-only authorization or customer-safe snapshot
+- Optional advanced/future Slack evidence is out of public v1 scope
 - Provider authorization for the providers claimed in the release
 - Decision on whether the public claim is “find your best company Brain” with a
   recommendation backed by real evidence

@@ -64,14 +64,14 @@ export const SOURCE_CAPABILITIES: readonly SourceCapabilityInventoryItem[] = [
   },
   {
     id: "slack-export",
-    label: "Slack export",
-    readiness: "READY",
+    label: "Slack export (advanced)",
+    readiness: "GATED",
     acceptedFormats: ["JSON", "JSONL"],
     mutability: "frozen_export",
     capabilities: ["read", "normalize", "freeze"],
     credentialsRequired: false,
-    detail: "A sanitized normalized export prepared from an official Slack archive.",
-    remediation: null,
+    detail: "Advanced/future Slack source support retained for gated operator workflows; not a public v1 setup input.",
+    remediation: "Slack is not included in public v1 setup. Use the Notion snapshot or local Markdown, TXT, HTML, JSON, or JSONL inputs instead.",
   },
   {
     id: "notion-snapshot",
@@ -99,7 +99,7 @@ export const SOURCE_CAPABILITIES: readonly SourceCapabilityInventoryItem[] = [
 
 /** Sources that production/user setup may present as official inputs. */
 export const PUBLIC_SOURCE_CAPABILITIES = SOURCE_CAPABILITIES.filter(
-  (item) => item.id !== "fixture",
+  (item) => item.id !== "fixture" && item.readiness !== "GATED",
 );
 
 export type ImportSourceId = SourceCapabilityId;

@@ -38,6 +38,7 @@ def test_gated_surfaces_have_no_claimed_capability_or_usage() -> None:
     gated = [item for item in integration_catalog() if item.status is IntegrationStatus.GATED]
 
     assert {item.id for item in gated} == {
+        "source.slack-export",
         "source.google-drive",
         "source.confluence",
         "source.onyx",

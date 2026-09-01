@@ -7,7 +7,8 @@ require an owner with external access or release authority.
 
 - Web-first retrieval diagnostic flow
 - Fixture removed from official product source choices
-- Slack export and Notion snapshot synthetic replay coverage
+- Notion snapshot, normalized JSON/JSONL, and local Markdown/TXT/HTML public v1 input coverage
+- Slack connector retained as explicitly gated advanced/future functionality
 - Source readiness and fail-closed unsupported-source states
 - Archive symlink, member-count, size, mutation, and redaction boundaries
 - OAuth callback and malformed OAuth-index handling
@@ -17,9 +18,9 @@ require an owner with external access or release authority.
 
 ## Owner-required evidence and decisions
 
-- Provide a redacted real Slack Workspace Export ZIP.
 - Authorize a fresh Notion read-only test workspace or snapshot.
 - Choose and authorize the provider(s) supported in the first public release.
+- If Slack is evaluated, provide a redacted real Workspace Export ZIP as advanced/future evidence; it is not a public v1 source claim.
 - Decide whether the first release makes diagnostic-only claims or
   recommendation-grade claims.
 - Approve the final release commit and version.
@@ -27,7 +28,7 @@ require an owner with external access or release authority.
 
 ## Final release sequence
 
-1. Freeze the release code after real Slack, Notion, and provider checks.
+1. Freeze the release code after Notion and provider checks; evaluate Slack only as explicitly gated advanced/future functionality.
 2. Recompute the source digest from that exact code.
 3. Update release evidence and formula metadata together.
 4. Build and hash the source archive and wheel.

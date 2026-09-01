@@ -27,11 +27,14 @@ _CATALOG: tuple[IntegrationProvenance, ...] = (
         version=None,
         license=None,
         auth_kind="local_export",
-        capabilities=("read_only", "frozen_snapshot"),
+        capabilities=(),
         usage_provenance="unavailable",
-        reuse=IntegrationReuse.THIN_ADAPTER,
-        status=IntegrationStatus.CURRENT,
-        evidence="repository source connector and frozen export contract",
+        reuse=IntegrationReuse.GATED,
+        status=IntegrationStatus.GATED,
+        evidence=(
+            "Slack connector and frozen export contract are retained for explicitly gated "
+            "advanced/future workflows; excluded from official public v1 setup and release claims"
+        ),
     ),
     IntegrationProvenance(
         id="source.notion-mcp",

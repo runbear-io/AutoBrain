@@ -33,9 +33,12 @@ them and are not fabricated in this static inventory.
 
 ## Current and gated surfaces
 
-Current source surfaces are Slack frozen-export ingestion and read-only Notion
-MCP capture. Current candidate surfaces are the pinned LLM Wiki, Mem0 OSS, and
-GBrain adapters. Codex and Claude are protocol-reuse subscription adapters;
+The public v1 source surface is read-only Notion MCP capture, plus normalized
+JSON/JSONL and local Markdown/TXT/HTML inputs. Slack frozen-export ingestion and
+the live Slack connector remain explicitly gated advanced/future functionality;
+they are not official public setup inputs or public v1 release claims. Current
+candidate surfaces are the pinned LLM Wiki, Mem0 OSS, and GBrain adapters. Codex
+and Claude are protocol-reuse subscription adapters;
 their consumer-subscription identity is distinct from API-key embedding
 configuration. Local hash embedding is retained for smoke execution only.
 
@@ -48,8 +51,9 @@ have no capabilities and unavailable usage provenance, so they cannot appear
 ready merely because a binary, endpoint, or API key exists.
 
 The v1 document boundary is intentionally narrower than a general file
-indexer: source ingestion accepts Slack export ZIPs, Notion MCP captures, and
-normalized JSON/JSONL records. Markdown is an internal candidate materialization
-(and TXT/HTML/PDF/DOCX are not standalone v1 import formats); Slack export file
-links do not imply binary extraction. Fixtures remain internal test-only data
-and are excluded from public setup choices.
+indexer: public source ingestion accepts Notion MCP snapshots, normalized
+JSON/JSONL records, and local Markdown/TXT/HTML files. PDF and DOCX are not
+standalone v1 import formats. Slack export file links do not imply binary
+extraction, and the retained Slack connector is advanced/future functionality
+behind an explicit gate rather than a public setup or release claim. Fixtures
+remain internal test-only data and are excluded from public setup choices.

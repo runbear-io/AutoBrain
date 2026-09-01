@@ -8,7 +8,7 @@ order:
 1. preflight and candidate pin validation;
 2. missing-auth gate;
 3. read-only capability probe;
-4. Slack and Notion crawl;
+4. Notion/local-source capture (with Slack available only through an explicitly gated advanced/future path);
 5. coverage snapshot;
 6. benchmark and holdout construction;
 7. final corpus freeze and hashes;
@@ -25,7 +25,7 @@ and later candidates are allowed to start. A hard budget stop becomes typed
 
 ## Benchmark and holdout
 
-Slack thread questions are preferred when connector data supplies them.
+Slack thread questions are used only when the explicitly gated advanced Slack connector is enabled; otherwise benchmark questions use the public Notion/local-source boundary.
 Document-derived questions are marked `generated` and are never presented as
 human-authored cases. The last bounded slice is holdout-owned and is excluded
 from candidate-facing documents. Candidate context contains only frozen

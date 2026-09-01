@@ -24,7 +24,7 @@ const JSONL_TWO_RECORDS = [
 /** A configuration that satisfies every readiness check. */
 function readySetup(): SetupState {
   let state = initialSetup();
-  state = reduceSetup(state, { type: "source/select", source: "slack-export" });
+  state = reduceSetup(state, { type: "source/select", source: "notion-snapshot" });
   state = reduceSetup(state, { type: "candidate/toggle", candidate: "gbrain" });
   state = reduceSetup(state, { type: "subscription/select", subscription: "codex" });
   return state;
@@ -72,7 +72,7 @@ describe("experiment setup readiness", () => {
     }
   });
 
-  test("an official Slack export with a candidate and subscription is ready", () => {
+  test("a public Notion snapshot with a candidate and subscription is ready", () => {
     const readiness = setupReadiness(readySetup());
     expect(readiness.state).toBe("READY");
     expect(readiness.blockers).toEqual([]);
@@ -104,7 +104,7 @@ describe("experiment setup readiness", () => {
 
   test("JSONL selection requires a payload that parses into records", () => {
     let state = readySetup();
-    state = reduceSetup(state, { type: "source/select", source: "slack-export" });
+    state = reduceSetup(state, { type: "source/select", source: "notion-snapshot" });
     state = reduceSetup(state, { type: "source/format", format: "JSONL" });
     expect(setupReadiness(state).state).toBe("BLOCKED");
 

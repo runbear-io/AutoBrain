@@ -15,7 +15,7 @@ AutoBrain is intentionally local-first.
 
 ## Local Slack exports
 
-The recommended Slack source is an official local Workspace Export ZIP.
+The retained Slack source is an official local Workspace Export ZIP, available only through an explicitly gated advanced/future workflow; it is not a public v1 setup input.
 AutoBrain stores only the resolved path, SHA-256, configuration timestamp, and
 non-sensitive counts under `~/.autobrain/sources/` with `0600` permissions. It
 does not create a second permanent copy of the archive.

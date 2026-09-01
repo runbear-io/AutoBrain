@@ -4,17 +4,14 @@
     {
       "auth_kind": "local_export",
       "backend": "autobrain-slack-export",
-      "capabilities": [
-        "read_only",
-        "frozen_snapshot"
-      ],
-      "evidence": "repository source connector and frozen export contract",
+      "capabilities": [],
+      "evidence": "Slack connector and frozen export contract are retained for explicitly gated advanced/future workflows; excluded from official public v1 setup and release claims",
       "id": "source.slack-export",
       "license": null,
       "provider": "slack",
-      "reuse": "thin_adapter",
+      "reuse": "gated",
       "source": "slack",
-      "status": "current",
+      "status": "gated",
       "usage_provenance": "unavailable",
       "version": null
     },

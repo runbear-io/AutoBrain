@@ -3,7 +3,7 @@
 <p align="center">
   <strong>Which Brain should your company build on?</strong>
   <br />
-  Automatically evaluate LLM Wiki, Mem0 OSS, and GBrain against your real Slack and Notion knowledge.
+  Automatically evaluate LLM Wiki, Mem0 OSS, and GBrain against your Notion and local knowledge.
 </p>
 
 <p align="center">
@@ -40,7 +40,7 @@ evidence is not good enough.
 
 ```mermaid
 flowchart LR
-    A["INPUT<br/>Slack export ZIP<br/>Optional Notion workspace"] --> B["AUTOBRAIN<br/>Freeze one corpus<br/>Build grounded questions<br/>Separate evaluator holdouts"]
+    A["INPUT<br/>Notion snapshot<br/>JSON/JSONL<br/>Markdown, TXT, or HTML"] --> B["AUTOBRAIN<br/>Freeze one corpus<br/>Build grounded questions<br/>Separate evaluator holdouts"]
     B --> C1["LLM Wiki"]
     B --> C2["Mem0 OSS"]
     B --> C3["GBrain"]
@@ -53,8 +53,9 @@ flowchart LR
 
 | Input | What AutoBrain uses it for |
 | --- | --- |
-| **Slack Workspace Export ZIP** | Team messages, channels, threads, people, and exported file links |
-| **Notion connection** *(optional)* | Pages and workspace knowledge available through read-only MCP |
+| **Notion snapshot** | Pages and workspace knowledge captured through read-only MCP |
+| **JSON / JSONL** | Normalized records with `source_id`, `title`, and `text` |
+| **Markdown / TXT / HTML** | One bounded local document read without uploading it |
 | **Brain candidates** | Any two or all three of LLM Wiki, Mem0 OSS, and GBrain |
 | **ChatGPT subscription** | Grounded benchmark generation and isolated evaluation |
 
@@ -159,7 +160,7 @@ VITE_LOCAL_RUNNER_URL=http://127.0.0.1:<port> bun run dev
 
 Open the URL shown by Vite (`http://127.0.0.1:5173/autobrain-demo/`) and go to
 **New experiment**. Choose a subscription, import normalized JSON or JSONL
-records for a Slack export or Notion snapshot, and select Brain candidates. The
+records for a Notion snapshot, and select Brain candidates. Slack remains an advanced/future gated source outside public v1 setup. The
 Preview button stays disabled until every readiness check reports READY, the
 same rule the Python contract enforces. A submitted Preview drives the real
 create, validate, and start lifecycle; the **Results** route then shows
@@ -362,8 +363,8 @@ change.
 | Setup section | Available choices |
 | --- | --- |
 | **ChatGPT** | Enter opens a browser for the ChatGPT subscription |
-| **Slack** | Enter imports an official export ZIP, or skip |
 | **Notion** | Enter opens a browser for read-only Notion access, or skip |
+| **Local sources** | Import normalized JSON/JSONL or one Markdown, TXT, or HTML file |
 | **Brains** | LLM Wiki, Mem0 OSS, GBrain |
 
 All sources and candidates start selected. A runnable experiment requires at
@@ -416,12 +417,12 @@ inputs and their actual boundaries are:
 
 | Source or input | v1 status and accepted representation |
 | --- | --- |
-| Slack | Supported through an official Workspace Export ZIP, or the advanced read-only live Slack MCP path. Export archives preserve messages, threads, metadata, and file links; file binaries are not implicitly downloaded. |
-| Notion | Supported through the hosted read-only Notion MCP connector, or a strict normalized JSON snapshot imported with `autobrain source notion-snapshot`. |
-| JSON / JSONL | Supported by the Web-first local experiment boundary as normalized records with `source_id`, `title`, and `text`; JSON also accepts the version-1 `{schema_version, records}` envelope. |
+| Notion snapshot | Public v1 through a strict normalized JSON snapshot imported with `autobrain source notion-snapshot`; live MCP capture remains read-only and authorization-gated. |
+| JSON / JSONL | Public v1 through normalized records with `source_id`, `title`, and `text`; JSON also accepts the version-1 `{schema_version, records}` envelope. |
+| Markdown / TXT / HTML | Public v1 as one bounded local document read without uploading it. |
+| Slack | Not an official/public v1 setup or release input. The Slack export and live read-only MCP connector remain explicitly gated advanced/future functionality. |
 | Google Drive | Gated and not executable in v1. Its MIME/Workspace-export contract is documented for readiness review, but no production connector constructor is available. |
 | Confluence | Gated and not executable in v1. The official MCP authentication contract is unverified, so readiness remains fail-closed. |
-| Markdown / TXT / HTML / PDF / DOCX | Not standalone v1 source inputs. Markdown is an internal candidate materialization; Slack/Notion source content must enter through the source contracts above. PDF and DOCX extraction is not provided. |
 | SharePoint / Onyx | Gated and not executable. They remain represented by fail-closed readiness/provenance contracts only; no authenticated connector or production constructor is available. |
 
 Fixtures and synthetic data are test-only QA inputs. They are retained in the
@@ -432,9 +433,9 @@ surfaces; it is not described as an exhaustive audit of every source API.
 
 ## Prepare your knowledge
 
-### Slack export ZIP
+### Advanced/future: Slack export ZIP
 
-The recommended Slack source is an official Workspace Export ZIP:
+Slack is excluded from official/public v1 setup and release claims. The retained connector is available only as explicitly gated advanced/future functionality. When that gate is enabled, it accepts an official Workspace Export ZIP:
 
 ```bash
 autobrain source slack --export ~/Downloads/slack-export.zip
@@ -493,8 +494,7 @@ storage state.
 
 ### Advanced: live Slack MCP
 
-The export ZIP avoids Slack App setup and is the default. Operators who need a
-live Slack crawl can still configure the advanced hosted MCP path:
+Operators who need a live Slack crawl can still configure the advanced hosted MCP path behind the same explicit gate:
 
 ```bash
 export AUTOBRAIN_SLACK_CLIENT_ID="<slack-app-client-id>"
@@ -508,12 +508,12 @@ precedence.
 
 ### How source content becomes candidate input
 
-Both sources cross the same read-only and run-local pipeline:
+Public Notion/local sources cross the same read-only and run-local pipeline; Slack uses this pipeline only when its advanced/future gate is enabled:
 
 ```mermaid
 flowchart LR
     A[Notion hosted MCP<br/>search + fetch] --> C[Source snapshots]
-    B[Slack export ZIP<br/>channels + users + messages<br/>thread replies + file links] --> C
+    B[Advanced/future Slack export ZIP<br/>explicitly gated] --> C
     C --> D[Normalize + exact deduplicate]
     D --> E[Immutable corpus-freeze.json]
     E --> F[LLM Wiki native ingest]
@@ -602,8 +602,9 @@ autobrain run \
 autobrain run --help
 ```
 
-The headless command currently runs the complete fixed Slack/Notion and
-LLM Wiki/Mem0 OSS/GBrain comparison. Interactive source and candidate scope
+The headless command runs the fixed Notion/local-source and
+LLM Wiki/Mem0 OSS/GBrain comparison; Slack remains an explicitly gated
+advanced/future source path. Interactive source and candidate scope
 selection belongs to the cockpit flow. Both interfaces use the same immutable
 run lifecycle, metering, evaluation, and reporting boundaries.
 
@@ -635,7 +636,7 @@ provider does not expose authoritative usage.
 ```text
 autobrain                                Open the interactive terminal cockpit
 autobrain doctor                         Inspect local capability states
-autobrain source slack --export <zip>    Configure the recommended Slack source
+autobrain source slack --export <zip>    Configure the gated advanced Slack source
 autobrain source status                  Inspect the local Slack export state
 autobrain auth notion                    Connect hosted read-only Notion MCP
 autobrain subscription setup             Start user-driven ChatGPT login
