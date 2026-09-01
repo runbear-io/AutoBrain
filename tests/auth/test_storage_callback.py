@@ -149,9 +149,9 @@ def test_callback_transition_is_one_shot_under_concurrent_requests() -> None:
     for thread in threads:
         thread.start()
     barrier.wait()
-    result = callback.wait()
     for thread in threads:
         thread.join()
+    result = callback.wait()
 
     assert sorted(responses) == [200, 409]
     assert result.code in {"code-0", "code-1"}

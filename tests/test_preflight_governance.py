@@ -28,6 +28,9 @@ def test_doctor_exposes_typed_precredential_readiness_and_governance(tmp_path: P
         environment=RuntimeEnvironment.from_environ({}),
         command_runner=_runner,
         executable_finder=lambda name: None if name == "codex" else f"/fake/{name}",
+        keyring_available=lambda: True,
+        callback_available=lambda _host, _port: True,
+        browser_available=lambda: True,
         embedding_environ={},
     ).run()
 
